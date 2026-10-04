@@ -1,0 +1,14 @@
+node_modules/
+gravacoes/
+.cache/
+.teste-corte/
+.impeccable/
+out/
+dist/
+release/
+*.log
+.log.txt
+modelos/
+test-results/
+playwright-report/
+.env
