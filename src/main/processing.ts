@@ -13,6 +13,8 @@ import type { ProcessSnapshot, ProcessStepId, ProcessStepState } from '@shared/i
 import { createProject, parseProject, serializeProject } from '@shared/project'
 import { buildEvents, toJsonLines, type BuiltEvents, type RawEvents } from '@shared/recording'
 import type { CaptureInfo, Project, Src } from '@shared/types'
+import { calibrationForPair, type CameraCalibration } from '@shared/camera-sync'
+import type { LipSyncDetector } from './lip-sync'
 import { writeFileAtomic } from './fs-utils'
 import type { Ffmpeg } from './ffmpeg'
 import type { Logger } from './logger'
@@ -40,6 +42,8 @@ export type ProcessDeps = {
   beforeStep?: (id: ProcessStepId) => void | Promise<void>
   /** Gancho de TESTE: espera antes de cada passo (deixa tirar captura de tela). */
   stepDelayMs?: number
+  lipSync?: LipSyncDetector
+  calibrations?: () => readonly CameraCalibration[]
 }
 
 export const STEP_ORDER: ProcessStepId[] = ['save', 'screen', 'camera', 'voice', 'system', 'thumb', 'project']
@@ -193,6 +197,21 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
       })
       // Sem o cursor do sistema no vídeo, o editor precisa desenhar o sintético; com ele, só ripple/halo.
       project.style.cursor.mode = saved.capture.cursorHidden ? 'synthetic' : 'real'
+      if (project.sources.camera && project.sources.voice) {
+        const measured = await deps.lipSync?.detect(dir, project)
+        const calibration = calibrationForPair(deps.calibrations?.() ?? [], manifest.cameraId, manifest.micId)
+        const detected = measured?.offsetMs !== null && measured?.offsetMs !== undefined
+        project.sync.cameraAvOffsetMs = detected ? measured.offsetMs! : calibration?.offsetMs ?? 0
+        const reason = detected ? undefined : measured?.reason ?? 'A medição automática de sincronia está indisponível. Use a calibração nos Ajustes ou o controle na aba Câmera.'
+        project.sync.cameraAvDetection = {
+          method: detected ? 'syncnet' : calibration ? 'calibration' : 'none',
+          confidence: detected ? measured.confidence : calibration?.confidence ?? 0,
+          segments: detected ? measured.accepted : 0,
+          measuredAt: new Date().toISOString(),
+          ...(reason ? { reason } : {})
+        }
+        if (reason) note(`${reason} ${calibration ? 'Apliquei a calibração deste par de câmera e microfone.' : 'A correção ficou em 0 ms.'}`)
+      }
       const text = serializeProject(project)
       parseProject(text) // o que escrevemos precisa passar pelo mesmo esquema de quem lê
       await writeFileAtomic(join(dir, PROJECT_FILE), text)

@@ -280,6 +280,7 @@ export type ProbeStream = {
   channels?: number
   durationMs?: number
   nbFrames?: number
+  startTimeMs?: number
 }
 
 export type ProbeResult = {
@@ -314,6 +315,7 @@ type RawStream = {
   channels?: number
   duration?: string
   nb_frames?: string
+  start_time?: string
 }
 type RawProbe = { streams?: RawStream[]; format?: { duration?: string; format_name?: string; size?: string } }
 
@@ -336,6 +338,8 @@ export function parseProbe(raw: unknown): ProbeResult {
     if (s.profile) stream.profile = s.profile
     if (s.sample_rate) stream.sampleRate = Number(s.sample_rate)
     if (s.channels) stream.channels = s.channels
+    const start = secondsToMs(s.start_time)
+    if (start !== undefined) stream.startTimeMs = start
     const d = secondsToMs(s.duration)
     if (d !== undefined) stream.durationMs = d
     if (s.nb_frames && Number.isFinite(Number(s.nb_frames))) stream.nbFrames = Number(s.nb_frames)

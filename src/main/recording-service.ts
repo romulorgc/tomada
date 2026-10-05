@@ -37,6 +37,7 @@ import {
   type RecordRequest
 } from '@shared/recording'
 import type { Rect, Size } from '@shared/types'
+import { isPhysicalDeviceId } from '@shared/capture-devices'
 import type { Ffmpeg } from './ffmpeg'
 import { pathExists } from './fs-utils'
 import type { Logger } from './logger'
@@ -106,6 +107,8 @@ export type RecordingDeps = {
   env: NodeJS.ProcessEnv
   /** Espaço livre mínimo para começar (bytes). */
   minFreeBytes?: number
+  lipSync?: ProcessDeps['lipSync']
+  calibrations?: ProcessDeps['calibrations']
 }
 
 export interface RecordingService {
@@ -287,6 +290,8 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     const processDeps: ProcessDeps = {
       ff,
       logger,
+      ...(deps.lipSync ? { lipSync: deps.lipSync } : {}),
+      ...(deps.calibrations ? { calibrations: deps.calibrations } : {}),
       onProgress: (snapshot) => {
         p.snapshot = snapshot
         deps.emit('process:progress', snapshot)
@@ -369,6 +374,8 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           title: defaultRecordingTitle(date),
           createdAt: date.toISOString(),
           mode: request.mode,
+          cameraId: request.cameraId,
+          micId: request.micId,
           fps: request.fps,
           screen: source
             ? {
@@ -486,6 +493,8 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       const s = session
       if (!s || status !== 'countdown') throw new Error('A gravação não está pronta para começar.')
       s.offsetMs = info.clockOffsetMs
+      s.manifest.cameraId = isPhysicalDeviceId(info.cameraDeviceId) ? info.cameraDeviceId : null
+      s.manifest.micId = isPhysicalDeviceId(info.micDeviceId) ? info.micDeviceId : null
       s.manifest.clock = {
         t0: info.t0,
         screenStartAt: info.screenStartAt,

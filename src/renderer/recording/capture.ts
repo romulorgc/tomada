@@ -22,6 +22,7 @@ import {
 } from '@shared/recording'
 import type { Size } from '@shared/types'
 import { explainMediaError } from './media-errors'
+import { deviceCaptureConstraints, physicalDeviceId } from '@shared/capture-devices'
 
 export const nowMs = (): number => performance.timeOrigin + performance.now()
 
@@ -114,19 +115,7 @@ export class CaptureEngine {
       const wantVideo = request.mode !== 'screen' && Boolean(request.cameraId)
       const wantAudio = Boolean(request.micId)
       if (wantVideo || wantAudio) {
-        const constraints: MediaStreamConstraints = {
-          video: wantVideo
-            ? { deviceId: { exact: request.cameraId! }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } }
-            : false,
-          audio: wantAudio
-            ? {
-                deviceId: { exact: request.micId! },
-                autoGainControl: false,
-                echoCancellation: prefs.echoCancellation,
-                noiseSuppression: prefs.noiseSuppression
-              }
-            : false
-        }
+        const constraints: MediaStreamConstraints = deviceCaptureConstraints(wantVideo ? request.cameraId : null, request.micId, prefs)
         try {
           deviceStream = await navigator.mediaDevices.getUserMedia(constraints)
         } catch (err) {
@@ -290,6 +279,9 @@ export class CaptureEngine {
     const camVideo = this.deviceStream?.getVideoTracks()[0]
     const camAudio = this.deviceStream?.getAudioTracks()[0]
     const cameraSize: Size | null = camVideo ? { w: camVideo.getSettings().width ?? 0, h: camVideo.getSettings().height ?? 0 } : null
+    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+    const cameraDeviceId = camVideo ? physicalDeviceId(camVideo.getSettings(), devices, 'videoinput') : null
+    const micDeviceId = camAudio ? physicalDeviceId(camAudio.getSettings(), devices, 'audioinput') : null
     if (this.deviceStream && (camVideo || camAudio)) {
       cameraMime = pickRecorderMime(supports, { video: Boolean(camVideo), audio: Boolean(camAudio) })
       if (!cameraMime) throw new Error('Este computador não tem um formato de gravação de câmera compatível.')
@@ -345,7 +337,9 @@ export class CaptureEngine {
       cursorHidden: this.cursorIsHidden(),
       cameraHasVideo: Boolean(camVideo),
       cameraHasAudio: Boolean(camAudio),
-      cameraSize
+      cameraSize,
+      cameraDeviceId,
+      micDeviceId
     }
     this.startedInfo = info
     return info

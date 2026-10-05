@@ -66,6 +66,8 @@ export type RecordingManifest = {
   title: string
   createdAt: string
   mode: RecordMode
+  cameraId?: string | null
+  micId?: string | null
   fps: FrameRate
   screen: ManifestScreen | null
   camera: ManifestCamera | null

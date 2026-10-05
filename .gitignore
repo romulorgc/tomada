@@ -15,3 +15,4 @@ playwright-report/
 tests/fixtures/
 .vscode/
 estudo/referencias/
+__pycache__/

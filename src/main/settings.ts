@@ -11,6 +11,7 @@ import type { Logger } from './logger'
 
 // "loose": campos que este código não conhece (de uma versão futura, ou da M1b) sobrevivem.
 export const settingsSchema = z.looseObject({
+  cameraCalibrations: z.array(z.object({ cameraId: z.string().min(1).max(500), micId: z.string().min(1).max(500), offsetMs: z.number().finite().min(-300).max(300), confidence: z.number().finite().min(3), calibratedAt: z.string() })).max(100).optional(),
   projectsDir: z.string().min(1).optional(),
   ffmpegPath: z.string().min(1).optional(),
   // Preferências da tela Gravar: validadas na leitura (`normalizeRecordPrefs`), aqui só passam.

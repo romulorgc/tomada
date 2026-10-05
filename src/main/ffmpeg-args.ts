@@ -21,6 +21,8 @@ export type NormalizeVideoArgs = {
   gopSeconds?: number
   /** Mantém a trilha de áudio (AAC 192 kbps). Padrão: não. */
   keepAudio?: boolean
+  videoLeadingMs?: number
+  audioLeadingMs?: number
   /**
    * Duração (ms) que o vídeo precisa ter: se a gravação termina antes (captura de tela só entrega
    * quadro quando algo muda, então o RABO ESTÁTICO some), repete o último quadro até lá; o que
@@ -78,14 +80,14 @@ export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
   const gop = gopFrames(o.fps, o.gopSeconds ?? 1)
   const pad = o.padToMs !== undefined && Number.isFinite(o.padToMs) && o.padToMs > 0
   const vf = [
-    'setpts=PTS-STARTPTS',
-    `fps=${o.fps}`,
+    o.videoLeadingMs !== undefined ? `setpts=PTS-STARTPTS+${(o.videoLeadingMs / 1000).toFixed(6)}/TB` : 'setpts=PTS-STARTPTS',
+    `fps=${o.fps}${o.videoLeadingMs !== undefined ? ':start_time=0' : ''}`,
     ...(pad ? [`tpad=stop_mode=clone:stop_duration=${MAX_TAIL_PAD_SECONDS}`] : []),
     'scale=trunc(iw/2)*2:trunc(ih/2)*2',
     'setsar=1'
   ].join(',')
   const audio = o.keepAudio
-    ? ['-map', '0:a:0?', '-c:a', 'aac', '-b:a', '192k', '-af', 'aresample=async=1:first_pts=0']
+    ? ['-map', '0:a:0?', '-c:a', 'aac', '-b:a', '192k', '-af', `${o.audioLeadingMs !== undefined ? `asetpts=PTS-STARTPTS+${(o.audioLeadingMs / 1000).toFixed(6)}/TB,` : ''}aresample=async=1:first_pts=0`]
     : ['-an']
   return [
     '-i', input,
@@ -102,6 +104,7 @@ export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
 }
 
 export type ExtractAudioArgs = {
+  audioLeadingMs?: number
   input: string
   output: string
   channels: 1 | 2
@@ -119,6 +122,7 @@ export function buildExtractAudioArgs(o: ExtractAudioArgs): string[] {
     '-i', input,
     '-map', `0:a:${o.track ?? 0}`,
     '-vn',
+    ...(o.audioLeadingMs !== undefined ? ['-af', `asetpts=PTS-STARTPTS+${(o.audioLeadingMs / 1000).toFixed(6)}/TB,aresample=async=1:first_pts=0`] : []),
     '-ac', String(o.channels),
     '-ar', String(o.sampleRate ?? 48_000),
     '-c:a', 'pcm_s16le',

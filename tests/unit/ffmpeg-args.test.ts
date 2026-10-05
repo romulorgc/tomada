@@ -17,6 +17,15 @@ const after = (args: string[], flag: string): string | undefined => {
 describe('buildNormalizeVideoArgs', () => {
   const base = { input: 'C:/t/in.webm', output: 'C:/t/out.mp4', fps: 30, encoder: 'libx264' as const }
 
+  it('mantém o atraso relativo das trilhas no mesmo zero', () => {
+    const args = buildNormalizeVideoArgs({ ...base, videoLeadingMs: 80, audioLeadingMs: 0, keepAudio: true })
+    expect(after(args, '-vf')).toContain('setpts=PTS-STARTPTS+0.080000/TB')
+    expect(after(args, '-vf')).toContain('fps=30:start_time=0')
+    expect(after(args, '-af')).toContain('asetpts=PTS-STARTPTS+0.000000/TB')
+    const audio = buildExtractAudioArgs({ input: base.input, output: 'C:/t/voice.wav', channels: 1, audioLeadingMs: 80 })
+    expect(after(audio, '-af')).toBe('asetpts=PTS-STARTPTS+0.080000/TB,aresample=async=1:first_pts=0')
+  })
+
   it('zera o PTS inicial, fixa o fps e força dimensões pares', () => {
     const args = buildNormalizeVideoArgs(base)
     const vf = after(args, '-vf')!

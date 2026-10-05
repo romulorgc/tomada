@@ -18,6 +18,9 @@ import { createLogger } from './logger'
 import { handleMediaRequest, MEDIA_SCHEME } from './media-protocol'
 import { isAppOrigin, isAppUrl, isExternalRequest, type AppUrlContext } from './navigation'
 import { ENV_PROJECTS_DIR, ENV_USER_DATA_DIR, logsDir, settingsFile } from './paths'
+import { createLipSyncDetector } from './lip-sync'
+import { createCameraCalibration } from './camera-calibration'
+import { ensureToolsDir } from './transcription/tools-dir'
 import { createOutputDirs } from './path-guard'
 import { createProjectStore } from './projects'
 import { createRecordingService } from './recording-service'
@@ -143,6 +146,9 @@ async function main(): Promise<void> {
 
   // --- Transcrição e IA ----------------------------------------------------------------------------------
   const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, '../../resources')
+  const syncToolsDir = ensureToolsDir(process.env)
+  const lipSync = createLipSyncDetector({ toolsDir: syncToolsDir, scriptPath: join(resourcesDir, 'lip_sync.py'), ffmpeg: () => locateFfmpeg(state.ffmpegLocateOptions())?.ffmpeg ?? null, logger })
+  const calibration = createCameraCalibration({ scratchDir: join(syncToolsDir, 'lip-sync', 'calibration'), detector: lipSync, save: (value) => state.saveCameraCalibration(value) })
   const { engine } = chooseEngine({ env: process.env, settingsEngine: state.transcriptionEngine(), scriptPath: join(resourcesDir, 'transcribe.py'), logger })
   const transcription = createTranscriptionService({
     logger,
@@ -195,6 +201,8 @@ async function main(): Promise<void> {
   const clock = (): number => performance.timeOrigin + performance.now()
   const recording = createRecordingService({
     logger,
+    lipSync,
+    calibrations: () => state.settings().cameraCalibrations ?? [],
     projectsRoot: () => state.projectsRoot(),
     ffmpeg: () => {
       const paths = locateFfmpeg(state.ffmpegLocateOptions())
@@ -281,6 +289,7 @@ async function main(): Promise<void> {
       derived,
       transcription,
       llm,
+      calibration,
       outputDirs,
       pickExportDir: async (defaultPath) => {
         // TOMADA_TEST_PICK_DIR: nos testes o diálogo do Windows não aparece; vazio = "cancelou"

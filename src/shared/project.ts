@@ -256,7 +256,10 @@ export const projectSchema = z.looseObject({
   sync: z
     .looseObject({
       screenOffsetMs: z.number().default(0),
-      cameraOffsetMs: z.number().default(0)
+      cameraOffsetMs: z.number().default(0),
+      cameraAvOffsetMs: z.number().finite().min(-600).max(600).optional(),
+      cameraAvManualOffsetMs: z.number().finite().min(-300).max(300).optional(),
+      cameraAvDetection: z.looseObject({ method: z.enum(['syncnet', 'calibration', 'none']), confidence: z.number().finite(), segments: z.number().int().min(0), measuredAt: z.string(), reason: z.string().optional() }).optional()
     })
     .prefault({}),
   capture: captureSchema.default(defaultCapture()),

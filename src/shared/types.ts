@@ -254,7 +254,14 @@ export type Project = {
    * disparou primeiro tem 0. Vem da diferença entre os dois `start` do MediaRecorder.
    * `voice` e `system` seguem o arquivo de onde foram extraídos (câmera e tela).
    */
-  sync: { screenOffsetMs: number; cameraOffsetMs: number }
+  sync: {
+    screenOffsetMs: number
+    cameraOffsetMs: number
+    /** Correção da imagem, positiva quando a câmera está atrasada. Nunca desloca a voz. */
+    cameraAvOffsetMs?: number
+    cameraAvManualOffsetMs?: number
+    cameraAvDetection?: { method: 'syncnet' | 'calibration' | 'none'; confidence: number; segments: number; measuredAt: string; reason?: string }
+  }
   capture: CaptureInfo
   cuts: Cut[]
   /** Trechos de voz silenciada (muletas no modo "silenciar"). Ausente = nenhum. */

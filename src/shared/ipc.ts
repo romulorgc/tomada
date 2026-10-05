@@ -5,6 +5,7 @@
  * Código puro: sem DOM, sem Node.
  */
 import type { AiEditResult, EditFormat } from './ai-edit'
+import type { CameraCalibration } from './camera-sync'
 import type { Levels } from './clean'
 import type { ClipsResult } from './clips'
 import type { ExportOptions } from './export'
@@ -26,6 +27,7 @@ export type AppInfo = {
 
 /** Ajustes gravados em disco (todos opcionais; ausente = padrão). */
 export type Settings = {
+  cameraCalibrations?: CameraCalibration[]
   projectsDir?: string
   /** Pasta com ffmpeg/ffprobe, ou o caminho do próprio ffmpeg. */
   ffmpegPath?: string
@@ -122,6 +124,8 @@ export type ChunkKind = 'screen' | 'camera' | 'mic'
 
 /** O que a interface informa ao main quando os gravadores já dispararam. */
 export type StartedInfo = {
+  cameraDeviceId?: string | null
+  micDeviceId?: string | null
   /**
    * Relógio do renderer (`performance.timeOrigin + performance.now()`): o instante em que o
    * PRIMEIRO `MediaRecorder.start()` foi CHAMADO. Medido: o tempo 0 do arquivo é o da chamada;
@@ -313,6 +317,7 @@ export type IpcContract = {
   'settings:update': { args: [patch: Partial<Settings>]; result: SettingsView }
   'settings:pick-projects-dir': { args: []; result: string | null }
   'settings:pick-ffmpeg': { args: []; result: string | null }
+  'camera:calibrate': { args: [capture: { cameraId: string; micId: string; data: ArrayBuffer | Uint8Array }]; result: CameraCalibration }
 
   'ffmpeg:status': { args: []; result: FfmpegStatus }
   'ffmpeg:test': { args: []; result: FfmpegTestResult }
@@ -431,6 +436,7 @@ export const LEVEL_CHANNEL = 'record:level' as const
 // --- API exposta em window.tomada ---------------------------------------------
 
 export type TomadaApi = {
+  cameraSync: { calibrate(capture: { cameraId: string; micId: string; data: ArrayBuffer | Uint8Array }): Promise<CameraCalibration> }
   app: { info(): Promise<AppInfo> }
   projects: {
     list(): Promise<ProjectSummary[]>

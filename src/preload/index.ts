@@ -22,6 +22,7 @@ async function invoke<K extends IpcChannel>(channel: K, ...args: IpcContract[K][
 }
 
 const api: TomadaApi = {
+  cameraSync: { calibrate: (capture) => invoke('camera:calibrate', capture) },
   app: { info: () => invoke('app:info') },
   projects: {
     list: () => invoke('projects:list'),

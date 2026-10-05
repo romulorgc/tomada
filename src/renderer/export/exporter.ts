@@ -20,6 +20,7 @@ import {
   type VideoSample
 } from 'mediabunny'
 import { avcCodecString, fileTimeSeconds, outputFrameCount, sourceTimeOfFrame } from '@shared/export'
+import { cameraVideoOffsetMs } from '@shared/camera-sync'
 import { eventsFromText } from '@shared/events'
 import type { ExportJob } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
@@ -142,7 +143,7 @@ async function createContext(job: Pick<ExportJob, 'projectId' | 'project' | 'scr
   await loadBackgroundImage(project, job.projectId, cache)
 
   const screen = await openTrack(job.screenUrl, project.sync.screenOffsetMs)
-  const camera = await openTrack(job.cameraUrl, project.sync.cameraOffsetMs)
+  const camera = await openTrack(job.cameraUrl, cameraVideoOffsetMs(project))
   return {
     project,
     format,

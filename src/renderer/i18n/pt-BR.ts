@@ -151,6 +151,13 @@ export const ptBR = {
     },
 
     camera: {
+      sync: {
+        title: 'Sincronia da câmera',
+        help: 'Se a boca aparece atrasada, aumente o valor. Só a imagem da câmera muda; a voz continua junto da tela.',
+        manual: 'Ajuste manual',
+        automatic: (value: number): string => `Automático: ${value > 0 ? '+' : ''}${value} ms`,
+        reset: 'Voltar ao automático'
+      },
       title: 'Câmera',
       none: 'Esta gravação não tem câmera.',
       show: 'Mostrar a câmera',
@@ -822,6 +829,18 @@ export const ptBR = {
   bubble: { label: 'Bolha da câmera', error: 'Câmera indisponível' },
 
   settings: {
+    cameraSync: {
+      unresolvedDevice: 'Não consegui identificar o aparelho físico. Escolha a câmera e o microfone pelo nome, em vez do dispositivo padrão, e tente novamente.',
+      title: 'Calibrar sincronia',
+      help: 'Compensa a latência da imagem para este par de câmera e microfone nas próximas gravações.',
+      instructions: 'Grave 5 segundos e bata UMA palma no meio da gravação. Mostre as duas mãos abaixo do rosto: aproxime, encoste e afaste. Fique em silêncio antes e depois da palma.',
+      camera: 'Câmera', mic: 'Microfone',
+      cameraName: (i: number): string => `Câmera ${i}`, micName: (i: number): string => `Microfone ${i}`,
+      start: 'Calibrar sincronia', retry: 'Tentar novamente',
+      recording: (seconds: number): string => `Gravando: ${seconds} s — bata uma palma`, analyzing: 'Medindo a palma…',
+      saved: (offset: number): string => `Calibração salva: ${offset > 0 ? '+' : ''}${Math.round(offset)} ms. Será usada quando a medição automática não tiver confiança.`,
+      failed: 'Não consegui calibrar a sincronia', captureFailed: 'A captura da calibração falhou. Tente novamente.', tooLarge: 'A captura ultrapassou o limite de 32 MB. Tente novamente.'
+    },
     title: 'Ajustes',
     projects: {
       title: 'Pasta dos projetos',

@@ -71,6 +71,8 @@ export type NormalizeResult = {
  */
 export async function normalizeVideo(ff: Ffmpeg, o: NormalizeOptions): Promise<NormalizeResult> {
   const partial = `${o.output}.parcial`
+  const source = await ff.probe(o.input)
+  const start = Math.min(source.video?.startTimeMs ?? 0, source.audio?.startTimeMs ?? source.video?.startTimeMs ?? 0)
   let encoder = await pickVideoEncoder(ff, o.encoder ?? 'auto')
 
   const attempt = async (enc: VideoEncoder): Promise<void> => {
@@ -79,6 +81,8 @@ export async function normalizeVideo(ff: Ffmpeg, o: NormalizeOptions): Promise<N
       output: partial,
       fps: o.fps,
       encoder: enc,
+      videoLeadingMs: Math.max(0, (source.video?.startTimeMs ?? start) - start),
+      audioLeadingMs: Math.max(0, (source.audio?.startTimeMs ?? start) - start),
       ...(o.keepAudio ? { keepAudio: true } : {}),
       ...(o.padToMs ? { padToMs: o.padToMs } : {})
     })
@@ -132,11 +136,15 @@ export type ExtractAudioOptions = {
 
 /** WAV PCM 16 bits. Falha (com o motivo) se a entrada não tiver a trilha pedida. */
 export async function extractAudio(ff: Ffmpeg, o: ExtractAudioOptions): Promise<ProbeResult> {
+  const source = await ff.probe(o.input)
+  const audioStart = source.streams.filter((s) => s.type === 'audio')[o.track ?? 0]?.startTimeMs ?? 0
+  const start = Math.min(source.video?.startTimeMs ?? audioStart, audioStart)
   await ff.run(
     buildExtractAudioArgs({
       input: o.input,
       output: o.output,
       channels: o.channels,
+      audioLeadingMs: Math.max(0, audioStart - start),
       ...(o.sampleRate ? { sampleRate: o.sampleRate } : {}),
       ...(o.track !== undefined ? { track: o.track } : {})
     }),

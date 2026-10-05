@@ -15,17 +15,31 @@ import { EXAMPLE_FOLDER, launchTomada, type Session } from './helpers'
 let s: Session | undefined
 let server: Server | undefined
 let hits: string[] = []
+let foreignNetworkSession: Session | undefined
+const foreignNetworkError = /^console\.error \(janela\): Failed to load resource: net::ERR_BLOCKED_BY_CLIENT$/
 
 test.afterEach(async () => {
+  const closed = s
+  const expectsForeignNetworkErrors = closed !== undefined && closed === foreignNetworkSession
+  if (closed) {
+    await closed.close()
+    s = undefined
+  }
   if (server) {
     await new Promise((r) => server!.close(r))
     server = undefined
   }
-  if (s) {
-    const problems = s.problems
-    await s.close()
-    s = undefined
-    expect(problems, `erros na interface:\n${problems.join('\n')}`).toEqual([])
+  foreignNetworkSession = undefined
+  if (closed) {
+    // close() conclui também os eventos tardios da janela destruída; nunca limpar antes disso.
+    const problems = closed.problems
+    if (expectsForeignNetworkErrors) {
+      expect(problems.length, 'o Chromium deve registrar os bloqueios provocados na janela externa').toBeGreaterThan(0)
+      expect(problems.filter((problem) => !foreignNetworkError.test(problem)), `erros inesperados na interface:\n${problems.join('\n')}`).toEqual([])
+      expect(hits, 'nenhuma requisição pode chegar, inclusive durante o fechamento').toEqual([])
+    } else {
+      expect(problems, `erros na interface:\n${problems.join('\n')}`).toEqual([])
+    }
   }
 })
 
@@ -153,6 +167,8 @@ test('só as páginas do app falam com o processo principal, e a rede é cortada
   const port = await listen()
   s = await launchTomada()
   await expect(s.page.getByTestId('project-card')).toHaveCount(1)
+  expect(s.problems, 'a interface deve estar sem erros antes do cenário de bloqueio').toEqual([])
+  foreignNetworkSession = s
   const preload = join(ROOT, 'out', 'preload', 'index.js')
 
   const foreign = await s.app.evaluate(
@@ -177,10 +193,7 @@ test('só as páginas do app falam com o processo principal, e a rede é cortada
   expect(foreign.net).toMatch(/^barrou/)
   expect(foreign.img).toBe('barrou')
   expect(hits, 'requisições que chegaram ao servidor local').toEqual([])
-  // o Chromium registra cada requisição cortada no console da página de fora: é exatamente o que este teste provoca
-  expect(s.problems.length).toBeGreaterThan(0)
-  expect(s.problems.filter((p) => !p.includes('ERR_BLOCKED_BY_CLIENT'))).toEqual([])
-  s.problems.length = 0
+  // O afterEach valida o padrão exato da janela de fora após close(), incluindo eventos tardios.
 })
 
 test('navegação para fora do app é barrada: file:, https:, janela nova', async () => {

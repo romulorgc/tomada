@@ -29,8 +29,10 @@ import type { ProjectStore } from './projects'
 import type { RecordingService } from './recording-service'
 import type { TranscriptionService } from './transcription/service'
 import type { AppState } from './state'
+import type { CameraCalibrationService } from './camera-calibration'
 
 export type HandlerDeps = {
+  calibration?: CameraCalibrationService
   info: AppInfo
   state: AppState
   store: ProjectStore
@@ -136,6 +138,11 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     },
 
     'settings:get': async () => state.view(),
+    'camera:calibrate': async (capture) => {
+      if (recording.status().status !== 'idle' || recording.status().processing?.status === 'running') throw new Error('Espere a gravação e o processamento terminarem antes de calibrar.')
+      if (!deps.calibration) throw new Error('A calibração de sincronia não está disponível neste computador.')
+      return deps.calibration.run(capture)
+    },
     'settings:update': async (patch) => {
       assertPicked('projectsDir', patch?.projectsDir)
       assertPicked('ffmpegPath', patch?.ffmpegPath)

@@ -13,8 +13,11 @@ import { locateFfmpeg, type LocateOptions } from './ffmpeg'
 import type { Logger } from './logger'
 import { resolveProjectsDir } from './paths'
 import { applySettingsPatch, loadSettings, saveSettings } from './settings'
+import { settingsSchema } from './settings'
+import type { CameraCalibration } from '@shared/camera-sync'
 
 export interface AppState {
+  saveCameraCalibration(value: CameraCalibration): Promise<void>
   settings(): Settings
   view(): SettingsView
   projectsRoot(): string
@@ -73,6 +76,12 @@ export async function createAppState(args: {
   })
 
   return {
+    saveCameraCalibration: (value) => serialized(async () => {
+      const cameraCalibrations = [...(current.cameraCalibrations ?? []).filter((c) => c.cameraId !== value.cameraId || c.micId !== value.micId), value].slice(-100)
+      const next = settingsSchema.parse({ ...current, cameraCalibrations })
+      await saveSettings(args.file, next)
+      current = next
+    }),
     settings: () => ({ ...current }),
     view,
     projectsRoot: () => resolveProjectsDir({ env, settings: current }).projectsDir,
@@ -160,8 +169,11 @@ export async function createAppState(args: {
 
     updateRecordPrefs: (patch) =>
       serialized(async () => {
-        const merged = normalizeRecordPrefs({ ...normalizeRecordPrefs(current.record), ...patch })
+        const previous = normalizeRecordPrefs(current.record)
+        const merged = normalizeRecordPrefs({ ...previous, ...patch })
         const next: Settings = { ...current, record: merged }
+        // Esses filtros alteram buffers/latência: o par deve ser recalibrado no novo modo de áudio.
+        if (merged.echoCancellation !== previous.echoCancellation || merged.noiseSuppression !== previous.noiseSuppression) delete next.cameraCalibrations
         await saveSettings(args.file, next)
         current = next
         return merged

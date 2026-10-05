@@ -28,6 +28,7 @@ import {
 } from '@shared/playback'
 import { outputToSource, rangesLength, sourceToOutput } from '@shared/timeline'
 import type { Project } from '@shared/types'
+import { cameraVideoOffsetMs } from '@shared/camera-sync'
 import { captionFontsLoaded, ensureCaptionFonts } from '../fonts'
 import type { PlaybackStore } from './playback-store'
 
@@ -185,12 +186,20 @@ export class PreviewEngine {
 
   // --- configuração -----------------------------------------------------------------------------------
   setScene(project: Project, derived: Derived): void {
+    const oldCameraOffset = this.project ? cameraVideoOffsetMs(this.project) : null
     this.project = project
     this.derived = derived
     this.mutes = (project.mutes ?? []).filter((m) => m.enabled && m.end > m.start).map((m) => ({ start: m.start, end: m.end })).sort((a, b) => a.start - b.start)
     this.dirty = true
     // cortes novos mudam a emenda: a pré-busca antiga pode apontar para o lugar errado
     this.prefetched = null
+    // Mesmo pausada, a câmera deve buscar o quadro novo quando o usuário corrige a sincronia.
+    if (oldCameraOffset !== cameraVideoOffsetMs(project)) {
+      for (const track of this.tracks) {
+        if (track.kind !== 'camera') continue
+        track.active.currentTime = this.fileSeconds('camera', track.active, this.sourceMs)
+      }
+    }
   }
 
   /** Redimensiona o canvas (px reais) e refaz o quadro. */
@@ -283,7 +292,7 @@ export class PreviewEngine {
   // --- conversões ------------------------------------------------------------------------------------
   private offsetOf(kind: MediaKind): number {
     if (!this.project) return 0
-    return kind === 'screen' ? this.project.sync.screenOffsetMs : this.project.sync.cameraOffsetMs
+    return kind === 'screen' ? this.project.sync.screenOffsetMs : cameraVideoOffsetMs(this.project)
   }
 
   private fileSeconds(kind: MediaKind, el: HTMLVideoElement, sourceMs: number): number {

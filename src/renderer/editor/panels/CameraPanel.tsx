@@ -3,6 +3,7 @@
  * espelhar e "encolher durante o zoom".
  */
 import { CAMERA_CORNERS } from '@shared/styles'
+import { withManualCameraOffset } from '@shared/camera-sync'
 import type { CameraStyle, Corner } from '@shared/types'
 import { CameraIcon, ShapeCircleIcon, ShapeRoundedIcon, ShapeSquareIcon } from '../../components/Icons'
 import { t } from '../../i18n/pt-BR'
@@ -16,6 +17,7 @@ export function CameraPanel() {
   const cam = useDoc((s) => s.project.style.camera)
   const layout = useDoc((s) => s.project.style.defaultLayout)
   const vertical = useDoc((s) => s.format === 'vertical')
+  const sync = useDoc((s) => s.project.sync)
 
   if (!hasCamera) {
     return (
@@ -37,6 +39,14 @@ export function CameraPanel() {
     <div className="panel" data-testid="camera-panel">
       <Section title={T.title}>
         <Toggle label={T.show} checked={!cam.hidden} testId="camera-show" onChange={(v) => edit({ hidden: !v })} />
+      </Section>
+
+      <Section title={T.sync.title}>
+        <Slider label={T.sync.title} value={sync.cameraAvManualOffsetMs ?? sync.cameraAvOffsetMs ?? 0} min={-300} max={300} step={10} testId="camera-sync" format={(v) => `${v > 0 ? '+' : ''}${v} ms`} onChange={(v) => store.getState().change((p) => withManualCameraOffset(p, v), { coalesce: 'camera-sync' })} />
+        <p className="pos-help">{T.sync.help}</p>
+        <p className="pos-help" data-testid="camera-sync-status">{sync.cameraAvManualOffsetMs !== undefined ? T.sync.manual : T.sync.automatic(sync.cameraAvOffsetMs ?? 0)}</p>
+        {sync.cameraAvDetection?.reason && <p className="pos-help">{sync.cameraAvDetection.reason}</p>}
+        <button type="button" data-testid="camera-sync-auto" disabled={sync.cameraAvManualOffsetMs === undefined} onClick={() => store.getState().change((p) => withManualCameraOffset(p, null))}>{T.sync.reset}</button>
       </Section>
 
       <div className="panel-group" data-disabled={off} aria-disabled={off}>
