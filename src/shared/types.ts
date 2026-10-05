@@ -152,7 +152,8 @@ export type CaptionStyle = {
 }
 
 export type ClipFormat = 'vertical' | 'horizontal'
-export type VerticalLayout = 'stack' | 'screen-focus' | 'screen-wide' | 'camera'
+/** O layout de um corte vertical: `auto` segue a escolha por atividade do projeto; os outros fixam o layout no corte todo. */
+export type VerticalLayout = 'auto' | 'stack' | 'screen-focus' | 'screen-wide' | 'camera'
 
 /**
  * Edição PRÓPRIA do vertical 9:16 (M4a). Zooms, trechos de layout, câmera e legenda do vertical são independentes
@@ -174,16 +175,28 @@ export type VerticalEdit = {
   captions?: Partial<Pick<CaptionStyle, 'enabled' | 'style' | 'wordsPerLine' | 'position' | 'box' | 'size' | 'positionY' | 'uppercase'>>
 }
 
+/** As três notas de um corte (0-100): gancho nos 3 primeiros segundos, fluxo (começo, meio e fim) e valor para quem assiste. */
+export type ClipNotes = { hook: number; flow: number; value: number }
+
 export type Clip = {
   id: string
   title: string
+  /** Frase curta (até 8 palavras) que afirma o resultado; vira o título de gancho nos 2 primeiros segundos. */
   hook: string
-  /** Pode juntar trechos não contíguos (tempo de origem). */
+  /** Pode juntar trechos não contíguos (tempo de origem, ms). Começa em início de frase e termina em fim de frase. */
   ranges: Range[]
+  /** Nota geral 0-100. */
   score: number
+  /** Notas de gancho, fluxo e valor (0-100). */
+  notes?: ClipNotes
+  /** Por que este trecho foi escolhido (uma frase). */
   reason: string
   format: ClipFormat
   layoutV: VerticalLayout
+  /** Estilo de legenda só deste corte; ausente = o do vertical do projeto. */
+  captionStyle?: CaptionStyleId
+  /** Quem escolheu: a IA, a heurística (sem IA) ou a pessoa (editou os trechos à mão ou pediu pelo texto). */
+  source?: 'ai' | 'heuristic' | 'manual'
 }
 
 export type CaptureInfo = {
@@ -208,9 +221,15 @@ export type CaptureInfo = {
   sourceName?: string
 }
 
+/** Um capítulo do YouTube: onde começa (ms de ORIGEM; o tempo de saída é calculado com os cortes de agora) e o título. */
+export type YoutubeChapter = { start: number; title: string }
+
+/** Texto de publicação de um corte: legenda e hashtags de cada plataforma. */
+export type ClipMeta = { caption?: string; hashtags?: string[]; tiktok?: string[]; reels?: string[]; shorts?: string[] }
+
 export type ProjectMeta = {
-  youtube?: { titles?: string[]; description?: string; tags?: string[] }
-  perClip?: Record<string, { caption?: string; hashtags?: string[] }>
+  youtube?: { titles?: string[]; description?: string; tags?: string[]; chapters?: YoutubeChapter[] }
+  perClip?: Record<string, ClipMeta>
 }
 
 export type Project = {

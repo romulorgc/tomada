@@ -92,7 +92,10 @@ const api: TomadaApi = {
     setKey: (key) => invoke('llm:set-key', key),
     clearKey: () => invoke('llm:clear-key'),
     test: () => invoke('llm:test'),
-    retakes: (projectId) => invoke('ai:retakes', projectId)
+    retakes: (projectId) => invoke('ai:retakes', projectId),
+    clips: (projectId, mode) => invoke('ai:clips', projectId, mode),
+    edit: (projectId, instruction, format) => invoke('ai:edit', projectId, instruction, format),
+    publish: (projectId) => invoke('ai:publish', projectId)
   },
   exportWorker: {
     job: (exportId) => invoke('exporter:job', exportId),

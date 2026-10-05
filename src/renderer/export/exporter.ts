@@ -36,6 +36,7 @@ import {
 } from '@shared/render'
 import { deriveProject, evaluateScene, prepareEvents, type Derived, type FormatSpec } from '@shared/scene'
 import type { Project, Word } from '@shared/types'
+import { withClipLayout } from '@shared/clips'
 import { ensureVertical, projectForFormat } from '@shared/vertical'
 import { captionFontsLoaded, ensureCaptionFonts } from '../fonts'
 
@@ -114,7 +115,7 @@ type Context = {
   close(): void
 }
 
-async function createContext(job: Pick<ExportJob, 'projectId' | 'project' | 'screenUrl' | 'cameraUrl' | 'eventUrls'> & { words?: Word[] | null }, format: FormatSpec): Promise<Context> {
+async function createContext(job: Pick<ExportJob, 'projectId' | 'project' | 'screenUrl' | 'cameraUrl' | 'eventUrls' | 'clipLayout'> & { words?: Word[] | null }, format: FormatSpec): Promise<Context> {
   const [cursor, clicks, keys] = await Promise.all([
     fetchText(job.eventUrls.cursor),
     fetchText(job.eventUrls.clicks),
@@ -128,7 +129,9 @@ async function createContext(job: Pick<ExportJob, 'projectId' | 'project' | 'scr
   await ensureCaptionFonts()
   // O vertical nunca editado ganha os zooms (Intenso) e os layouts por atividade, como o editor faria ao entrar no 9:16;
   // depois, a visão do formato: é sobre ela que a cena é calculada (a mesma coisa que a prévia faz)
-  const edited = format.kind === 'vertical' ? ensureVertical(doc, data, { durationMs, words: job.words, hasCursorEvents: Boolean(job.eventUrls.cursor) }) : doc
+  const ensured = format.kind === 'vertical' ? ensureVertical(doc, data, { durationMs, words: job.words, hasCursorEvents: Boolean(job.eventUrls.cursor) }) : doc
+  // Um corte vertical com layout fixo (V-A, V-B, V-C ou só câmera) o usa no corte todo; o automático segue a atividade (depois do ensure)
+  const edited = format.kind === 'vertical' && job.clipLayout ? withClipLayout(ensured, job.clipLayout) : ensured
   const project = projectForFormat(edited, format.kind)
   const derived = deriveProject(project, data, format, job.words)
 

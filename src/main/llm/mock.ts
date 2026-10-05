@@ -7,9 +7,26 @@
 import { LlmError } from '@shared/llm-json'
 import { providerFromAsk, type AskFn, type LlmProvider } from './provider'
 
-export type RecordedResponse = { match: string; response: unknown; /** Quantas vezes vale (padrão: sempre). */ times?: number }
+export type RecordedResponse = {
+  /** Trecho que precisa aparecer no pedido ("" = qualquer). */
+  match: string
+  response: unknown
+  /** Quantas vezes vale (padrão: sempre). */
+  times?: number
+  /** Só vale para esta tarefa ("retakes", "clips", "edit", "publish"); ausente = qualquer. */
+  task?: string
+}
 
-export const DEFAULT_RECORDED: readonly RecordedResponse[] = [{ match: '', response: { retakes: [] } }]
+/**
+ * Sem arquivo de respostas: os cortes não acham nada, "editar pedindo" não muda nada e a publicação devolve um texto
+ * mínimo; qualquer outra pergunta recebe a lista vazia de recomeços (como sempre foi).
+ */
+export const DEFAULT_RECORDED: readonly RecordedResponse[] = [
+  { task: 'clips', match: '', response: { clips: [] } },
+  { task: 'edit', match: '', response: { ops: [], reply: 'A IA de teste não propõe mudanças.' } },
+  { task: 'publish', match: '', response: { titles: ['Título de teste'], description: 'Descrição de teste.', tags: ['teste'], chapters: [], clips: [] } },
+  { match: '', response: { retakes: [] } }
+]
 
 export type MockOptions = {
   recorded?: readonly RecordedResponse[]
@@ -24,7 +41,7 @@ export function createMockProvider(opts: MockOptions = {}): LlmProvider {
     opts.onAsk?.({ task, system, prompt })
     if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs))
     if (signal?.aborted) throw new LlmError('Cancelado.', false)
-    const hit = recorded.find((r) => (r.times === undefined || r.times > 0) && prompt.includes(r.match))
+    const hit = recorded.find((r) => (r.times === undefined || r.times > 0) && (r.task === undefined || r.task === task) && prompt.includes(r.match))
     if (!hit) throw new LlmError(`Teste: não há resposta gravada para este pedido (${task}).`, false)
     if (hit.times !== undefined) hit.times--
     return typeof hit.response === 'string' ? hit.response : JSON.stringify(hit.response)
@@ -37,8 +54,8 @@ export function parseRecorded(text: string): RecordedResponse[] {
   const raw = JSON.parse(text) as unknown
   if (!Array.isArray(raw)) throw new Error('O arquivo de respostas gravadas precisa ser uma lista.')
   return raw.map((r, i) => {
-    const o = r as { match?: unknown; response?: unknown; times?: unknown }
+    const o = r as { match?: unknown; response?: unknown; times?: unknown; task?: unknown }
     if (typeof o.match !== 'string') throw new Error(`Resposta gravada ${i}: falta "match".`)
-    return { match: o.match, response: o.response, ...(typeof o.times === 'number' ? { times: o.times } : {}) }
+    return { match: o.match, response: o.response, ...(typeof o.times === 'number' ? { times: o.times } : {}), ...(typeof o.task === 'string' ? { task: o.task } : {}) }
   })
 }

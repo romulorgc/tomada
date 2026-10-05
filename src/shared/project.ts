@@ -202,9 +202,30 @@ const clipSchema = z.looseObject({
   hook: z.string().default(''),
   ranges: z.array(rangeSchema),
   score: z.number().default(0),
+  notes: z.looseObject({ hook: z.number(), flow: z.number(), value: z.number() }).optional(),
   reason: z.string().default(''),
   format: z.enum(['vertical', 'horizontal']).default('vertical'),
-  layoutV: z.enum(['stack', 'screen-focus', 'screen-wide', 'camera']).default('stack')
+  layoutV: z.enum(['auto', 'stack', 'screen-focus', 'screen-wide', 'camera']).default('auto'),
+  captionStyle: captionStyleId.optional(),
+  source: z.enum(['ai', 'heuristic', 'manual']).optional()
+})
+
+const strings = z.array(z.string())
+const metaSchema = z.looseObject({
+  youtube: z
+    .looseObject({
+      titles: strings.optional(),
+      description: z.string().optional(),
+      tags: strings.optional(),
+      chapters: z.array(z.looseObject({ start: z.number(), title: z.string() })).optional()
+    })
+    .optional(),
+  perClip: z
+    .record(
+      z.string(),
+      z.looseObject({ caption: z.string().optional(), hashtags: strings.optional(), tiktok: strings.optional(), reels: strings.optional(), shorts: strings.optional() })
+    )
+    .optional()
 })
 
 const captureSchema = z.looseObject({
@@ -247,7 +268,7 @@ export const projectSchema = z.looseObject({
   vertical: verticalSchema.optional(),
   wordFixes: z.record(z.string(), z.string()).optional(),
   autoCleaned: z.boolean().optional(),
-  meta: z.looseObject({}).optional()
+  meta: metaSchema.optional()
 })
 
 // Garante em tempo de compilação que o esquema produz o tipo `Project`.

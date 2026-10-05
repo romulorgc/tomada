@@ -5,6 +5,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { useStore } from 'zustand'
+import { createClipQueue, queueSummary } from '@shared/clip-queue'
+import { clipScene } from '@shared/clips'
 import { DEFAULT_CLEAN, type Levels } from '@shared/clean'
 import { createEditorStore } from '@shared/editor-store'
 import { eventsFromText } from '@shared/events'
@@ -19,6 +21,8 @@ import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
 import { useTranscription } from '../transcription-store'
+import { createAiUiStore } from './ai-store'
+import { createClipsUiStore } from './clips-store'
 import { EditorContext, useEditor, type AssetState, type EditorCtx } from './context'
 import { PreviewEngine } from './engine'
 import { ExportDialog } from './ExportDialog'
@@ -164,7 +168,30 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
   )
   const playback = useMemo(() => createPlaybackStore(), [detail.id])
   const text = useMemo(() => createTextStore(), [detail.id])
+  const clips = useMemo(() => createClipsUiStore(), [detail.id])
+  const aiUi = useMemo(() => createAiUiStore(), [detail.id])
+  const queue = useMemo(
+    () =>
+      createClipQueue({
+        projectId: detail.id,
+        flush: () => store.getState().flush(),
+        startExport: (req) => window.tomada.exporter.start(req),
+        cancelExport: (id) => window.tomada.exporter.cancel(id),
+        onProgress: (listener) => window.tomada.on('export:progress', listener),
+        pollStatus: () => window.tomada.exporter.status(),
+        onFinished: (items) => {
+          const r = queueSummary(items)
+          if (r.total === 0) return
+          if (r.failed > 0) notify({ kind: 'error', text: t.editor.clips.queue.finishedBad, detail: t.editor.clips.queue.summary(r.done, r.failed, r.cancelled, r.total) })
+          else if (r.done > 0) notify({ kind: 'info', text: t.editor.clips.queue.finishedOk(r.done) })
+        }
+      }),
+    // um projeto novo remonta o editor inteiro (a `key` do ProjectView)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [detail.id, store]
+  )
   const project = useStore(store, (s) => s.project)
+  const doc = useStore(store, (s) => s.doc)
   const durationMs = Math.max(project.sources.screen?.durationMs ?? 0, project.sources.camera?.durationMs ?? 0, project.sources.voice?.durationMs ?? 0)
   const hasScreen = Boolean(project.sources.screen)
   const hasCamera = Boolean(project.sources.camera)
@@ -241,8 +268,22 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     () => (cursorData ? deriveProject(project, cursorData, format === 'vertical' ? VERTICAL_1080 : HORIZONTAL_1080, words) : null),
     [project, cursorData, format, words]
   )
-  const sceneRef = useRef({ project, derived })
-  sceneRef.current = { project, derived }
+
+  // A prévia de um corte: o MESMO documento que a exportação desenha (os trechos do corte, o gancho dele, o layout e a legenda
+  // dele), sempre no 9:16. A linha do tempo segue mostrando o vídeo inteiro.
+  const previewId = useStore(clips, (s) => s.previewId)
+  const previewClip = useMemo(() => (previewId ? doc.clips.find((c) => c.id === previewId) : undefined), [previewId, doc.clips])
+  const sceneProject = useMemo(() => (previewClip ? clipScene(doc, previewClip) : project), [previewClip, doc, project])
+  const sceneDerived = useMemo(
+    () => (!previewClip ? derived : cursorData ? deriveProject(sceneProject, cursorData, VERTICAL_1080, words) : null),
+    [previewClip, derived, sceneProject, cursorData, words]
+  )
+  // a prévia só existe no 9:16 e enquanto o corte existe
+  useEffect(() => {
+    if (previewId && (format !== 'vertical' || !previewClip)) clips.getState().preview(null)
+  }, [previewId, previewClip, format, clips])
+  const sceneRef = useRef({ project: sceneProject, derived: sceneDerived })
+  sceneRef.current = { project: sceneProject, derived: sceneDerived }
 
   // Entrar no 9:16 pela primeira vez: zooms do preset Intenso e layouts escolhidos pela atividade (uma vez; não entra no "desfazer").
   // Espera a transcrição chegar (a escolha de layout usa onde há fala).
@@ -323,8 +364,20 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
   }, [format])
 
   useEffect(() => {
-    if (derived) engineRef.current?.setScene(project, derived)
-  }, [project, derived, engineGen])
+    if (sceneDerived) engineRef.current?.setScene(sceneProject, sceneDerived)
+  }, [sceneProject, sceneDerived, engineGen])
+
+  // ao entrar na prévia de um corte, a reprodução vai ao começo dele (uma vez por corte; editar o corte não a leva de volta)
+  const seekedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!previewId) {
+      seekedFor.current = null
+      return
+    }
+    if (!previewClip || !sceneDerived || seekedFor.current === previewId) return
+    seekedFor.current = previewId
+    engineRef.current?.seekOutput(0)
+  }, [previewId, previewClip, sceneDerived])
 
   // arquivo que o projeto cita e não está no disco: erro à vista na própria prévia
   useEffect(() => {
@@ -477,6 +530,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       cursorData,
       eventsError,
       derived,
+      sceneDerived,
       durationMs,
       hasScreen,
       hasCamera,
@@ -488,9 +542,12 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       levels,
       text,
       exporter,
+      clips,
+      queue,
+      ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, store, playback, cursorData, eventsError, derived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, levels, text, exporter]
+    [detail, store, playback, cursorData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (

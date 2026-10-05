@@ -64,13 +64,13 @@ function ShortcutsPopover({ onClose }: { onClose: () => void }) {
 }
 
 export function Transport() {
-  const { engineRef, derived } = useEditor()
+  const { engineRef, sceneDerived } = useEditor()
   const playing = usePlayback((s) => s.playing)
   const rate = usePlayback((s) => s.rate)
   const outMs = usePlayback((s) => s.outMs)
   const audioTreated = usePlayback((s) => s.audioTreated)
   const audioError = usePlayback((s) => s.audioError)
-  const total = derived?.outputDurationMs ?? 0
+  const total = sceneDerived?.outputDurationMs ?? 0
   const hasAudio = useDoc((s) => Boolean(s.project.sources.voice || s.project.sources.system))
   const [help, setHelp] = useState(false)
   const engine = (): PreviewEngine | null => engineRef.current

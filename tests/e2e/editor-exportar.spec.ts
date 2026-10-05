@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { probeJson } from '../helpers/media'
-import { editProject, exportsDirOf, listExports } from './export-helpers'
+import { editProject, exportsDirOf, listExports, listVideos } from './export-helpers'
 import { EXAMPLE_FOLDER, launchTomada, shot, type Session } from './helpers'
 import { openEditor, outputTotalMs, readSaved, waitSaved } from './editor-helpers'
 
@@ -124,7 +124,8 @@ test('exportar pelo diálogo: predefinições, nome, pasta, arquivo conferido co
   // o arquivo existe, na pasta escolhida, com o nome escolhido, e o ffprobe confere
   const file = join(out, 'Minha aula final.mp4')
   expect(existsSync(file)).toBe(true)
-  expect(readdirSync(out)).toEqual(['Minha aula final.mp4']) // nenhum temporário sobrou
+  // nenhum temporário sobrou: só o vídeo e o texto de publicação que acompanha o 16:9 (M4b)
+  expect(readdirSync(out).sort()).toEqual(['Minha aula final.mp4', 'Projeto de exemplo - YouTube.txt'])
   expect(listExports(s)).toEqual([]) // e nada foi para a pasta padrão
   await expect(page.getByTestId('export-done-path')).toContainText('Minha aula final.mp4')
   await expect(page.getByTestId('export-report')).toContainText('1920×1080')
@@ -152,7 +153,9 @@ test('exportar pelo diálogo: predefinições, nome, pasta, arquivo conferido co
   await page.getByTestId('export-name').fill('Minha aula final')
   await page.getByTestId('export-start').click()
   await expect(page.getByTestId('export-done')).toBeVisible({ timeout: 150_000 })
-  expect(readdirSync(out).sort()).toHaveLength(2)
+  // dois vídeos e dois textos: nada foi sobrescrito
+  expect(readdirSync(out).filter((n) => n.endsWith('.mp4'))).toHaveLength(2)
+  expect(readdirSync(out).filter((n) => n.endsWith('.txt'))).toHaveLength(2)
   expect(existsSync(file)).toBe(true)
   await page.getByTestId('export-done-close').click()
   await expect(page.getByTestId('export-dialog')).toHaveCount(0)
@@ -283,8 +286,8 @@ test('o editor continua respondendo durante a exportação: rAF da tela, cliques
 
   // o resultado não passa batido: aviso na tela, e o arquivo está lá
   await expect(page.getByTestId('toast').first()).toContainText('Vídeo exportado')
-  expect(listExports(s)).toHaveLength(1)
-  const name = listExports(s)[0]!
+  expect(listVideos(s)).toHaveLength(1)
+  const name = listVideos(s)[0]!
   expect(name).toMatch(/4K60\.mp4$/)
   // o 4K a 60 qps SAI de verdade (o encoder por hardware desta máquina recusa essa configuração: o exportador cai no outro)
   const probe = probeJson(join(exportsDirOf(s), name))

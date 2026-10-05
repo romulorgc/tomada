@@ -1,44 +1,36 @@
 /**
- * Painel lateral com abas: Estilo, Câmera, Zoom, Layout, Texto (transcrição, limpeza), Legendas e IA ("em breve"). Selecionar um
- * zoom ou um trecho de layout na linha do tempo leva para a aba dele; Ctrl+F leva ao Texto.
+ * Painel lateral com abas: Estilo, Câmera, Zoom, Layout, Texto (transcrição, limpeza), Legendas, Cortes (cortes verticais em
+ * lote), Publicar (títulos, descrição, capítulos, hashtags) e IA (editar pedindo). Selecionar um zoom ou um trecho de layout na
+ * linha do tempo leva para a aba dele; Ctrl+F leva ao Texto; um painel que depende da transcrição leva até o Texto.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useStore } from 'zustand'
-import { CaptionsIcon, LayoutGridIcon, PaletteIcon, CameraIcon, SparkleIcon, TextIcon, ZoomInIcon } from '../../components/Icons'
+import { CaptionsIcon, ClipsIcon, LayoutGridIcon, PaletteIcon, CameraIcon, PublishIcon, SparkleIcon, TextIcon, ZoomInIcon } from '../../components/Icons'
 import { t } from '../../i18n/pt-BR'
 import { useDoc, useEditor } from '../context'
 import { TextPanel } from '../text/TextPanel'
+import { AiPanel } from './AiPanel'
 import { CameraPanel } from './CameraPanel'
 import { CaptionsPanel } from './CaptionsPanel'
+import { ClipsPanel } from './ClipsPanel'
 import { LayoutPanel } from './LayoutPanel'
+import { PublishPanel } from './PublishPanel'
 import { StylePanel } from './StylePanel'
 import { ZoomPanel } from './ZoomPanel'
 
-export type TabId = 'style' | 'camera' | 'zoom' | 'layout' | 'text' | 'captions' | 'ai'
+export type TabId = 'style' | 'camera' | 'zoom' | 'layout' | 'text' | 'captions' | 'clips' | 'publish' | 'ai'
 
-const TABS: { id: TabId; label: string; icon: ReactNode; soon?: boolean }[] = [
+const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
   { id: 'style', label: t.editor.tabs.style, icon: <PaletteIcon size={18} /> },
   { id: 'camera', label: t.editor.tabs.camera, icon: <CameraIcon size={18} /> },
   { id: 'zoom', label: t.editor.tabs.zoom, icon: <ZoomInIcon size={18} /> },
   { id: 'layout', label: t.editor.tabs.layout, icon: <LayoutGridIcon size={18} /> },
   { id: 'text', label: t.editor.tabs.text, icon: <TextIcon size={18} /> },
   { id: 'captions', label: t.editor.tabs.captions, icon: <CaptionsIcon size={18} /> },
-  { id: 'ai', label: t.editor.tabs.ai, icon: <SparkleIcon size={18} />, soon: true }
+  { id: 'clips', label: t.editor.tabs.clips, icon: <ClipsIcon size={18} /> },
+  { id: 'publish', label: t.editor.tabs.publish, icon: <PublishIcon size={18} /> },
+  { id: 'ai', label: t.editor.tabs.ai, icon: <SparkleIcon size={18} /> }
 ]
-
-function SoonPanel({ id }: { id: 'ai' }) {
-  const copy = t.editor.soon[id]
-  return (
-    <div className="panel" data-testid={`${id}-panel`}>
-      <div className="empty-state soon">
-        <SparkleIcon size={30} />
-        <span className="soon-badge">{t.editor.soon.badge}</span>
-        <h3>{copy.title}</h3>
-        <p>{copy.body}</p>
-      </div>
-    </div>
-  )
-}
 
 export function SidePanel() {
   const [tab, setTab] = useState<TabId>('style')
@@ -47,7 +39,7 @@ export function SidePanel() {
   const { text } = useEditor()
   const tabRequest = useStore(text, (s) => s.tabRequest)
 
-  // Ctrl+F (ou outro pedido de dentro do editor) leva à aba Texto
+  // Ctrl+F (ou outro pedido de dentro do editor) leva à aba pedida
   useEffect(() => {
     if (tabRequest) setTab(tabRequest.tab)
   }, [tabRequest])
@@ -74,8 +66,7 @@ export function SidePanel() {
             aria-selected={tab === tb.id}
             aria-controls={`tabpanel-${tb.id}`}
             data-testid={`tab-${tb.id}`}
-            data-soon={tb.soon ? 'true' : undefined}
-            title={tb.soon ? `${tb.label} · ${t.editor.tabs.soon}` : tb.label}
+            title={tb.label}
             onClick={() => setTab(tb.id)}
           >
             {tb.icon}
@@ -90,7 +81,9 @@ export function SidePanel() {
         {tab === 'layout' ? <LayoutPanel /> : null}
         {tab === 'text' ? <TextPanel /> : null}
         {tab === 'captions' ? <CaptionsPanel /> : null}
-        {tab === 'ai' ? <SoonPanel id="ai" /> : null}
+        {tab === 'clips' ? <ClipsPanel /> : null}
+        {tab === 'publish' ? <PublishPanel /> : null}
+        {tab === 'ai' ? <AiPanel /> : null}
       </div>
     </aside>
   )

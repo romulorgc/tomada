@@ -15,6 +15,9 @@ export type TextPane = 'text' | 'clean'
 
 export type RetakesStatus = 'idle' | 'loading' | 'ready' | 'error'
 
+/** As abas que um pedido de dentro do editor pode abrir. */
+export type RequestableTab = 'text' | 'clips' | 'publish' | 'ai'
+
 export type TextState = {
   selection: WordSelection | null
   /** Onde a pessoa clicou por último (o "cursor" do texto): Shift+clique estende a partir daqui. */
@@ -30,12 +33,14 @@ export type TextState = {
   retakes: RetakesResult | null
   retakesStatus: RetakesStatus
   retakesError: string | null
-  /** Pedido de troca de aba (Ctrl+F leva ao Texto); o painel lateral reage ao número. */
-  tabRequest: { tab: 'text'; n: number } | null
+  /** Pedido de troca de aba (Ctrl+F leva ao Texto; um painel sem transcrição leva até lá); o painel lateral reage ao número. */
+  tabRequest: { tab: RequestableTab; n: number } | null
 
   select(selection: WordSelection | null): void
   setCaret(i: number | null): void
   openSearch(): void
+  /** Abre outra aba do painel lateral. */
+  requestTab(tab: RequestableTab): void
   closeSearch(): void
   setQuery(query: string): void
   setMatchAt(at: number): void
@@ -71,6 +76,7 @@ export function createTextStore(): TextStore {
     select: (selection) => set({ selection, editing: null }),
     setCaret: (caret) => set({ caret }),
     openSearch: () => set({ searchOpen: true, pane: 'text', tabRequest: { tab: 'text', n: ++tabSeq } }),
+    requestTab: (tab) => set({ tabRequest: { tab, n: ++tabSeq } }),
     closeSearch: () => set({ searchOpen: false, query: '', matchAt: 0 }),
     setQuery: (query) => set({ query, matchAt: 0 }),
     setMatchAt: (matchAt) => set({ matchAt }),

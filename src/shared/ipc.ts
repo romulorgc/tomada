@@ -4,11 +4,14 @@
  * e o preload e o renderer só enxergam o que está declarado.
  * Código puro: sem DOM, sem Node.
  */
+import type { AiEditResult, EditFormat } from './ai-edit'
 import type { Levels } from './clean'
+import type { ClipsResult } from './clips'
 import type { ExportOptions } from './export'
+import type { PublishResult } from './publish'
 import type { RecordPrefs, RecordRequest } from './recording'
 import type { LlmStatus, PrepareSnapshot, RetakesResult, TranscriptionJob, TranscriptionPrefs, TranscriptionView } from './transcription'
-import type { Project, ProjectSummary, Size, Transcript, Word } from './types'
+import type { Project, ProjectSummary, Size, Transcript, VerticalLayout, Word } from './types'
 
 // --- Tipos que atravessam a ponte ---------------------------------------------
 
@@ -233,6 +236,8 @@ export type ExportReport = {
 export type ExportProgress = {
   exportId: string
   projectId: string
+  /** Só nas exportações de UM corte vertical (M4b): qual corte. A exportação do vídeo inteiro não tem. */
+  clipId?: string
   phase: ExportPhase
   /** 0..1 do trabalho todo. */
   fraction: number
@@ -245,6 +250,8 @@ export type ExportProgress = {
   /** Motivo, em `error`/`cancelled`; aviso de bastidor nas demais fases. */
   message?: string
   outputPath?: string
+  /** O texto que acompanha o arquivo (`<título> - YouTube.txt` no 16:9; `<corte>.txt` num corte vertical), se foi gravado. */
+  textPath?: string
   report?: ExportReport
 }
 
@@ -259,6 +266,8 @@ export type ExportJob = {
   project: Project
   /** 16:9 ou vertical (o vertical é 1080×1920). */
   format: 'horizontal' | 'vertical'
+  /** Exportação de um corte vertical: o layout fixo do corte (`auto` ou ausente = a escolha por atividade do projeto). */
+  clipLayout?: VerticalLayout
   width: number
   height: number
   fps: number
@@ -364,6 +373,12 @@ export type IpcContract = {
   'llm:clear-key': { args: []; result: LlmStatus }
   'llm:test': { args: []; result: { ok: boolean; message?: string } }
   'ai:retakes': { args: [projectId: string]; result: RetakesResult }
+  /** Sugere cortes verticais (M4b): pela IA, ou pela heurística se não há IA (`auto`) ou se a pessoa pediu (`heuristic`). */
+  'ai:clips': { args: [projectId: string, mode: 'auto' | 'heuristic']; result: ClipsResult }
+  /** "Editar pedindo": o pedido vira operações cruas (a interface as valida e aplica como UMA mudança desfazível). */
+  'ai:edit': { args: [projectId: string, instruction: string, format: EditFormat]; result: AiEditResult }
+  /** Títulos, descrição, tags, capítulos e o texto de cada corte (nada é publicado). */
+  'ai:publish': { args: [projectId: string]; result: PublishResult }
 
   // Canais da janela escondida de exportação (identificada pelo `exportId` que vai no hash da URL).
   'exporter:job': { args: [exportId: string]; result: ExportJob }
@@ -496,6 +511,9 @@ export type TomadaApi = {
     test(): Promise<{ ok: boolean; message?: string }>
     /** Pede à IA os recomeços da transcrição do projeto (só o texto vai). */
     retakes(projectId: string): Promise<RetakesResult>
+    clips(projectId: string, mode: 'auto' | 'heuristic'): Promise<ClipsResult>
+    edit(projectId: string, instruction: string, format: EditFormat): Promise<AiEditResult>
+    publish(projectId: string): Promise<PublishResult>
   }
   /** Só para a janela escondida de exportação. */
   exportWorker: {

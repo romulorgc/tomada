@@ -170,7 +170,8 @@ describe('files:open e files:reveal (IPC)', () => {
     expect(status.phase, status.message).toBe('done')
     const file = status.outputPath!
     expect(file).toBe(join(out, 'Aula final.mp4'))
-    expect(readdirSync(out)).toEqual(['Aula final.mp4']) // nenhum temporário sobrou
+    // nenhum temporário sobrou: só o vídeo e o texto de publicação que acompanha o 16:9 (M4b)
+    expect(readdirSync(out).sort()).toEqual(['Aula final.mp4', 'Projeto de exemplo - YouTube.txt'])
     await handlers['files:open'](file)
     await handlers['files:reveal'](file)
     await handlers['files:reveal'](out)
@@ -233,7 +234,9 @@ describe('export:start (IPC): onde a exportação pode gravar', () => {
     await ctx.exporter.idle()
     const status = ctx.exporter.status()!
     expect(status.phase, status.message).toBe('done')
-    const written = readdirSync(out)
+    const all = readdirSync(out)
+    const written = all.filter((n) => n.endsWith('.mp4'))
+    expect(all.filter((n) => !n.endsWith('.mp4'))).toEqual(['Projeto de exemplo - YouTube.txt']) // o texto de publicação (M4b)
     expect(written).toHaveLength(1)
     expect(written[0]).toMatch(/\.mp4$/)
     expect(written[0]).not.toMatch(/[\\/:]|\.\./)
@@ -253,7 +256,7 @@ describe('export:start (IPC): onde a exportação pode gravar', () => {
     expect(status.phase, status.message).toBe('done')
     expect(readFileSync(taken, 'utf8')).toBe('ARQUIVO DO USUARIO')
     expect(status.outputPath).toBe(join(out, 'Aula (2).mp4'))
-    expect(readdirSync(out).sort()).toEqual(['Aula (2).mp4', 'Aula.mp4'])
+    expect(readdirSync(out).sort()).toEqual(['Aula (2).mp4', 'Aula.mp4', 'Projeto de exemplo - YouTube.txt'])
   }, 180_000)
 
   it('exportação que FALHA não apaga o arquivo do usuário que tomou o nome no meio do caminho', async () => {

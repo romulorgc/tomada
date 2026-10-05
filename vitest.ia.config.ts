@@ -10,6 +10,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/ia/**/*.ia.ts'],
+    // o relatório do teste (títulos, durações e notas dos cortes) aparece mesmo com o teste verde
+    reporters: ['verbose'],
     testTimeout: 6 * 60_000,
     hookTimeout: 60_000,
     fileParallelism: false

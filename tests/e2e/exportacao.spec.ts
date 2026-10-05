@@ -14,7 +14,7 @@ import { copyTree, FIXTURES_DIR } from '../helpers/fs'
 import { ensureLongProject, LONG_CUT_COUNT, LONG_CUT_MS, LONG_FOLDER, LONG_MS } from '../helpers/long-project'
 import { audioPcm, frameRgb, imageToRgb, lumaSeries, onsets, probeJson, rgbDiff } from '../helpers/media'
 import { EXAMPLE_FOLDER, launchTomada, ROOT, SCREENS_DIR, shot, type Session } from './helpers'
-import { editProject, exportProject, FLASH_FOLDER, listExports, seedFlashProject } from './export-helpers'
+import { editProject, exportProject, FLASH_FOLDER, listExports, listTexts, listVideos, seedFlashProject } from './export-helpers'
 
 let s: Session | undefined
 test.afterEach(async () => {
@@ -93,7 +93,9 @@ test('exporta com cortes, zooms e layouts: duração, taxa constante, trilhas, n
   expect(head.includes(Buffer.from('ftyp'))).toBe(true)
   expect(readFileSync(file).subarray(0, 4096).includes(Buffer.from('moov'))).toBe(true)
   // nenhum parcial ou temporário sobrou
-  expect(listExports(s)).toEqual(['Projeto de exemplo - YouTube 1080p.mp4'])
+  expect(listVideos(s)).toEqual(['Projeto de exemplo - YouTube 1080p.mp4'])
+  expect(listExports(s).filter((n) => !n.endsWith('.mp4'))).toEqual(['Projeto de exemplo - YouTube.txt']) // o texto de publicação (M4b)
+  expect(listTexts(s)).toHaveLength(1)
   // taxa de bits na faixa do YouTube (8 Mbps pedidos; o conteúdo sintético é leve, então não passa disso)
   expect(Number(probe.format.bit_rate)).toBeLessThan(9_000_000)
 
@@ -105,7 +107,7 @@ test('exporta com cortes, zooms e layouts: duração, taxa constante, trilhas, n
   const again = await exportProject(s.page, EXAMPLE_FOLDER)
   expect(again.phase).toBe('done')
   expect(again.outputPath).toContain('Projeto de exemplo - YouTube 1080p (2).mp4')
-  expect(listExports(s).sort()).toEqual(['Projeto de exemplo - YouTube 1080p (2).mp4', 'Projeto de exemplo - YouTube 1080p.mp4'])
+  expect(listVideos(s).sort()).toEqual(['Projeto de exemplo - YouTube 1080p (2).mp4', 'Projeto de exemplo - YouTube 1080p.mp4'])
 })
 
 test('SINCRONIA com flash-bipe: o clarão e o início do bipe caem juntos (< 1 quadro) depois dos cortes', async () => {

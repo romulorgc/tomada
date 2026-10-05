@@ -6,6 +6,7 @@
  *  - no vertical, o guia das ZONAS SEGURAS (área segura e a interface do TikTok, Reels e Shorts): só aqui, nunca no vídeo.
  */
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
+import { useStore } from 'zustand'
 import { setZoomFocus } from '@shared/edits'
 import type { Scene } from '@shared/scene'
 import type { Corner } from '@shared/types'
@@ -58,8 +59,11 @@ function SafeGuide() {
 }
 
 export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefObject<HTMLCanvasElement | null>; hostRef: RefObject<HTMLDivElement | null>; frameRef: RefObject<HTMLDivElement | null> }) {
-  const { store, engineRef, detail } = useEditor()
+  const { store, engineRef, detail, clips } = useEditor()
   const revealProject = useApp((s) => s.revealProject)
+  // a prévia de um corte: o quadro mostra o corte, não o vídeo inteiro
+  const previewId = useStore(clips, (s) => s.previewId)
+  const previewTitle = useDoc((s) => (previewId ? s.doc.clips.find((c) => c.id === previewId)?.title : undefined))
   const selection = useDoc((s) => s.selection)
   const format = useDoc((s) => s.format)
   const safeGuide = useDoc((s) => s.safeGuide)
@@ -96,7 +100,7 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
       setCursor('grabbing')
       return
     }
-    if (selected && scene.screen && inside(p, scene.screen.dest)) {
+    if (selected && !previewId && scene.screen && inside(p, scene.screen.dest)) {
       const { dest, src } = scene.screen
       const x = src.x + ((p.x - dest.x) / dest.w) * src.w
       const y = src.y + ((p.y - dest.y) / dest.h) * src.h
@@ -138,7 +142,15 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
   }
 
   return (
-    <div className="ed-view" data-testid="preview-view">
+    <div className="ed-view" data-testid="preview-view" data-clip-preview={previewTitle !== undefined ? 'true' : undefined}>
+      {previewTitle !== undefined ? (
+        <div className="preview-clip-banner" role="status" data-testid="preview-clip-banner">
+          <span>{t.editor.clips.preview.banner(previewTitle)}</span>
+          <button type="button" className="btn btn-ghost" onClick={() => clips.getState().preview(null)} data-testid="preview-clip-exit">
+            {t.editor.clips.preview.exit}
+          </button>
+        </div>
+      ) : null}
       <div
         ref={frameRef}
         className="preview-frame"

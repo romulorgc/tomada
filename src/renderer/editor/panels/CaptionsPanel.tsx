@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { drawCaptions } from '@shared/caption-render'
-import { CAPTION_SIZE_MAX, CAPTION_SIZE_MIN, CAPTION_STYLE_IDS, defaultCaptionY, resolveCaptionStyle } from '@shared/caption-style'
+import { CAPTION_SIZE_MAX, CAPTION_SIZE_MIN, CAPTION_STYLE_DEFAULTS as STYLE_DEFAULTS, CAPTION_STYLE_IDS, defaultCaptionY, resolveCaptionStyle } from '@shared/caption-style'
 import { buildCaptionTrack } from '@shared/captions'
 import { createRenderCache, type CanvasFactory, type CanvasLike, type Ctx2D, type RenderCache } from '@shared/render'
 import type { SceneCaptions } from '@shared/scene'
@@ -19,14 +19,6 @@ import { useDoc, useEditor } from '../context'
 
 const T = t.editor.captions
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
-
-/** O que cada estilo traz de partida quando é escolhido (a caixa e quantas palavras por linha). */
-const STYLE_DEFAULTS: Record<CaptionStyleId, { wordsPerLine: number; box: boolean }> = {
-  highlight: { wordsPerLine: 3, box: false },
-  natural: { wordsPerLine: 4, box: true },
-  clean: { wordsPerLine: 4, box: true },
-  karaoke: { wordsPerLine: 4, box: true }
-}
 
 const factory: CanvasFactory = (w, h) => {
   const c = document.createElement('canvas')

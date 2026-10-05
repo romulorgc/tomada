@@ -17,23 +17,26 @@ import { randomUUID } from 'node:crypto'
 import type { FileHandle } from 'node:fs/promises'
 import { constants, existsSync } from 'node:fs'
 import { copyFile, link, mkdir, open, realpath, rm, stat, writeFile } from 'node:fs/promises'
-import { isAbsolute, join, resolve } from 'node:path'
+import { basename, isAbsolute, join, resolve } from 'node:path'
+import { clipDocument, normalizeRanges } from '@shared/clips'
 import {
   EXPORT_RESOLUTION_LABEL,
   etaMs,
   exportBitrate,
   exportFileName,
   exportFormat,
-  outputFrameCount
+  outputFrameCount,
+  sanitizeFileName
 } from '@shared/export'
 import { EVENT_FILES } from '@shared/events'
 import type { ExportJob, ExportProgress, ExportReport, ExportRequest, ExporterResult } from '@shared/ipc'
 import { mediaUrl } from '@shared/media-url'
 import { projectDurationMs } from '@shared/project'
+import { buildClipText, buildYoutubeText, fallbackClipMeta, heuristicChapters, resolveClipMeta } from '@shared/publish'
 import { uniqueName } from '@shared/recording'
 import { keptRanges, outputDuration } from '@shared/timeline'
 import { projectForFormat } from '@shared/vertical'
-import type { Project, Word } from '@shared/types'
+import type { Clip, Project, Word } from '@shared/types'
 import {
   VERTICAL_AUDIO_BITRATE,
   buildAudioArgs,
@@ -106,7 +109,14 @@ export interface ExportService {
 type Run = {
   id: string
   req: ExportRequest
+  /** O documento que se exporta: o do projeto, ou (num corte vertical) o do projeto como o corte o enxerga. */
   project: Project
+  /** O documento como está no disco (o texto de publicação lê o `meta` dele). */
+  stored: Project
+  /** O corte que está sendo exportado e o número dele na lista (`01`, `02`…); `null` na exportação do vídeo inteiro. */
+  clip: Clip | null
+  clipNumber: number
+  words: Word[] | null
   dir: string
   startedAt: number
   abort: AbortController
@@ -166,6 +176,21 @@ async function moveWithoutOverwrite(from: string, to: string): Promise<boolean> 
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** Grava um texto ao lado do vídeo SEM sobrescrever nada (`wx`; nome tomado ganha " (2)"). Devolve o caminho. */
+async function writeTextBeside(dir: string, stem: string, text: string): Promise<string> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const name = uniqueName(stem, (n) => existsSync(join(dir, `${n}.txt`)))
+    const target = join(dir, `${name}.txt`)
+    try {
+      await writeFile(target, text, { encoding: 'utf8', flag: 'wx' })
+      return target
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    }
+  }
+  throw new ExportError(`Não achei um nome livre para o texto em ${dir}.`)
+}
+
 /** Chave de comparação de um arquivo (caminho real, sem diferença de maiúsculas: o Windows não distingue). */
 async function outputKey(path: string): Promise<string> {
   return (await realpath(path)).toLowerCase()
@@ -209,6 +234,53 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
   const assertActive = (id: string): Run => {
     if (!current || current.id !== id) throw new ExportError('Essa exportação não está mais em andamento.')
     return current
+  }
+
+  // --- texto que acompanha o vídeo ---------------------------------------------------------------
+  /**
+   * Corte vertical: `<n> - <título>.txt` com título, gancho, legenda e hashtags de TikTok, Reels e Shorts (o que a pessoa
+   * guardou na aba Publicar; o que faltar vem do texto sem IA). 16:9: `<título> - YouTube.txt` com 3 títulos, a descrição
+   * com os capítulos no tempo de saída e as tags. O vertical do vídeo inteiro não leva texto.
+   */
+  async function writeCompanionText(run: Run): Promise<Partial<ExportProgress>> {
+    try {
+      if (run.clip) {
+        const meta = run.stored.meta?.perClip?.[run.clip.id]
+        const text = buildClipText(run.clip, resolveClipMeta(meta, fallbackClipMeta(run.clip, run.words)))
+        const stem = basename(run.finalPath).replace(/\.mp4$/i, '')
+        const path = await writeTextBeside(run.outDir, stem, text)
+        outputs.add(await outputKey(path))
+        return { textPath: path }
+      }
+      if (run.req.format === 'vertical') return {}
+      const youtube = run.stored.meta?.youtube
+      const durationMs = projectDurationMs(run.stored)
+      let chapters = youtube?.chapters ?? []
+      let note: string | undefined
+      let why: string | undefined
+      if (chapters.length === 0 && run.words && run.words.length > 0) {
+        const auto = heuristicChapters(run.words, durationMs, run.stored.cuts)
+        chapters = auto.chapters
+        if (chapters.length > 0) note = 'Capítulos gerados pelas pausas, sem IA: confira os títulos.'
+        else if (auto.why) why = auto.why
+      }
+      const text = buildYoutubeText({
+        title: run.stored.title,
+        titles: youtube?.titles ?? [],
+        description: youtube?.description ?? '',
+        tags: youtube?.tags ?? [],
+        chapters,
+        kept: keptRanges(durationMs, run.stored.cuts),
+        ...(note ? { chaptersNote: note } : {}),
+        ...(why ? { chaptersWhy: why } : {})
+      })
+      const path = await writeTextBeside(run.outDir, `${sanitizeFileName(run.stored.title)} - YouTube`, text)
+      outputs.add(await outputKey(path))
+      return { textPath: path }
+    } catch (err) {
+      logger.error(`Exportação ${run.id}: o vídeo ficou pronto, mas não consegui gravar o texto que o acompanha`, err)
+      return { message: `O vídeo foi exportado, mas não consegui gravar o texto que o acompanha: ${messageOf(err)}` }
+    }
   }
 
   // --- áudio -----------------------------------------------------------------------------------
@@ -341,7 +413,10 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       outputs.add(await outputKey(run.finalPath))
       logger.info(`Exportação ${run.id} pronta: ${run.finalPath} (${report.renderFps.toFixed(1)} qps, áudio×vídeo ${report.audioVideoDiffMs} ms).`)
       run.videoFraction = 1
-      setPhase(run, 'done', { outputPath: run.finalPath, report, etaMs: 0, frame: run.progress.totalFrames })
+      // o texto que acompanha o vídeo: legenda e hashtags do corte, ou títulos, descrição e capítulos do YouTube.
+      // Falhar aqui NÃO joga fora o vídeo (já está pronto), mas também não cala: o aviso vai no resultado.
+      const text = await writeCompanionText(run)
+      setPhase(run, 'done', { outputPath: run.finalPath, report, etaMs: 0, frame: run.progress.totalFrames, ...text })
     } catch (err) {
       if (run.cancelled || err instanceof CancelledError) {
         logger.info(`Exportação ${run.id} cancelada.`)
@@ -369,8 +444,8 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
    * Pasta de destino. Só vale (a) a pasta `exports/` do projeto ou (b) uma pasta que o usuário escolheu NESTA sessão
    * pelo diálogo nativo (`export:pick-dir`); o caminho que chega da interface não vale por si.
    */
-  async function chooseOutputDir(projectDir: string, asked: string | undefined): Promise<string> {
-    const own = join(projectDir, 'exports')
+  async function chooseOutputDir(projectDir: string, asked: string | undefined, subdir?: string): Promise<string> {
+    const own = join(projectDir, 'exports', ...(subdir ? [subdir] : []))
     let target = own
     if (asked !== undefined) {
       if (!isAbsolute(asked)) throw new ExportError('A pasta de destino precisa ser um caminho completo (ex.: C:\\Videos).')
@@ -449,11 +524,33 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
   }
 
   return {
-    async start(request) {
+    async start(asked) {
+      // A que acabou de mostrar o resultado ainda está apagando a pasta temporária: espera ela sair em vez de recusar o pedido
+      // seguinte (a fila dos cortes pede o próximo no mesmo instante em que recebe o "pronto" do anterior).
+      if (current && (current.progress.phase === 'done' || current.progress.phase === 'error' || current.progress.phase === 'cancelled')) {
+        await current.done.catch(() => undefined)
+      }
       if (current) throw new ExportError('Já há uma exportação em andamento. Espere terminar ou cancele.')
-      const { project, dir } = await deps.read(request.projectId)
-      if (!project.sources.screen && !project.sources.camera) {
+      const { project: stored, dir } = await deps.read(asked.projectId)
+      if (!stored.sources.screen && !stored.sources.camera) {
         throw new ExportError('Este projeto não tem vídeo da tela nem da câmera para exportar.')
+      }
+      // UM corte vertical: o corte vem do documento (no disco), nunca da interface; o formato é sempre o vertical
+      let clip: Clip | null = null
+      let clipNumber = 0
+      let project = stored
+      let request: ExportRequest = asked
+      if (asked.clipId !== undefined) {
+        const at = stored.clips.findIndex((c) => c.id === asked.clipId)
+        if (at < 0) throw new ExportError('Esse corte não existe mais neste projeto. Atualize a lista de cortes e tente de novo.')
+        clip = stored.clips[at]!
+        clipNumber = at + 1
+        if (normalizeRanges(clip.ranges, projectDurationMs(stored)).length === 0) {
+          throw new ExportError(`O corte «${clip.title}» não tem nenhum trecho dentro da gravação. Ajuste os trechos do corte e tente de novo.`)
+        }
+        project = clipDocument(stored, clip)
+        request = { ...asked, format: 'vertical' }
+        delete request.fileName
       }
       // O documento pode vir de terceiros: todo caminho dele é relativo e resolve para DENTRO da pasta do projeto.
       // Erro visível ANTES de começar qualquer coisa ("Este projeto aponta para um arquivo fora da pasta dele").
@@ -480,9 +577,8 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       }
 
       const id = randomUUID()
-      const exportsDir = await chooseOutputDir(dir, request.dir)
-      const base = exportFileName(project.title, request)
-      const stem = base.replace(/\.mp4$/, '')
+      const exportsDir = await chooseOutputDir(dir, request.dir, clip ? 'cortes' : undefined)
+      const stem = clip ? `${String(clipNumber).padStart(2, '0')} - ${sanitizeFileName(clip.title, 'Corte')}` : exportFileName(project.title, request).replace(/\.mp4$/, '')
       const unique = uniqueName(stem, (n) => existsSync(join(exportsDir, `${n}.mp4`)))
       const finalPath = join(exportsDir, `${unique}.mp4`)
       const tmpDir = join(exportsDir, `.tmp-${id.slice(0, 8)}`)
@@ -491,6 +587,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         projectId: request.projectId,
         project,
         format: format.kind,
+        ...(clip && clip.layoutV !== 'auto' ? { clipLayout: clip.layoutV } : {}),
         width: format.w,
         height: format.h,
         fps: request.fps,
@@ -509,6 +606,10 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         id,
         req: request,
         project,
+        stored,
+        clip,
+        clipNumber,
+        words,
         dir,
         startedAt: now,
         abort: new AbortController(),
@@ -526,6 +627,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         progress: {
           exportId: id,
           projectId: request.projectId,
+          ...(clip ? { clipId: clip.id } : {}),
           phase: 'preparing',
           fraction: 0,
           frame: 0,

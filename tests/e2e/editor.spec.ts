@@ -600,17 +600,17 @@ test('capturas: cada aba do painel e a linha do tempo', async () => {
   await expect(page.getByTestId('audio-status')).toHaveAttribute('data-treated', 'true', { timeout: 60_000 })
   await expect.poll(() => page.locator('[data-testid=track-video] .tl-thumbs img').count(), { timeout: 30_000 }).toBeGreaterThan(2)
   await seekTo(page, 11_000)
-  for (const tab of ['style', 'camera', 'zoom', 'layout', 'text', 'ai'] as const) {
+  for (const tab of ['style', 'camera', 'zoom', 'layout', 'text', 'captions', 'clips', 'publish', 'ai'] as const) {
     await page.getByTestId(`tab-${tab}`).click()
     await expect(page.getByTestId(`${tab}-panel`)).toBeVisible()
     await page.waitForTimeout(150)
     await shot(page, `28-editor-aba-${tab}`)
   }
-  // a aba Texto é de verdade (ver texto.spec.ts); a aba IA continua "em breve", com a marca e sem controle que finja funcionar
-  await page.getByTestId('tab-text').click()
-  await expect(page.getByTestId('text-panel')).not.toContainText(/em breve/i)
-  await page.getByTestId('tab-ai').click()
-  await expect(page.getByTestId('ai-panel')).toContainText(/em breve/i)
+  // as nove abas são de verdade (Texto: texto.spec.ts; Cortes, Publicar e IA: cortes.spec.ts): nenhuma é "em breve"
+  for (const tab of ['text', 'clips', 'publish', 'ai'] as const) {
+    await page.getByTestId(`tab-${tab}`).click()
+    await expect(page.getByTestId(`${tab}-panel`)).not.toContainText(/em breve/i)
+  }
 
   // linha do tempo, com zoom e seleção
   await page.getByTestId('tab-zoom').click()

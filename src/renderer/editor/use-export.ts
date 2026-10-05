@@ -39,7 +39,8 @@ export function useExportController(projectId: string, flush: () => Promise<void
   useEffect(() => {
     let alive = true
     const off = window.tomada.on('export:progress', (p) => {
-      if (p.projectId !== projectId || !alive) return
+      // a exportação de um corte (fila da aba Cortes) tem o andamento dela; este controle é do vídeo inteiro
+      if (p.projectId !== projectId || !alive || p.clipId !== undefined) return
       setProgress(p)
       if (FINAL.has(p.phase)) {
         setCancelling(false)
@@ -50,7 +51,7 @@ export function useExportController(projectId: string, flush: () => Promise<void
     })
     // abriu o projeto com uma exportação ainda rodando: retoma o acompanhamento
     void window.tomada.exporter.status().then((p) => {
-      if (alive && p && p.projectId === projectId && !FINAL.has(p.phase)) setProgress(p)
+      if (alive && p && p.projectId === projectId && p.clipId === undefined && !FINAL.has(p.phase)) setProgress(p)
     })
     return () => {
       alive = false

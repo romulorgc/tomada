@@ -51,6 +51,16 @@ export function listExports(session: Session, folder = EXAMPLE_FOLDER): string[]
   }
 }
 
+/** Só os vídeos de `exports/` (o 16:9 grava ao lado dele o texto de publicação `<título> - YouTube.txt`, desde a M4b). */
+export function listVideos(session: Session, folder = EXAMPLE_FOLDER): string[] {
+  return listExports(session, folder).filter((n) => n.endsWith('.mp4'))
+}
+
+/** Só os textos de publicação de `exports/`. */
+export function listTexts(session: Session, folder = EXAMPLE_FOLDER): string[] {
+  return listExports(session, folder).filter((n) => n.endsWith('.txt'))
+}
+
 const ffmpeg = (args: string[]): void => {
   execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...args], { windowsHide: true, maxBuffer: 64 * 1024 * 1024 })
 }

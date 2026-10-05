@@ -4,8 +4,14 @@
  */
 import { exportRequestSchema } from '@shared/export'
 import { createCaptionsExporter } from './captions-export'
+import { heuristicClips } from '@shared/clips'
 import type { AppInfo, BarAction, ChunkKind, IpcHandlers } from '@shared/ipc'
-import { migrate } from '@shared/project'
+import { migrate, projectDurationMs } from '@shared/project'
+import { projectForFormat } from '@shared/vertical'
+import { readActivity } from './activity'
+import { suggestClips } from './llm/clips'
+import { proposeEdit } from './llm/edit'
+import { generatePublish } from './llm/publish'
 import { recordRequestSchema } from '@shared/recording'
 import { isAbsolute, resolve } from 'node:path'
 import type { DerivedMedia } from './derived-media'
@@ -13,6 +19,7 @@ import type { ExportService } from './export-service'
 import { locateFfmpeg } from './ffmpeg'
 import { getFfmpegStatus, runFfmpegSelfTest } from './ffmpeg-status'
 import { LlmError } from '@shared/llm-json'
+import type { Word } from '@shared/types'
 import type { LlmManager } from './llm/manager'
 import { detectRetakes } from './llm/retakes'
 import type { Logger } from './logger'
@@ -50,6 +57,19 @@ export type HandlerDeps = {
   clock(): number
 }
 
+/** Como ligar a IA, para toda mensagem de "a IA não está disponível" (a interface nunca nomeia o fornecedor). */
+export const HOW_TO_ENABLE_AI = 'Para ligar a IA, instale o programa da IA neste computador ou cole uma chave em Ajustes → IA.'
+
+/** O motivo de a IA estar indisponível, mais o jeito de ligá-la (sem repetir o que o motivo já diz). */
+function unavailableText(detail: string | null): string {
+  const why = (detail ?? 'A IA não está configurada.').trim()
+  return /Ajustes/.test(why) ? why : `${why} ${HOW_TO_ENABLE_AI}`
+}
+
+function noAiNotice(detail: string | null): string {
+  return `Sem IA: usei a heurística, que escolhe pelas pausas, pelo ritmo da fala e pela atividade da tela. ${unavailableText(detail)}`
+}
+
 function finiteNumber(value: unknown, what: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`Valor inválido (${what}).`)
   return value
@@ -81,6 +101,17 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     if (!isAbsolute(value.trim()) || !pickedSettings[key].has(sameKey(value.trim()))) {
       throw new Error('Esse caminho não foi escolhido por você nesta sessão. Use o botão "Escolher" para trocar este ajuste.')
     }
+  }
+  /** As palavras da transcrição do projeto, ou o erro que diz o que fazer. */
+  const requireWords = async (projectId: string): Promise<Word[]> => {
+    const transcript = await transcription.getTranscript(projectId)
+    if (!transcript || transcript.words.length === 0) throw new Error('Este projeto ainda não tem transcrição. Transcreva primeiro (aba Texto).')
+    return transcript.words
+  }
+  const requireProvider = (): NonNullable<ReturnType<LlmManager['provider']>> => {
+    const provider = llm.provider()
+    if (!provider) throw new LlmError(unavailableText(llm.status().detail), false)
+    return provider
   }
   return {
     'app:info': async () => deps.info,
@@ -196,6 +227,42 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
       if (!provider) throw new LlmError(llm.status().detail ?? 'A IA não está configurada.', false)
       // só o TEXTO da transcrição (com o número de cada palavra) vai para a IA
       return detectRetakes({ provider, words: transcript.words })
+    },
+    'ai:clips': async (projectId, mode) => {
+      if (mode !== 'auto' && mode !== 'heuristic') throw new Error('Modo de sugestão inválido.')
+      const { project, dir } = await store.read(projectId)
+      const words = await requireWords(projectId)
+      const durationMs = projectDurationMs(project)
+      const activity = await readActivity(dir)
+      const common = { words, durationMs, cuts: project.cuts, clicks: activity.clicks, keys: activity.keys, existing: project.clips }
+      const provider = mode === 'auto' ? llm.provider() : null
+      if (provider) {
+        logger.info(`IA: sugerindo cortes de ${projectId} (${words.length} palavras).`)
+        const r = await suggestClips({ provider, ...common })
+        return { clips: r.clips, dropped: r.dropped, source: 'ai', notice: activity.warning }
+      }
+      const r = heuristicClips(common)
+      const why = mode === 'heuristic' ? null : noAiNotice(llm.status().detail)
+      return { clips: r.clips, dropped: r.dropped, source: 'heuristic', notice: [why, activity.warning].filter(Boolean).join(' ') || null }
+    },
+    'ai:edit': async (projectId, instruction, format) => {
+      const text = typeof instruction === 'string' ? instruction.replace(/\s+/g, ' ').trim() : ''
+      if (text === '') throw new Error('Escreva o que você quer mudar no vídeo.')
+      if (text.length > 2000) throw new Error('O pedido é longo demais (no máximo 2.000 caracteres).')
+      if (format !== 'horizontal' && format !== 'vertical') throw new Error('Formato inválido.')
+      const { project, dir } = await store.read(projectId)
+      const words = await requireWords(projectId)
+      const provider = requireProvider()
+      const activity = await readActivity(dir)
+      logger.info(`IA: pedido de edição em ${projectId} (${text.length} caracteres).`)
+      return proposeEdit({ provider, instruction: text, words, project: projectForFormat(project, format), format, durationMs: projectDurationMs(project), clicks: activity.clicks, keys: activity.keys })
+    },
+    'ai:publish': async (projectId) => {
+      const { project } = await store.read(projectId)
+      const words = await requireWords(projectId)
+      const provider = requireProvider()
+      logger.info(`IA: textos de publicação de ${projectId}.`)
+      return generatePublish({ provider, project, words, durationMs: projectDurationMs(project), clips: project.clips })
     },
     'exporter:job': async (exportId) => exporter.job(exportId),
     'exporter:write': (exportId, position, data) => {

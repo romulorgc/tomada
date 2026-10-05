@@ -428,3 +428,20 @@ export const GuideIcon = (p: IconProps) => (
     <rect x="8.6" y="6" width="6.8" height="10.5" rx="0.6" strokeDasharray="1.8 1.8" />
   </Svg>
 )
+
+/** Cortes verticais: um quadro em pé com o play no meio. */
+export const ClipsIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="6.5" y="3" width="11" height="18" rx="2.5" />
+    <path d="m10.6 9.4 4 2.6-4 2.6z" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+/** Publicar: o envio (seta saindo de uma bandeja). */
+export const PublishIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 15V4" />
+    <path d="m7.5 8.2 4.5-4.5 4.5 4.5" />
+    <path d="M4.5 14.5v3a2.5 2.5 0 0 0 2.5 2.5h10a2.5 2.5 0 0 0 2.5-2.5v-3" />
+  </Svg>
+)

@@ -255,6 +255,16 @@ export function ExportDialog() {
                 </p>
               </div>
             </div>
+            {progress.textPath ? (
+              <p className="export-detail" data-testid="export-text-path" title={progress.textPath}>
+                {T.textSaved(baseName(progress.textPath))}
+              </p>
+            ) : null}
+            {progress.message ? (
+              <p className="export-detail" data-tone="warn" role="alert" data-testid="export-warning">
+                {progress.message}
+              </p>
+            ) : null}
             {progress.report ? (
               <p className="export-detail tnum" data-testid="export-report">
                 {T.report(progress.report.width, progress.report.height, Math.round(progress.report.fps), (progress.report.bytes / 1e6).toFixed(1), progress.report.audioVideoDiffMs)}

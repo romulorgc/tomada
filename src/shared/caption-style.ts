@@ -150,6 +150,14 @@ const SPECS: Record<CaptionStyleId, Spec> = {
 
 export const CAPTION_STYLE_IDS: readonly CaptionStyleId[] = ['highlight', 'natural', 'clean', 'karaoke']
 
+/** O que cada estilo traz de partida quando é escolhido: palavras por linha e se tem caixa (a aba Legendas e o estilo de um corte). */
+export const CAPTION_STYLE_DEFAULTS: Record<CaptionStyleId, { wordsPerLine: number; box: boolean }> = {
+  highlight: { wordsPerLine: 3, box: false },
+  natural: { wordsPerLine: 4, box: true },
+  clean: { wordsPerLine: 4, box: true },
+  karaoke: { wordsPerLine: 4, box: true }
+}
+
 /** Centro vertical padrão do bloco (fração da altura): no vertical em y ≈ 1225 de 1920; no 16:9 embaixo. */
 export function defaultCaptionY(position: CaptionStyle['position'], kind: FormatSpec['kind']): number {
   if (kind === 'vertical') return position === 'top' ? 0.22 : position === 'center' ? 0.5 : 1225 / 1920

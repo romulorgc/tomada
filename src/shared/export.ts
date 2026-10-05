@@ -23,6 +23,11 @@ export type ExportOptions = {
   fileName?: string
   /** Pasta de destino (caminho absoluto). Ausente = `exports/` dentro da pasta do projeto. */
   dir?: string
+  /**
+   * Exporta UM corte vertical (M4b): o processo principal lê o corte do documento (nunca vem da interface), força o
+   * formato vertical e grava em `exports/cortes/<n> - <título>.mp4` com o `.txt` ao lado. `fileName` e `format` não valem.
+   */
+  clipId?: string
 }
 
 /** Validação do pedido de exportação que atravessa a IPC. */
@@ -32,7 +37,8 @@ export const exportRequestSchema = z.object({
   fps: z.union([z.literal(30), z.literal(60)]),
   format: z.enum(['horizontal', 'vertical']).optional(),
   fileName: z.string().max(200).optional(),
-  dir: z.string().min(1).max(1000).optional()
+  dir: z.string().min(1).max(1000).optional(),
+  clipId: z.string().min(1).max(100).optional()
 })
 
 export const EXPORT_SIZES: Record<ExportResolution, { w: number; h: number }> = {
