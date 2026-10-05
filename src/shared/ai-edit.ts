@@ -52,7 +52,8 @@ export const aiOpSchema = z.discriminatedUnion('op', [
     style: z.string().optional(),
     wordsPerLine: z.number().int().optional()
   }),
-  z.object({ op: z.literal('title'), text: z.string() })
+  z.object({ op: z.literal('title'), text: z.string() }),
+  z.object({ op: z.literal('hook'), text: z.string() })
 ])
 export type AiOp = z.infer<typeof aiOpSchema>
 export type AiOpName = AiOp['op']
@@ -90,6 +91,7 @@ OPERAÇÕES (cada uma é um objeto em "ops")
 {"op":"clip","title":"...","hook":"...","ranges":[[N,M]]}   cria um corte vertical para TikTok, Reels e Shorts (de 30 a 60 s; começa no início e termina no fim de frases; até 3 trechos em ordem)
 {"op":"captions","enabled":true,"style":"highlight|natural|clean|karaoke","wordsPerLine":2}   liga, desliga ou muda a legenda (todos os campos são opcionais)
 {"op":"title","text":"..."}                       muda o título do projeto
+{"op":"hook","text":"..."}                        muda o gancho do vídeo vertical (até 8 palavras)
 
 COMO RESPONDER
 Responda SOMENTE com um JSON, sem texto fora dele: {"ops":[...],"reply":"..."}
@@ -251,7 +253,7 @@ export function planAiEdit(input: PlanInput): AiEditPlan {
   }
 
   let p = base
-  const counts = { cut: 0, restore: 0, zoom: 0, layout: 0, clip: 0, captions: 0, title: 0 }
+  const counts = { cut: 0, restore: 0, zoom: 0, layout: 0, clip: 0, captions: 0, title: 0, hook: 0 }
   let cutMs = 0
   let restoredMs = 0
   const layoutsAllowed = format === 'vertical' ? VERTICAL_LAYOUT_VALUES : HORIZONTAL_LAYOUT_VALUES
@@ -274,7 +276,7 @@ export function planAiEdit(input: PlanInput): AiEditPlan {
     const parsed = aiOpSchema.safeParse(raw)
     if (!parsed.success) {
       const name = typeof (raw as { op?: unknown } | null)?.op === 'string' ? String((raw as { op: string }).op) : ''
-      const known = ['cut', 'restore', 'zoom', 'layout', 'clip', 'captions', 'title'].includes(name)
+      const known = ['cut', 'restore', 'zoom', 'layout', 'clip', 'captions', 'title', 'hook'].includes(name)
       refuse(index, name, known ? `faltam dados ou há dados inválidos (${parsed.error.issues[0]?.path.join('.') || 'op'}: ${parsed.error.issues[0]?.message ?? 'inválido'})` : name ? `operação desconhecida "${name.slice(0, 40)}"` : 'não é uma operação')
       return
     }
@@ -371,6 +373,17 @@ export function planAiEdit(input: PlanInput): AiEditPlan {
         applied.push({ op: 'captions', text: 'mudei a legenda' })
         return
       }
+      case 'hook': {
+        if (format !== 'vertical') return refuse(index,'hook','o gancho aparece no formato vertical')
+        const text = limitHook(op.text)
+        if (!text) return refuse(index,'hook','o gancho veio vazio')
+        if (!p.vertical) return refuse(index,'hook','este vídeo não tem edição vertical')
+        if (text === p.vertical.hook) return refuse(index,'hook','o gancho já é esse')
+        p = {...p,vertical:{...p.vertical,hook:text}}
+        counts.hook++
+        applied.push({op:'hook',text:'troquei o gancho'})
+        return
+      }
       case 'title': {
         const text = clean(op.text).slice(0, 200)
         if (text === '') return refuse(index, 'title', 'o título veio vazio')
@@ -397,6 +410,7 @@ export function planAiEdit(input: PlanInput): AiEditPlan {
   if (counts.clip > 0) parts.push(`criei ${plural(counts.clip, 'corte vertical', 'cortes verticais')}`)
   if (counts.captions > 0) parts.push('mudei a legenda')
   if (counts.title > 0) parts.push('troquei o título')
+  if (counts.hook > 0) parts.push('troquei o gancho')
   let summary = ''
   if (parts.length > 0) {
     const joined = parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(', ')} e ${parts[parts.length - 1]!}`

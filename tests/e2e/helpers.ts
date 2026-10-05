@@ -19,6 +19,8 @@ export const EXAMPLE_FOLDER = '2026-10-04 1500 Projeto de exemplo'
 export const SCREENS_DIR = join(ROOT, 'test-results', 'screens')
 
 export type LaunchOptions = {
+  /** Testes das etapas anteriores ficam no editor; os do piloto usam o padrão do produto. */
+  autopilot?: boolean
   /** Copia o projeto de exemplo para a raiz (padrão: sim). */
   seed?: boolean
   /** Cria também pastas inválidas, para provar que a biblioteca as ignora. */
@@ -72,6 +74,8 @@ export async function launchTomada(opts: LaunchOptions = {}): Promise<Session> {
   const userData = join(base, 'userdata')
   if (!opts.base) {
     mkdirSync(projects, { recursive: true })
+    mkdirSync(userData, { recursive: true })
+    if (!opts.autopilot) writeFileSync(join(userData,'settings.json'), JSON.stringify({autopilot:{mode:'nothing'}}))
     if (opts.seed !== false) copyTree(join(FIXTURES_DIR, 'projeto-exemplo'), join(projects, EXAMPLE_FOLDER))
     if (opts.junk) {
       mkdirSync(join(projects, 'pasta-quebrada'))

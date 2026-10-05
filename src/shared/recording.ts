@@ -11,6 +11,7 @@
  * `estimateClockOffset` mede a diferença entre os dois (ida e volta pela IPC).
  */
 import { z } from 'zod'
+import { videoScriptSchema, type VideoScript } from './script'
 import { normalizePoint } from './geometry'
 import type { ClickEvent, CursorSample, KeyEvent, MouseButton, Rect, Size, WindowRectSample } from './types'
 
@@ -46,6 +47,8 @@ export type RecordPrefs = {
    * um Electron futuro honrar.
    */
   hideCursor: boolean
+  retakeShortcut: string
+  teleprompter: { mode: 'scroll' | 'topics'; speed: number }
 }
 
 export const DEFAULT_RECORD_PREFS: RecordPrefs = {
@@ -60,8 +63,12 @@ export const DEFAULT_RECORD_PREFS: RecordPrefs = {
   echoCancellation: false,
   showBubble: true,
   setupDone: false,
-  hideCursor: true
+  hideCursor: true,
+  retakeShortcut: 'Ctrl+Alt+Z',
+  teleprompter: { mode: 'scroll', speed: 35 }
 }
+
+export const retakeShortcutSchema = z.string().regex(/^(?:Ctrl\+Alt|Ctrl\+Shift|Alt\+Shift)\+[A-Z0-9]$/).refine((s) => !['Ctrl+Shift+R', 'Ctrl+Shift+P', 'Ctrl+Shift+Z'].includes(s))
 
 const recordPrefsSchema = z.looseObject({
   mode: z.enum(['screen-camera', 'screen', 'camera']).catch(DEFAULT_RECORD_PREFS.mode),
@@ -75,7 +82,9 @@ const recordPrefsSchema = z.looseObject({
   echoCancellation: z.boolean().catch(DEFAULT_RECORD_PREFS.echoCancellation),
   showBubble: z.boolean().catch(DEFAULT_RECORD_PREFS.showBubble),
   setupDone: z.boolean().catch(DEFAULT_RECORD_PREFS.setupDone),
-  hideCursor: z.boolean().catch(DEFAULT_RECORD_PREFS.hideCursor)
+  hideCursor: z.boolean().catch(DEFAULT_RECORD_PREFS.hideCursor),
+  retakeShortcut: retakeShortcutSchema.catch(DEFAULT_RECORD_PREFS.retakeShortcut),
+  teleprompter: z.object({ mode: z.enum(['scroll', 'topics']), speed: z.number().min(10).max(120) }).catch(DEFAULT_RECORD_PREFS.teleprompter)
 })
 
 /** Qualquer coisa (inclusive lixo) → preferências válidas; campo ruim volta ao padrão. */
@@ -95,7 +104,9 @@ export function normalizeRecordPrefs(raw: unknown): RecordPrefs {
     echoCancellation: parsed.echoCancellation,
     showBubble: parsed.showBubble,
     setupDone: parsed.setupDone,
-    hideCursor: parsed.hideCursor
+    hideCursor: parsed.hideCursor,
+    retakeShortcut: parsed.retakeShortcut,
+    teleprompter: parsed.teleprompter
   }
 }
 
@@ -111,6 +122,8 @@ export type RecordRequest = {
   showBubble: boolean
   /** Pede `cursor: 'never'` na captura (o Chromium pode ignorar; vale o que a trilha informar). */
   hideCursor: boolean
+  script?: VideoScript
+  retakeShortcut?: string
 }
 
 /** Validação do pedido que atravessa a IPC (a interface é nossa, mas o contrato é verificado). */
@@ -122,7 +135,9 @@ export const recordRequestSchema = z.object({
   micId: z.string().max(500).nullable(),
   systemAudio: z.boolean(),
   showBubble: z.boolean(),
-  hideCursor: z.boolean()
+  hideCursor: z.boolean(),
+  script: videoScriptSchema.optional(),
+  retakeShortcut: retakeShortcutSchema.optional()
 })
 
 /**

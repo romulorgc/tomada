@@ -8,11 +8,16 @@ import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import { writeFileAtomic } from './fs-utils'
 import type { Logger } from './logger'
+import { autopilotPrefsSchema } from '@shared/autopilot'
+import { projectSchema } from '@shared/project'
 
 // "loose": campos que este código não conhece (de uma versão futura, ou da M1b) sobrevivem.
 export const settingsSchema = z.looseObject({
   projectsDir: z.string().min(1).optional(),
   ffmpegPath: z.string().min(1).optional(),
+  autopilot: autopilotPrefsSchema.optional(),
+  ownerStyle: projectSchema.shape.style.optional(),
+  ownerStyleAsset: z.string().regex(/^estilo\/media\/fundo-[a-z0-9]+\.(png|jpg|jpeg|webp)$/).optional(),
   // Preferências da tela Gravar: validadas na leitura (`normalizeRecordPrefs`), aqui só passam.
   record: z.looseObject({}).optional(),
   dictionary: z.array(z.string().max(80)).max(200).optional(),
@@ -66,5 +71,8 @@ export function applySettingsPatch(current: Settings, patch: Partial<Settings>):
     if (value.trim() === '') delete next[key]
     else next[key] = value.trim()
   }
+  if (patch.autopilot !== undefined) next.autopilot = autopilotPrefsSchema.parse({ ...current.autopilot, ...patch.autopilot, steps: { ...current.autopilot?.steps, ...patch.autopilot.steps } })
+  if (patch.ownerStyle !== undefined) next.ownerStyle = projectSchema.shape.style.parse(patch.ownerStyle)
+  if (patch.ownerStyleAsset !== undefined) next.ownerStyleAsset = patch.ownerStyleAsset
   return next
 }

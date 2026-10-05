@@ -12,8 +12,12 @@ import { readActivity } from './activity'
 import { suggestClips } from './llm/clips'
 import { proposeEdit } from './llm/edit'
 import { generatePublish } from './llm/publish'
+import { generateScript } from './llm/script'
+import { teleprompterConfigSchema } from '@shared/script'
 import { recordRequestSchema } from '@shared/recording'
-import { isAbsolute, resolve } from 'node:path'
+import { isAbsolute, resolve, dirname, extname } from 'node:path'
+import { copyFile, mkdir } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import type { DerivedMedia } from './derived-media'
 import type { ExportService } from './export-service'
 import { locateFfmpeg } from './ffmpeg'
@@ -24,13 +28,18 @@ import type { LlmManager } from './llm/manager'
 import { detectRetakes } from './llm/retakes'
 import type { Logger } from './logger'
 import { checkOpenable, checkRevealable, type OutputDirs } from './path-guard'
-import { assertDocumentPaths } from './project-files'
+import { assertDocumentPaths, resolveProjectFile } from './project-files'
 import type { ProjectStore } from './projects'
 import type { RecordingService } from './recording-service'
 import type { TranscriptionService } from './transcription/service'
 import type { AppState } from './state'
+import type { AutopilotService } from './autopilot'
+import { PIPELINE_STEPS } from '@shared/autopilot'
+import { reviewItemSchema, reviewDocument } from '@shared/review'
+import { projectSchema } from '@shared/project'
 
 export type HandlerDeps = {
+  autopilot?: AutopilotService
   info: AppInfo
   state: AppState
   store: ProjectStore
@@ -114,16 +123,39 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     return provider
   }
   return {
+    'autopilot:start': async (id) => { store.dirOf(id); void deps.autopilot?.start(id) },
+    'autopilot:retry': async (id,step) => { store.dirOf(id); if (!PIPELINE_STEPS.includes(step)) throw new Error('Etapa inválida.'); void deps.autopilot?.retry(id,step) },
+    'review:update': async (id,itemId,patch,reexport) => {
+      if (!deps.autopilot) throw new Error('Piloto automático indisponível.')
+      const clean = reviewItemSchema.extend({ edits: projectSchema.shape.review.unwrap().shape.items.valueType.shape.edits }).partial().parse(patch)
+      // O valor padrão do documento não é uma alteração de aprovação vinda da interface.
+      if(!Object.hasOwn(patch,'decision')) delete clean.decision
+      // Caminhos e estado de exportação pertencem ao main; a interface só muda decisões de edição.
+      for (const key of ['exportPath','textPath','phase','error','origin'] as const) delete clean[key]
+      return deps.autopilot.updateItem(id,itemId,clean,Boolean(reexport))
+    },
+    'review:export': async (id,itemId) => { store.dirOf(id); void deps.autopilot?.reexport(id,itemId) },
+    'review:post': async (id) => { if (!deps.autopilot) throw new Error('Piloto automático indisponível.'); const path = await deps.autopilot.postingFolder(id); await deps.openPath(path); return path },
+    'review:ask': async (id,itemId,instruction) => {
+      if (typeof instruction !== 'string' || !instruction.trim() || instruction.length > 2000) throw new Error('Escreva um pedido de até 2.000 caracteres.')
+      const { project,dir } = await store.read(id)
+      const p = reviewDocument(project,itemId)
+      const format = itemId === 'youtube' ? 'horizontal' : 'vertical'
+      const words = await requireWords(id)
+      const activity = await readActivity(dir)
+      return proposeEdit({ provider: requireProvider(), instruction, project: projectForFormat(p,format), words, format, durationMs: projectDurationMs(p), clicks: activity.clicks, keys: activity.keys })
+    },
     'app:info': async () => deps.info,
 
     'projects:list': () => store.list(),
     'projects:get': (id) => store.detail(id),
-    'projects:rename': (id, title) => store.rename(id, title),
-    'projects:save': async (id, project) => {
+    'projects:rename': (id, title) => deps.autopilot ? deps.autopilot.renameProject(id,title) : store.rename(id, title),
+    'projects:save': async (id, project,base) => {
       // o que vai para o disco passa pelo mesmo esquema de quem lê; campos desconhecidos são preservados
       const checked = migrate(project)
       // caminhos do documento: relativos e dentro da pasta do projeto (o processo principal não confia no que a interface manda)
       await assertDocumentPaths(store.dirOf(id), checked)
+      if (deps.autopilot) return deps.autopilot.saveProject(id,checked,base ? migrate(base) : undefined)
       await store.write(id, checked)
       return checked
     },
@@ -136,7 +168,21 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     },
 
     'settings:get': async () => state.view(),
+    'settings:save-style': async (id,itemId) => {
+      const {project,dir} = await store.read(id)
+      const style = (itemId ? projectForFormat(reviewDocument(project,itemId),itemId === 'youtube' ? 'horizontal' : 'vertical') : project).style
+      let asset: string | undefined
+      if (style.background.type === 'image') {
+        const source = await resolveProjectFile(dir,style.background.path)
+        asset = `estilo/media/fundo-${randomUUID().replaceAll('-','')}${extname(source).toLowerCase()}`
+        const target = await resolveProjectFile(deps.info.userDataDir,asset)
+        await mkdir(dirname(target),{recursive:true})
+        await copyFile(source,target)
+      }
+      return state.update({ownerStyle:style,...(asset ? {ownerStyleAsset:asset} : {})})
+    },
     'settings:update': async (patch) => {
+      if (patch?.ownerStyleAsset !== undefined) throw new Error('Salve o estilo a partir de um vídeo na Revisão.')
       assertPicked('projectsDir', patch?.projectsDir)
       assertPicked('ffmpegPath', patch?.ffmpegPath)
       return state.update(patch)
@@ -172,6 +218,8 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'record:stop': (info) => recording.stop(info),
     'record:abort': (reason) => recording.abort(reason),
     'record:status': async () => recording.status(),
+    'record:mark-retake': () => recording.markRetake(),
+    'record:preflight': () => recording.preflight(),
     'process:retry': (sessionId) => recording.retry(sessionId),
 
     'export:start': (request) => exporter.start(exportRequestSchema.parse(request)),
@@ -264,6 +312,7 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
       logger.info(`IA: textos de publicação de ${projectId}.`)
       return generatePublish({ provider, project, words, durationMs: projectDurationMs(project), clips: project.clips })
     },
+    'ai:script': (topic) => generateScript(requireProvider(), topic),
     'exporter:job': async (exportId) => exporter.job(exportId),
     'exporter:write': (exportId, position, data) => {
       if (!Number.isSafeInteger(position) || position < 0 || position > MAX_WRITE_POSITION) throw new Error('Posição de escrita inválida.')
@@ -282,6 +331,13 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'countdown:finish': async (completed) => {
       deps.finishCountdown(Boolean(completed))
     },
-    'bubble:config': async () => recording.bubbleConfig()
+    'bubble:config': async () => recording.bubbleConfig(),
+    'teleprompter:show': async (config) => recording.showTeleprompter(teleprompterConfigSchema.parse(config)),
+    'teleprompter:hide': async () => recording.hideTeleprompter(),
+    'teleprompter:state': async () => recording.teleprompterState(),
+    'teleprompter:action': async (action) => {
+      if (!['pause', 'next', 'previous', 'faster', 'slower'].includes(action)) throw new Error('Ação do teleprompter inválida.')
+      recording.teleprompterAction(action)
+    }
   }
 }

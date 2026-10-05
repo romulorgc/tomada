@@ -171,6 +171,7 @@ export function projectForFormat(doc: Project, kind: FormatSpec['kind']): Projec
   }
   const view: Project = {
     ...doc,
+    autoExclusions:v?.autoExclusions,
     zooms: v?.zooms ?? [],
     layouts: v?.layouts ?? [],
     style: {
@@ -190,11 +191,12 @@ export function projectForFormat(doc: Project, kind: FormatSpec['kind']): Projec
 /** Devolve ao documento o que a visão de um formato mudou (o inverso de `projectForFormat`). */
 export function mergeFormatView(doc: Project, view: Project, kind: FormatSpec['kind']): Project {
   if (kind === 'horizontal') return view
-  const { zooms, layouts, zoomPreset, vertical: viewVertical, captions, style: viewStyle, ...rest } = view
+  const { zooms, layouts, zoomPreset, autoExclusions, vertical: viewVertical, captions, style: viewStyle, ...rest } = view
   const { stackCameraTop, ...style } = viewStyle
   const base = doc.vertical ?? defaultVerticalEdit()
   const vertical: VerticalEdit = {
     ...base,
+    autoExclusions,
     layout: style.defaultLayout,
     layouts,
     zooms,
@@ -215,6 +217,7 @@ export function mergeFormatView(doc: Project, view: Project, kind: FormatSpec['k
 
   const next: Project = {
     ...rest,
+    autoExclusions:doc.autoExclusions,
     zooms: doc.zooms,
     layouts: doc.layouts,
     style: { ...style, defaultLayout: doc.style.defaultLayout, camera: { ...style.camera, corner: doc.style.camera.corner, size: doc.style.camera.size } },

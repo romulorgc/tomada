@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SourceInfo } from '@shared/ipc'
+import { videoScriptSchema, type VideoScript } from '@shared/script'
 import {
   DEFAULT_RECORD_PREFS,
   effectiveMode,
@@ -14,6 +15,8 @@ import { t } from '../i18n/pt-BR'
 import { useDeviceLists, useDevicePreview, useMicLevel } from '../recording/devices'
 import { useRecorder } from '../recording/controller'
 import { useApp } from '../store'
+import { PreflightBanner } from '../recording/PreflightBanner'
+import { ScriptPanel } from '../recording/ScriptPanel'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -142,6 +145,7 @@ export function Record() {
   const [sources, setSources] = useState<SourceInfo[] | null>(null)
   const [sourcesError, setSourcesError] = useState<string | null>(null)
   const [tab, setTab] = useState<'screens' | 'windows'>('screens')
+  const [script, setScript] = useState<VideoScript | null>(null)
   const { lists, error: devicesError } = useDeviceLists()
 
   const idle = phase === 'idle'
@@ -241,17 +245,19 @@ export function Record() {
       micId: prefs.micId,
       systemAudio: mode === 'camera' ? false : prefs.systemAudio,
       showBubble: prefs.showBubble,
-      hideCursor: prefs.hideCursor
+      hideCursor: prefs.hideCursor,
+      retakeShortcut: prefs.retakeShortcut,
+      ...(script ? { script } : {})
     }
-  }, [prefs, mode])
+  }, [prefs, mode, script])
 
   const problem = prefs ? (request ? validateRecordRequest(request) : 'no-camera') : 'no-source'
 
   const begin = useCallback(() => {
-    if (!prefs || !request || problem || !idle) return
+    if (!prefs || !request || problem || !idle || (script && !videoScriptSchema.safeParse(script).success)) return
     clearError()
     void startRecording(request, { noiseSuppression: prefs.noiseSuppression, echoCancellation: prefs.echoCancellation })
-  }, [prefs, request, problem, idle, clearError, startRecording])
+  }, [prefs, request, problem, idle, script, clearError, startRecording])
 
   // Ctrl+Shift+R também começa (dentro do app; o atalho global só existe durante a gravação).
   useEffect(() => {
@@ -301,7 +307,7 @@ export function Record() {
         <h1 className="text-[1.75rem] font-[650] leading-none tracking-[-0.02em]">{t.record.title}</h1>
         <div className="flex flex-wrap items-center gap-3">
           <Segmented label={t.record.modes.label} value={prefs.mode} options={modeOptions} onChange={(mode) => setPrefs({ mode })} testPrefix="mode" disabled={!idle} />
-          <button type="button" className="btn btn-rec btn-big" onClick={begin} disabled={!idle || problem !== null} data-testid="record-start">
+          <button type="button" className="btn btn-rec btn-big" onClick={begin} disabled={!idle || problem !== null || Boolean(script && !videoScriptSchema.safeParse(script).success)} data-testid="record-start">
             {phase === 'preparing' ? <span className="spinner" aria-hidden="true" /> : <RecordIcon size={20} />}
             {phase === 'preparing' ? t.record.starting : t.record.start}
             {idle ? <kbd className="ml-1 text-[0.75rem] font-medium opacity-70">{t.record.startShortcut}</kbd> : null}
@@ -326,6 +332,7 @@ export function Record() {
         ) : null}
       </div>
 
+      <PreflightBanner stream={preview.stream} hasMic={Boolean(prefs.micId)} hasCamera={showCamera && Boolean(prefs.cameraId)} idle={idle} onRecord={begin} />
       <div className="grid items-start gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,24rem)]">
         <div className="min-w-0">
           {showSource ? (
@@ -368,6 +375,7 @@ export function Record() {
               <CameraPreview stream={preview.stream} loading={preview.loading} />
             </section>
           )}
+          <ScriptPanel script={script} onChange={setScript} prefs={prefs} setPrefs={setPrefs} disabled={!idle} />
         </div>
 
         <aside className="grid min-w-0 gap-6 lg:sticky lg:top-6" aria-label={t.record.title}>
@@ -446,6 +454,7 @@ export function Record() {
               <Switch checked={prefs.noiseSuppression} onChange={(v) => setPrefs({ noiseSuppression: v })} label={t.record.advanced.noiseSuppression} testId="noise-toggle" disabled={!idle} />
               <Switch checked={prefs.echoCancellation} onChange={(v) => setPrefs({ echoCancellation: v })} label={t.record.advanced.echoCancellation} testId="echo-toggle" disabled={!idle} />
               {prefs.mode === 'screen-camera' ? <Switch checked={prefs.showBubble} onChange={(v) => setPrefs({ showBubble: v })} label={t.record.advanced.bubble} testId="bubble-toggle" disabled={!idle} /> : null}
+              <label className="grid gap-1 text-[0.8125rem] text-muted">{t.preparation.retakeShortcut}<select className="field" value={prefs.retakeShortcut} disabled={!idle} onChange={(e) => setPrefs({ retakeShortcut: e.target.value })} data-testid="retake-shortcut">{['Ctrl+Alt+Z', 'Ctrl+Alt+X', 'Ctrl+Alt+E', 'Ctrl+Shift+E', 'Alt+Shift+E'].map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
             </div>
           </details>
 

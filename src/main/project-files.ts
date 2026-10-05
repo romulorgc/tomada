@@ -66,6 +66,6 @@ export async function resolveProjectFile(dir: string, rel: string, field?: strin
 }
 
 /** Confere TODOS os caminhos do documento (mídias e imagem de fundo); lança no primeiro que escapa da pasta. */
-export async function assertDocumentPaths(dir: string, project: Pick<Project, 'sources' | 'style'>): Promise<void> {
+export async function assertDocumentPaths(dir: string, project: Pick<Project, 'sources' | 'style' | 'review'>): Promise<void> {
   for (const { field, path } of documentFilePaths(project)) await resolveProjectFile(dir, path, field)
 }

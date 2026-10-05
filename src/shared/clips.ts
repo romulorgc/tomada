@@ -572,7 +572,7 @@ export function complementRanges(ranges: readonly Range[], durationMs: number): 
  * silêncio e de muleta, voz silenciada, texto corrigido, zooms e layouts do vertical) é o do projeto. A prévia e a
  * exportação do corte desenham ESTE documento pelo mesmo caminho do vídeo inteiro.
  */
-export function clipDocument(doc: Project, clip: Pick<Clip, 'ranges' | 'hook' | 'captionStyle'>): Project {
+export function clipDocument(doc: Project, clip: Pick<Clip, 'ranges' | 'hook' | 'captionStyle' | 'captionsEnabled'>): Project {
   const durationMs = Math.max(doc.sources.screen?.durationMs ?? 0, doc.sources.camera?.durationMs ?? 0, doc.sources.voice?.durationMs ?? 0, doc.sources.system?.durationMs ?? 0)
   const outside = complementRanges(clip.ranges, durationMs)
   const cuts: Cut[] = [...doc.cuts]
@@ -583,8 +583,9 @@ export function clipDocument(doc: Project, clip: Pick<Clip, 'ranges' | 'hook' | 
   if (hook !== '') vertical.hook = hook
   else delete vertical.hook
   if (clip.captionStyle) {
-    vertical.captions = { ...base.captions, enabled: true, style: clip.captionStyle, ...captionStyleDefaults(clip.captionStyle, 'vertical') }
+    vertical.captions = { ...base.captions, style: clip.captionStyle, ...captionStyleDefaults(clip.captionStyle, 'vertical') }
   }
+  if (clip.captionsEnabled !== undefined) vertical.captions = { ...vertical.captions, enabled: clip.captionsEnabled }
   return { ...doc, cuts, vertical }
 }
 

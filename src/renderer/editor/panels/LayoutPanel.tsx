@@ -107,7 +107,10 @@ export function LayoutPanel() {
       speech: speechRanges(transcript.data?.words),
       kept: keptRanges(durationMs, cuts)
     })
-    store.getState().change((p) => ({ ...p, layouts: next }))
+    store.getState().change((p) => {
+      const manual = p.layouts.filter((s) => s.origin === 'manual')
+      return {...p,layouts:[...manual,...next.filter((a) => !p.autoExclusions?.layouts?.includes(a.id) && !manual.some((m) => m.start < a.end && m.end > a.start)).map((s) => ({...s,origin:'auto' as const}))].sort((a,b) => a.start-b.start)}
+    })
     store.getState().setSelection(null)
     setConfirming(false)
     notify({ kind: 'info', text: V.autoDone(next.length) })

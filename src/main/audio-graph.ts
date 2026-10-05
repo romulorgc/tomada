@@ -265,7 +265,7 @@ export function buildMeasureArgs(opts: { inputs: string[]; graphFile: string }):
 }
 
 /** Argumentos do ffmpeg para o passe final: AAC 48 kHz, 384 kbps (YouTube) ou o `bitrate` pedido (vertical: 192k). */
-export function buildAudioArgs(opts: { inputs: string[]; graphFile: string; output: string; bitrate?: string }): string[] {
+export function buildAudioArgs(opts: { inputs: string[]; graphFile: string; output: string; bitrate?: string; durationMs?: number }): string[] {
   const inputs = opts.inputs.map((f) => assertFfmpegPath(f, 'entrada de áudio'))
   const graphFile = assertFfmpegPath(opts.graphFile, 'grafo de filtros')
   const output = assertFfmpegPath(opts.output, 'saída de áudio')
@@ -275,6 +275,7 @@ export function buildAudioArgs(opts: { inputs: string[]; graphFile: string; outp
     graphFile,
     '-map',
     '[aout]',
+    ...(opts.durationMs === undefined ? [] : ['-t', sec(opts.durationMs)]),
     '-c:a',
     'aac',
     '-b:a',

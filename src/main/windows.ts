@@ -9,6 +9,7 @@ import type { BarState, BubbleConfig, CountdownConfig } from '@shared/ipc'
 import type { Rect } from '@shared/types'
 import type { Logger } from './logger'
 import type { RecordingWindows } from './recording-service'
+import type { TeleprompterAction, TeleprompterState } from '@shared/script'
 
 export type AuxWindowsDeps = {
   /** Caminho do preload compilado. */
@@ -31,7 +32,7 @@ export type AuxWindows = RecordingWindows & {
   closeAll(): void
 }
 
-const BAR_SIZE = { w: 500, h: 64 }
+const BAR_SIZE = { w: 600, h: 64 }
 const BUBBLE_SIZE = { w: 248, h: 248 }
 const MARGIN = 28
 
@@ -46,6 +47,9 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
   let bubble: BrowserWindow | null = null
   let countdownWin: BrowserWindow | null = null
   let countdownDone: ((completed: boolean) => void) | null = null
+  let prompter: BrowserWindow | null = null
+  let retakeKey: string | null = null
+  const prompterKeys = ['Control+Alt+Space', 'Control+Alt+Right', 'Control+Alt+Left']
 
   const webPreferences = {
     preload: deps.preload,
@@ -203,6 +207,38 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
       bubble = null
     },
 
+    showTeleprompter(state: TeleprompterState, display: Rect | null) {
+      api.hideTeleprompter?.()
+      const d = display ?? (() => { const b = screen.getPrimaryDisplay().workArea; return { x: b.x, y: b.y, w: b.width, h: b.height } })()
+      const width = Math.min(760, d.w - 32)
+      const win = new BrowserWindow({ ...overlayDefaults, width, height: 300 })
+      prompter = win
+      hardenOverlay(win)
+      win.setPosition(Math.round(d.x + (d.w - width) / 2), Math.round(d.y + 16))
+      win.webContents.once('did-finish-load', () => { win.webContents.send('teleprompter:state', state); win.showInactive() })
+      win.on('closed', () => {
+        if (prompter === win) {
+          prompter = null
+          for (const key of prompterKeys) globalShortcut.unregister(key)
+        }
+      })
+      const actions: TeleprompterAction[] = ['pause', 'next', 'previous']
+      prompterKeys.forEach((key, i) => {
+        if (!globalShortcut.register(key, () => { if (!win.isDestroyed()) win.webContents.send('teleprompter:command', actions[i]) })) logger.warn(`Atalho do teleprompter não disponível: ${key}. Use os botões na janela.`)
+      })
+      load(win, 'teleprompter')
+    },
+
+    updateTeleprompter(state: TeleprompterState) {
+      if (prompter && !prompter.isDestroyed()) prompter.webContents.send('teleprompter:state', state)
+    },
+
+    hideTeleprompter() {
+      destroy(prompter)
+      prompter = null
+      for (const key of prompterKeys) globalShortcut.unregister(key)
+    },
+
     registerHotkeys(handlers) {
       const stop = 'CommandOrControl+Shift+R'
       const pause = 'CommandOrControl+Shift+P'
@@ -210,6 +246,10 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
       try {
         ok = globalShortcut.register(stop, handlers.stop) && ok
         ok = globalShortcut.register(pause, handlers.pause) && ok
+        if (handlers.retake) {
+          retakeKey = (handlers.retakeShortcut ?? 'Ctrl+Alt+Z').replace('Ctrl+', 'Control+')
+          ok = globalShortcut.register(retakeKey, handlers.retake) && ok
+        }
       } catch (err) {
         logger.error('Falha ao registrar os atalhos globais.', err)
         ok = false
@@ -219,13 +259,14 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
     },
 
     unregisterHotkeys() {
-      for (const key of ['CommandOrControl+Shift+R', 'CommandOrControl+Shift+P']) {
+      for (const key of ['CommandOrControl+Shift+R', 'CommandOrControl+Shift+P', ...(retakeKey ? [retakeKey] : [])]) {
         try {
           globalShortcut.unregister(key)
         } catch {
           // já estava solto
         }
       }
+      retakeKey = null
     },
 
     finishCountdown(completed) {
@@ -244,6 +285,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
       destroy(bar)
       destroy(bubble)
       destroy(countdownWin)
+      api.hideTeleprompter?.()
       bar = bubble = countdownWin = null
       api.unregisterHotkeys()
     }

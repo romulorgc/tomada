@@ -1,0 +1,227 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
+import { createAutopilot } from '../../src/main/autopilot'
+import { createHandlers, type HandlerDeps } from '../../src/main/handlers'
+import { ProjectNotFoundError, type ProjectStore } from '../../src/main/projects'
+import type { ExportService } from '../../src/main/export-service'
+import type { TranscriptionService } from '../../src/main/transcription/service'
+import type { LlmManager } from '../../src/main/llm/manager'
+import { createMemoryLogger } from '../../src/main/logger'
+import { DEFAULT_AUTOPILOT, newPipeline } from '../../src/shared/autopilot'
+import { createProject } from '../../src/shared/project'
+import { itemOf, reviewDocument, type ReviewItem } from '../../src/shared/review'
+import { defaultVerticalEdit, projectForFormat } from '../../src/shared/vertical'
+import type { ExportProgress, ExportRequest } from '../../src/shared/ipc'
+import type { Project, Transcript } from '../../src/shared/types'
+import { useTmpDir } from '../helpers/env'
+
+const tmp = useTmpDir()
+const id = 'piloto-regressao'
+const transcript: Transcript = {
+  engine: 'teste', model: 'simulado', language: 'pt', durationMs: 20_000,
+  words: [{ i: 0, text: 'Veja', start: 500, end: 1000, prob: 1, kind: 'word' }, { i: 1, text: 'a agenda.', start: 1100, end: 2000, prob: 1, kind: 'word' }],
+  segments: [], vad: [{ start: 500, end: 2000 }], createdAt: '2026-10-05T12:00:00Z'
+}
+
+function baseProject(): Project {
+  return createProject({ id, title: 'Agenda de teste', sources: { screen: { path: 'media/screen.mp4', w: 1920, h: 1080, fps: 30, durationMs: 20_000 } } })
+}
+function finishedPipeline(doc: Project, interrupted = false): void {
+  doc.autopilot = newPipeline(id)
+  doc.autopilot.status = interrupted ? 'running' : 'done'
+  for (const step of doc.autopilot.steps) step.status = 'done'
+}
+function addClip(doc: Project): void {
+  doc.clips = [{ id: 'clip-1', title: 'Agenda', hook: 'Organize agora', ranges: [{ start: 0, end: 20_000 }], score: 80, reason: 'Demonstração sintética', format: 'vertical', layoutV: 'auto', source: 'manual' }]
+}
+
+async function world(initial: Project) {
+  const dir = tmp()
+  await Promise.all(['media', 'events', 'exports'].map((folder) => mkdir(join(dir, folder), { recursive: true })))
+  let stored = structuredClone(initial)
+  const read = vi.fn(async () => ({ project: structuredClone(stored), dir }))
+  const write = vi.fn(async (_id: string, project: Project) => {
+    // Simula uma escrita assíncrona: duas alterações simultâneas não podem usar a mesma fotografia antiga.
+    await Promise.resolve()
+    stored = structuredClone(project)
+  })
+  const store = { read, write, dirOf: () => dir, list: async () => [{ id, title: stored.title, createdAt: stored.createdAt, durationMs: 20_000, thumbPath: null, thumbVersion: 0, hasScreen: true, hasCamera: false }],rename:async (_id:string,title:string) => {
+    const {project} = await read()
+    await write(id,{...project,title,review:{...project.review,items:project.review?.items ?? {},titleOrigin:'manual'}})
+    return {id,title:stored.title,createdAt:stored.createdAt,durationMs:20_000,thumbPath:null,thumbVersion:0,hasScreen:true,hasCamera:false}
+  } } satisfies Pick<ProjectStore, 'read' | 'write' | 'dirOf' | 'list' | 'rename'>
+  let exportState: ExportProgress | null = null
+  let exportCount = 0
+  const rendered: Project[] = []
+  const start = vi.fn(async (request: ExportRequest) => {
+    const exportId = `export-${++exportCount}`
+    rendered.push(projectForFormat(reviewDocument(stored, request.clipId ?? 'youtube'), request.format ?? 'horizontal'))
+    exportState = { exportId, projectId: id, phase: 'done', fraction: 1, frame: 600, totalFrames: 600, renderFps: null, etaMs: 0, audioReady: true, outputPath: join(dir, 'exports', `${exportId}.mp4`) }
+    return { exportId }
+  })
+  const exporter = { start, idle: vi.fn(async () => undefined), status: () => exportState } satisfies Pick<ExportService, 'start' | 'idle' | 'status'>
+  const transcription = { getTranscript: vi.fn(async () => structuredClone(transcript)), idle: vi.fn(async () => undefined), start: vi.fn(async () => undefined) } satisfies Pick<TranscriptionService, 'getTranscript' | 'idle' | 'start'>
+  const prefs = structuredClone(DEFAULT_AUTOPILOT)
+  const ready = vi.fn()
+  const service = createAutopilot({
+    store: store as unknown as ProjectStore,
+    exporter: exporter as unknown as ExportService,
+    transcription: transcription as unknown as TranscriptionService,
+    derived: { levels: async () => null, peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, idle: async () => undefined, shutdown: () => undefined },
+    llm: { provider: () => null } as unknown as LlmManager,
+    logger: createMemoryLogger(), prefs: () => prefs, emit: vi.fn(), ready
+  })
+  return { service, dir, start, rendered, ready, prefs, read, write, project: () => structuredClone(stored) }
+}
+
+describe('integração dos ajustes e da retomada do piloto automático', () => {
+  it('tentar salvar de novo recupera o documento aberto se só o project.json sumiu',async () => {
+    const base = baseProject()
+    const w = await world(base)
+    w.read.mockRejectedValueOnce(new ProjectNotFoundError('O projeto não tem project.json.'))
+    const edited = {...base,style:{...base.style,radius:31}}
+    await w.service.saveProject(id,edited,base)
+    expect(w.project().style.radius).toBe(31)
+    await mkdir(join(w.dir,'project.json'))
+    w.read.mockRejectedValueOnce(new ProjectNotFoundError('O projeto não tem project.json.'))
+    await expect(w.service.saveProject(id,edited,base)).rejects.toThrow(ProjectNotFoundError)
+  })
+  it('renomear na Biblioteca e ajustar a Revisão ao mesmo tempo conserva ambas as alterações',async () => {
+    const w = await world(baseProject())
+    await Promise.all([w.service.renameProject(id,'Título do usuário'),w.service.updateItem(id,'youtube',{decision:'approved'},false)])
+    expect(w.project().title).toBe('Título do usuário')
+    expect(w.project().review?.titleOrigin).toBe('manual')
+    expect(itemOf(w.project(),'youtube').decision).toBe('approved')
+  })
+  it('ajuste pelo IPC conserva aprovação e descarte se a decisão não veio na alteração',async () => {
+    const doc = baseProject()
+    doc.review = {items:{youtube:{decision:'approved',origin:'manual'}}}
+    const w = await world(doc)
+    const handlers = createHandlers({autopilot:w.service} as HandlerDeps)
+    await handlers['review:update'](id,'youtube',{title:'Título ajustado'},false)
+    expect(itemOf(w.project(),'youtube').decision).toBe('approved')
+    await handlers['review:update'](id,'youtube',{decision:'discarded'},false)
+    await handlers['review:update'](id,'youtube',{captionsEnabled:false},false)
+    expect(itemOf(w.project(),'youtube').decision).toBe('discarded')
+  })
+  it('salvar fotografia antiga do editor preserva corte automático que chegou depois e a alteração de raio', async () => {
+    const base = baseProject()
+    const edited = structuredClone(base)
+    edited.style.radius = 42
+    const current = structuredClone(base)
+    current.cuts = [{ id: 'corte-que-chegou', start: 2000, end: 3000, reason: 'silence', enabled: true, origin: 'auto' }]
+    finishedPipeline(current)
+    const w = await world(current)
+    const result = await w.service.saveProject(id, edited, base)
+    expect(result.style.radius).toBe(42)
+    expect(result.cuts).toEqual(current.cuts)
+    expect(result.autopilot).toEqual(current.autopilot)
+    expect(w.project()).toEqual(result)
+    expect(base.cuts).toEqual([])
+    expect(base.style.radius).not.toBe(42)
+  })
+
+  it('pasta para postar e restauração do texto usam metadados e tempos da edição do item', async () => {
+    const doc = baseProject()
+    doc.sources.screen!.durationMs = 60_000
+    doc.meta = { youtube: { titles: ['Título global antigo'], description: 'Descrição global antiga', tags: ['global'] } }
+    const edits: NonNullable<ReviewItem['edits']> = {
+      cuts: [{ id: 'aparar-item', start: 0, end: 10_000, reason: 'manual', enabled: true, origin: 'manual' }],
+      zooms: [], layouts: [], captions: doc.captions, style: doc.style,
+      meta: { youtube: { titles: ['Título local do item', 'Alternativa local'], description: 'Descrição revisada deste vídeo.', tags: ['agenda-local'], chapters: [{ start: 0, title: 'Introdução local' }, { start: 30_000, title: 'Agenda local' }, { start: 45_000, title: 'Resultado local' }] } }
+    }
+    doc.review = { items: { youtube: { origin: 'manual', decision: 'approved', phase: 'ready', exportPath: 'exports/youtube.mp4', textPath: 'exports/youtube.txt', edits } } }
+    const w = await world(doc)
+    await writeFile(join(w.dir, 'exports/youtube.mp4'), 'arquivo sintético para testar cópia')
+    await writeFile(join(w.dir, 'exports/youtube.txt'), 'Texto anterior')
+    const folder = await w.service.postingFolder(id)
+    const automatic = await readFile(join(folder, 'YouTube.txt'), 'utf8')
+    expect(automatic).toContain('1. Título local do item')
+    expect(automatic).toContain('2. Alternativa local')
+    expect(automatic).toContain('Descrição revisada deste vídeo.')
+    expect(automatic).toContain('agenda-local')
+    expect(automatic).toContain('00:20 Agenda local')
+    expect(automatic).toContain('00:35 Resultado local')
+    expect(automatic).not.toContain('global antigo')
+    expect(automatic).not.toContain('00:30 Agenda local')
+    const outputs = JSON.parse(await readFile(join(folder, 'arquivos.json'), 'utf8')) as string[]
+    const mp4 = outputs.find((path) => path.endsWith('.mp4'))!
+    expect(await readFile(join(w.dir, mp4), 'utf8')).toBe('arquivo sintético para testar cópia')
+    await w.service.updateItem(id, 'youtube', { text: 'Texto manual temporário' }, false)
+    expect(await readFile(join(w.dir, 'exports/youtube.txt'), 'utf8')).toBe('Texto manual temporário')
+    await w.service.updateItem(id, 'youtube', { text: undefined }, false)
+    expect(itemOf(w.project(), 'youtube').text).toBeUndefined()
+    expect(await readFile(join(w.dir, 'exports/youtube.txt'), 'utf8')).toBe(automatic)
+    expect(w.start).not.toHaveBeenCalled()
+  })
+
+  it('alterações simultâneas de legenda e título preservam ambos os ajustes', async () => {
+    const w = await world(baseProject())
+    await Promise.all([
+      w.service.updateItem(id, 'youtube', { captionsEnabled: false }, false),
+      w.service.updateItem(id, 'youtube', { title: 'Agenda revisada' }, false)
+    ])
+    expect(itemOf(w.project(), 'youtube')).toMatchObject({ captionsEnabled: false, title: 'Agenda revisada', origin: 'manual' })
+    expect(w.write).toHaveBeenCalledTimes(2)
+    expect(w.start).not.toHaveBeenCalled()
+  })
+
+  it('retoma notificação interrompida e também exporta item que ficou na fila', async () => {
+    const doc = baseProject()
+    addClip(doc); finishedPipeline(doc, true)
+    doc.autopilot!.steps.find((step) => step.id === 'notify')!.status = 'running'
+    doc.review = { items: { 'clip-1': { origin: 'manual', decision: 'pending', phase: 'queued' } } }
+    const w = await world(doc)
+    await w.service.resume()
+    await w.service.idle()
+    expect(w.ready).toHaveBeenCalledOnce()
+    expect(w.project().autopilot).toMatchObject({ status: 'done' })
+    expect(w.project().autopilot!.steps.find((step) => step.id === 'notify')?.status).toBe('done')
+    expect(w.start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ projectId: id, clipId: 'clip-1', format: 'vertical' }))
+    expect(itemOf(w.project(), 'clip-1')).toMatchObject({ phase: 'ready', exportPath: 'exports/export-1.mp4' })
+  })
+
+  it('refazer zooms atualiza a edição e reexporta automaticamente o vídeo pronto', async () => {
+    const doc = baseProject()
+    finishedPipeline(doc)
+    doc.zooms = [{ id: 'auto-antigo', start: 500, end: 1500, scale: 1.2, focus: 'auto', origin: 'auto' }, { id: 'manual', start: 10_000, end: 11_000, scale: 1.3, focus: 'auto', origin: 'manual' }]
+    doc.review = { items: { youtube: { origin: 'auto', decision: 'pending', phase: 'ready', exportPath: 'exports/antigo.mp4' } } }
+    const w = await world(doc)
+    await writeFile(join(w.dir, 'events/clicks.jsonl'), `${JSON.stringify({ t: 3000, x: 0.5, y: 0.5, button: 'left' })}\n`)
+    await w.service.retry(id, 'zooms')
+    expect(w.start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ projectId: id, format: 'horizontal' }))
+    expect(w.rendered[0]!.zooms.some((zoom) => zoom.origin === 'auto' && zoom.id !== 'auto-antigo')).toBe(true)
+    expect(w.rendered[0]!.zooms).toContainEqual(doc.zooms[1])
+    expect(itemOf(w.project(), 'youtube')).toMatchObject({ phase: 'ready', exportPath: 'exports/export-1.mp4' })
+    expect(itemOf(w.project(), 'youtube').exportPath).not.toBe('exports/antigo.mp4')
+  })
+
+  it('fotografia editada do vertical consome o modificador de zoom e preserva estilo e correções de palavras', async () => {
+    const doc = baseProject()
+    addClip(doc)
+    doc.vertical = { ...defaultVerticalEdit(), zooms: [{ id: 'zoom-v', start: 1000, end: 4000, scale: 1.4, focus: 'auto', origin: 'auto' }] }
+    doc.review = { items: { 'clip-1': { decision: 'pending', origin: 'manual', zoom: 'stronger', captionsEnabled: false } } }
+    const effective = projectForFormat(reviewDocument(doc, 'clip-1'), 'vertical')
+    const edits: NonNullable<ReviewItem['edits']> = {
+      cuts: effective.cuts, zooms: effective.zooms, layouts: effective.layouts, captions: effective.captions,
+      style: { ...effective.style, defaultLayout: 'camera', camera: { ...effective.style.camera, size: 0.36, corner: 'bottom-left' } },
+      wordFixes: { '1': 'agenda corrigida' }, zoomPreset: 'intense'
+    }
+    const w = await world(doc)
+    await w.service.updateItem(id, 'clip-1', { edits }, false)
+    const stored = w.project(), item = itemOf(stored, 'clip-1')
+    expect(item.zoom).toBeUndefined()
+    expect(item.captionsEnabled).toBeUndefined()
+    const result = projectForFormat(reviewDocument(stored, 'clip-1'), 'vertical')
+    expect(result.zooms[0]!.scale).toBeCloseTo(1.56)
+    expect(result.zooms).toEqual(edits.zooms)
+    expect(result.style.defaultLayout).toBe('camera')
+    expect(result.style.camera).toMatchObject({ size: 0.36, corner: 'bottom-left' })
+    expect(result.wordFixes).toEqual({ '1': 'agenda corrigida' })
+    expect(result.zoomPreset).toBe('intense')
+    expect(result.captions.enabled).toBe(false)
+    expect(stored.style.camera).toEqual(doc.style.camera)
+    expect(w.start).not.toHaveBeenCalled()
+  })
+})

@@ -1,3 +1,4 @@
+import { defaultVerticalEdit,projectForFormat } from '../../src/shared/vertical'
 import { describe, expect, it } from 'vitest'
 import { EDIT_CONFIRM_FRACTION, EDIT_MAX_OPS, EDIT_SUGGESTIONS, aiOpSchema, buildEditPrompt, editSchema, editSystem, planAiEdit, type PlanInput } from '../../src/shared/ai-edit'
 import { createProject } from '../../src/shared/project'
@@ -251,4 +252,14 @@ describe('editar pedindo: aplicar as operações', () => {
     expect(everything.summary).toBe('Recusei o pedido: ele cortaria o vídeo inteiro.')
     expect(everything.refused.some((r) => r.why === 'a mudança cortaria o vídeo inteiro')).toBe(true)
   })
+})
+
+it('trocar gancho no item vertical conserva duração e não muda o título',() => {
+  const doc = {...project(),vertical:defaultVerticalEdit()}
+  const result = planAiEdit({project:projectForFormat(doc,'vertical'),words:demo.words,durationMs,format:'vertical',ops:[{op:'hook',text:'Organize sua agenda em segundos'}]})
+  expect(result.changed).toBe(true)
+  expect(result.project.vertical?.hook).toBe('Organize sua agenda em segundos')
+  expect(result.project.title).toBe(doc.title)
+  expect(result.afterMs).toBe(result.beforeMs)
+  expect(plan([{op:'hook',text:'Resultado'}]).changed).toBe(false)
 })

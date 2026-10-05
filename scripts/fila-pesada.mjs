@@ -28,7 +28,7 @@ const vivo = pid => {
 function outraBateria() {
   try {
     const out = execSync(
-      'powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match \'playwright\' -and $_.CommandLine -match \' test\' }).Count"',
+      'powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq \'node.exe\' -and $_.CommandLine -notmatch \'fila-pesada[.]mjs\' -and $_.CommandLine -match \'playwri[g]ht\' -and $_.CommandLine -match \'\\btest\\b\' }).Count"',
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000 }
     )
     return Number(out.trim()) > 0

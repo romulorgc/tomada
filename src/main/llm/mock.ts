@@ -22,6 +22,7 @@ export type RecordedResponse = {
  * mínimo; qualquer outra pergunta recebe a lista vazia de recomeços (como sempre foi).
  */
 export const DEFAULT_RECORDED: readonly RecordedResponse[] = [
+  { task: 'script', match: '', response: { title: 'Demonstração do sistema', hook: 'Veja como simplificar seu trabalho.', topics: ['Apresentar o problema', 'Demonstrar a solução', 'Mostrar o resultado'], closing: 'Experimente e conte o que achou.' } },
   { task: 'clips', match: '', response: { clips: [] } },
   { task: 'edit', match: '', response: { ops: [], reply: 'A IA de teste não propõe mudanças.' } },
   { task: 'publish', match: '', response: { titles: ['Título de teste'], description: 'Descrição de teste.', tags: ['teste'], chapters: [], clips: [] } },

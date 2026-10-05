@@ -343,9 +343,11 @@ describe('cortes: o corte como documento (o que a prévia e a exportação desen
     expect(out.vertical!.layout).toBe('screen-focus')
   })
 
-  it('o estilo de legenda do corte liga a legenda com o estilo escolhido e as medidas dele', () => {
+  it('o estilo de legenda do corte escolhe as medidas sem obrigar a ligar a legenda', () => {
     const out = clipDocument(doc(), { ...clip, captionStyle: 'clean' })
-    expect(out.vertical!.captions).toMatchObject({ enabled: true, style: 'clean', wordsPerLine: 2, box: false }) // as medidas do vertical (a Limpa sempre tem a caixa dela)
+    expect(out.vertical!.captions).toMatchObject({ style: 'clean', wordsPerLine: 2, box: false })
+    expect(out.vertical!.captions?.enabled).toBeUndefined()
+    expect(clipDocument(doc(), { ...clip, captionStyle: 'clean', captionsEnabled: false }).vertical!.captions?.enabled).toBe(false)
     // sem estilo no corte, a legenda do vertical fica como está
     expect(clipDocument(doc(), clip).vertical!.captions).toBeUndefined()
   })

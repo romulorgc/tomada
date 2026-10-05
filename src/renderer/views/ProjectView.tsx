@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { reviewDocument } from '@shared/review'
 import type { ProjectDetail } from '@shared/ipc'
 import { ErrorPanel } from '../components/Feedback'
 import { BackIcon, FolderIcon } from '../components/Icons'
@@ -7,7 +8,7 @@ import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
 
 /** Abrir um projeto: o editor ocupa a janela inteira (a barra de navegação do app sai da frente). */
-export function ProjectView({ id }: { id: string }) {
+export function ProjectView({ id,itemId }: { id: string; itemId?: string }) {
   const go = useApp((s) => s.go)
   const revealProject = useApp((s) => s.revealProject)
   const [detail, setDetail] = useState<ProjectDetail | null>(null)
@@ -16,13 +17,14 @@ export function ProjectView({ id }: { id: string }) {
   const load = useCallback(async () => {
     setError(null)
     try {
-      setDetail(await window.tomada.projects.get(id))
+      const detail = await window.tomada.projects.get(id)
+      setDetail(itemId ? {...detail,project:reviewDocument(detail.project,itemId)} : detail)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       window.tomada.log({ level: 'error', message: `Falha ao abrir o projeto ${id}`, detail: message })
       setError(message)
     }
-  }, [id])
+  }, [id,itemId])
 
   useEffect(() => {
     setDetail(null)
@@ -78,7 +80,7 @@ export function ProjectView({ id }: { id: string }) {
 
   return (
     <div className="h-full" data-testid="project-view">
-      <Editor key={detail.id} detail={detail} />
+      <Editor key={detail.id} detail={detail} itemId={itemId} />
     </div>
   )
 }

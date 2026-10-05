@@ -5,6 +5,8 @@
 import { mkdir } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { z } from 'zod'
+import { autopilotPrefsSchema } from '@shared/autopilot'
+import { projectSchema } from '@shared/project'
 import { normalizeDictionary } from '@shared/dictionary'
 import type { LlmStoredPrefs, Settings, SettingsView } from '@shared/ipc'
 import { normalizeRecordPrefs, type RecordPrefs } from '@shared/recording'
@@ -12,7 +14,7 @@ import { DEFAULT_TRANSCRIPTION_PREFS, type TranscriptionPrefs } from '@shared/tr
 import { locateFfmpeg, type LocateOptions } from './ffmpeg'
 import type { Logger } from './logger'
 import { resolveProjectsDir } from './paths'
-import { applySettingsPatch, loadSettings, saveSettings } from './settings'
+import { applySettingsPatch, loadSettings, saveSettings, settingsSchema } from './settings'
 
 export interface AppState {
   settings(): Settings
@@ -37,7 +39,10 @@ export interface AppState {
 
 const patchSchema = z.object({
   projectsDir: z.string().max(1000).optional(),
-  ffmpegPath: z.string().max(1000).optional()
+  ffmpegPath: z.string().max(1000).optional(),
+  autopilot: autopilotPrefsSchema.optional(),
+  ownerStyle: projectSchema.shape.style.optional(),
+  ownerStyleAsset: settingsSchema.shape.ownerStyleAsset
 })
 
 export async function createAppState(args: {
@@ -124,14 +129,14 @@ export async function createAppState(args: {
         return dictionary
       }),
 
-    transcriptionPrefs: () => ({ ...DEFAULT_TRANSCRIPTION_PREFS, ...(current.transcription?.auto !== undefined ? { auto: current.transcription.auto } : {}), ...(current.transcription?.autoClean !== undefined ? { autoClean: current.transcription.autoClean } : {}) }),
+    transcriptionPrefs: () => ({ ...DEFAULT_TRANSCRIPTION_PREFS, ...(current.transcription?.auto !== undefined ? { auto: current.transcription.auto } : {}), ...(current.transcription?.autoClean !== undefined ? { autoClean: current.transcription.autoClean } : {}), ...(current.autopilot?.steps.transcribe !== undefined ? {auto:current.autopilot.steps.transcribe} : {}), ...(current.autopilot?.steps.clean !== undefined ? {autoClean:current.autopilot.steps.clean} : {}) }),
 
     updateTranscriptionPrefs: (patch) =>
       serialized(async () => {
         const clean: Partial<TranscriptionPrefs> = {}
         if (typeof patch.auto === 'boolean') clean.auto = patch.auto
         if (typeof patch.autoClean === 'boolean') clean.autoClean = patch.autoClean
-        const next: Settings = { ...current, transcription: { ...current.transcription, ...clean } }
+        const next: Settings = { ...current, transcription: { ...current.transcription, ...clean }, ...(current.autopilot ? {autopilot:{...current.autopilot,steps:{...current.autopilot.steps,...(clean.auto === undefined ? {} : {transcribe:clean.auto}),...(clean.autoClean === undefined ? {} : {clean:clean.autoClean})}}} : {}) }
         await saveSettings(args.file, next)
         current = next
         return { ...DEFAULT_TRANSCRIPTION_PREFS, ...(next.transcription?.auto !== undefined ? { auto: next.transcription.auto } : {}), ...(next.transcription?.autoClean !== undefined ? { autoClean: next.transcription.autoClean } : {}) }

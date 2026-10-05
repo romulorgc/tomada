@@ -24,7 +24,7 @@ test.afterEach(async () => {
 const AUTO = { TOMADA_TEST_AUTOSOURCE: 'screen' }
 
 /** Grava ~3 s com os dispositivos falsos, para pela barra e espera o projeto abrir. */
-async function recordShort(session: Session): Promise<void> {
+async function recordShort(session: Session, automatic = false): Promise<void> {
   const { page, app } = session
   await page.getByTestId('nav-record').click()
   await expect(page.getByTestId('camera-preview')).toHaveAttribute('data-live', 'true', { timeout: 20_000 })
@@ -34,6 +34,7 @@ async function recordShort(session: Session): Promise<void> {
   await expect(bar.getByTestId('bar')).toHaveAttribute('data-status', 'recording', { timeout: 30_000 })
   await page.waitForTimeout(2500)
   await bar.getByTestId('bar-stop').click()
+  if (automatic) { await expect(page.getByTestId('review-view')).toBeVisible({timeout:90_000}); return }
   await expect(page.getByTestId('project-view')).toBeVisible({ timeout: 90_000 })
   await expect(page.getByTestId('editor')).toBeVisible({ timeout: 30_000 })
 }
@@ -42,15 +43,15 @@ const projectDir = (session: Session): string => join(session.projects, readdirS
 
 test('depois de gravar a transcrição começa sozinha: chip na biblioteca, transcript.json no projeto e texto na aba', async () => {
   test.setTimeout(180_000)
-  s = await launchTomada({ seed: false, env: { ...AUTO, TOMADA_TEST_TRANSCRIBE_DELAY_MS: '7000' } })
+  s = await launchTomada({ seed: false, autopilot:true, env: { ...AUTO, TOMADA_TEST_TRANSCRIBE_DELAY_MS: '7000' } })
   const { page } = s
-  await recordShort(s)
+  await page.evaluate(() => window.tomada.settings.update({autopilot:{mode:'prepare',steps:{},captionsHorizontal:false,captionsVertical:false,maxClips:3,minScore:70}}))
+  await recordShort(s,true)
   const dir = projectDir(s)
 
   // enquanto roda: a aba mostra o andamento e a biblioteca, o chip
-  await page.getByTestId('tab-text').click()
-  await expect(page.getByTestId('text-job')).toBeVisible({ timeout: 15_000 })
-  await page.getByTestId('back-to-library').click()
+  await expect(page.getByTestId('pipeline-transcribe')).toHaveAttribute('data-status','running')
+  await page.getByRole('button',{name:'Biblioteca',exact:true}).click()
   await expect(page.getByTestId('card-transcribing')).toBeVisible({ timeout: 15_000 })
   await expect(page.getByTestId('card-transcribing')).toContainText(/Na fila|Transcrevendo/)
 
@@ -61,6 +62,9 @@ test('depois de gravar a transcrição começa sozinha: chip na biblioteca, tran
   expect(t.engine).toBe('teste')
   expect(t.words).toHaveLength(15)
   expect(t.createdAt).not.toBe('')
+
+  await expect(page.getByTestId('review-view')).toHaveAttribute('data-status','done',{timeout:60_000})
+  await page.getByRole('button',{name:'Biblioteca',exact:true}).click()
 
   // abrir o projeto: o texto está lá
   await page.getByTestId('card-open').click()

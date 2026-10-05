@@ -71,7 +71,7 @@ export function setZoomFocus(p: Project, id: string, focus: ZoomFocus): Project 
 }
 
 export function deleteZoom(p: Project, id: string): Project {
-  return p.zooms.some((z) => z.id === id) ? { ...p, zooms: p.zooms.filter((z) => z.id !== id) } : p
+  return p.zooms.some((z) => z.id === id) ? { ...p, zooms: p.zooms.filter((z) => z.id !== id),autoExclusions:{...p.autoExclusions,zooms:[...new Set([...(p.autoExclusions?.zooms ?? []),id])]} } : p
 }
 
 /**
@@ -80,7 +80,7 @@ export function deleteZoom(p: Project, id: string): Project {
  */
 export function regenerateZooms(p: Project, preset: ZoomPresetId | 'off', auto: readonly Zoom[]): Project {
   const manual = p.zooms.filter((z) => z.origin === 'manual')
-  const free = auto.filter((a) => !manual.some((m) => a.start < m.end && a.end > m.start))
+  const free = auto.filter((a) => !p.autoExclusions?.zooms?.includes(a.id) && !manual.some((m) => a.start < m.end && a.end > m.start))
   return { ...p, zoomPreset: preset, zooms: mergeAutoZooms(manual, free) }
 }
 
@@ -99,7 +99,7 @@ export function createLayoutSeg(p: Project, a: number, b: number, durationMs: nu
   const range = newSegRange(p.layouts, a, b, layoutBounds(durationMs))
   if (!range) return null
   const id = nextSegId(p.layouts, 'layout')
-  const seg: LayoutSeg = { id, start: range.start, end: range.end, layout }
+  const seg: LayoutSeg = { id, start: range.start, end: range.end, layout, origin: 'manual' }
   return { project: { ...p, layouts: sortedSegs([...p.layouts, seg]) }, id }
 }
 
@@ -119,7 +119,7 @@ export function setLayoutOfSeg(p: Project, id: string, layout: LayoutKind): Proj
 }
 
 export function deleteLayoutSeg(p: Project, id: string): Project {
-  return p.layouts.some((l) => l.id === id) ? { ...p, layouts: p.layouts.filter((l) => l.id !== id) } : p
+  return p.layouts.some((l) => l.id === id) ? { ...p, layouts: p.layouts.filter((l) => l.id !== id),autoExclusions:{...p.autoExclusions,layouts:[...new Set([...(p.autoExclusions?.layouts ?? []),id])]} } : p
 }
 
 /**

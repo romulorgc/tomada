@@ -8,6 +8,10 @@
  * não existe (a v1 era outro formato, em `legado/`).
  */
 import { z } from 'zod'
+import { videoScriptSchema } from './script'
+import { retakeMarkSchema } from './retake-marker'
+import { pipelineSchema } from './autopilot'
+import { reviewItemSchema } from './review-schema'
 import type { CaptionStyle, CaptionStyleId, CaptureInfo, Project, Src, Style } from './types'
 
 export const CURRENT_PROJECT_VERSION = 2
@@ -79,7 +83,8 @@ const cutSchema = z.looseObject({
   start: z.number(),
   end: z.number(),
   reason: z.enum(['silence', 'filler', 'retake', 'manual', 'ai']),
-  enabled: z.boolean()
+  enabled: z.boolean(),
+  origin: z.enum(['auto', 'manual']).optional()
 })
 
 const muteSchema = z.looseObject({
@@ -104,6 +109,7 @@ const layoutSegSchema = z.looseObject({
   start: z.number(),
   end: z.number(),
   layout: layoutKind
+  ,origin: z.enum(['auto', 'manual']).optional()
 })
 
 const backgroundSchema = z.union([
@@ -176,7 +182,9 @@ const captionStyleSchema = z.looseObject({
   highlightWord: z.boolean().optional()
 })
 
+const autoExclusionsSchema = z.object({zooms:z.array(z.string()).optional(),layouts:z.array(z.string()).optional()})
 const verticalSchema = z.looseObject({
+  autoExclusions:autoExclusionsSchema.optional(),
   layout: layoutKind.default('screen-focus'),
   layouts: z.array(layoutSegSchema).default([]),
   zooms: z.array(zoomSchema).default([]),
@@ -210,6 +218,7 @@ const clipSchema = z.looseObject({
   format: z.enum(['vertical', 'horizontal']).default('vertical'),
   layoutV: z.enum(['auto', 'stack', 'screen-focus', 'screen-wide', 'camera']).default('auto'),
   captionStyle: captionStyleId.optional(),
+  captionsEnabled: z.boolean().optional(),
   source: z.enum(['ai', 'heuristic', 'manual']).optional()
 })
 
@@ -241,6 +250,7 @@ const captureSchema = z.looseObject({
 })
 
 export const projectSchema = z.looseObject({
+  autoExclusions:autoExclusionsSchema.optional(),
   version: z.number().int().min(CURRENT_PROJECT_VERSION),
   id: z.string().min(1),
   title: z.string(),
@@ -271,7 +281,11 @@ export const projectSchema = z.looseObject({
   vertical: verticalSchema.optional(),
   wordFixes: z.record(z.string(), z.string()).optional(),
   autoCleaned: z.boolean().optional(),
-  meta: metaSchema.optional()
+  autopilot: pipelineSchema.optional(),
+  review: z.looseObject({ items: z.record(z.string(), reviewItemSchema.extend({ edits: z.object({ cuts: z.array(cutSchema), zooms: z.array(zoomSchema), layouts: z.array(layoutSegSchema), captions: captionStyleSchema, style: styleSchema, autoExclusions:autoExclusionsSchema.optional(), wordFixes:z.record(z.string(),z.string()).optional(), mutes:z.array(muteSchema).optional(), meta:metaSchema.optional(), zoomPreset:z.enum(['subtle','moderate','intense','off']).optional() }).optional() })), metaOrigin: z.enum(['auto','manual']).optional(), titleOrigin: z.enum(['auto','manual']).optional() }).optional(),
+  meta: metaSchema.optional(),
+  script: videoScriptSchema.optional(),
+  retakeMarks: z.array(retakeMarkSchema).optional()
 })
 
 // Garante em tempo de compilação que o esquema produz o tipo `Project`.

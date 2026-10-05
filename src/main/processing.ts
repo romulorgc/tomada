@@ -19,6 +19,7 @@ import type { Logger } from './logger'
 import { writeManifest, type RecordingManifest } from './manifest'
 import { extractAudio, makeThumbnail, normalizeVideo } from './normalize'
 import { PROJECT_FILE, THUMB_PATH } from './projects'
+import { resolveProjectFile } from './project-files'
 
 /** Estado que sobrevive entre uma tentativa e a seguinte (mesma sessão do app). */
 export type ProcessContext = {
@@ -68,7 +69,7 @@ const CAMERA_FPS = 30
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 export function createProcessContext(args: { dir: string; manifest: RecordingManifest; rawEvents: RawEvents | null }): ProcessContext {
-  return { dir: args.dir, manifest: args.manifest, rawEvents: args.rawEvents, done: new Set(), sources: {}, notes: [...args.manifest.notes] }
+  return { dir: args.dir, manifest: args.manifest, rawEvents: args.rawEvents, done: new Set((args.manifest.processing?.done ?? []).filter((id) => STEP_ORDER.includes(id))), sources: { ...args.manifest.processing?.sources }, notes: [...args.manifest.notes] }
 }
 
 /**
@@ -85,6 +86,17 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
     fraction: ctx.done.has(id) ? 1 : 0
   }))
   const snapshot: ProcessSnapshot = { sessionId: manifest.sessionId, folder: manifest.folder, status: 'running', steps, notes: ctx.notes }
+
+  try {
+    for (const rel of [manifest.screen?.file, manifest.camera?.file, ...Object.values(ctx.sources).map((s) => s.path), 'media/screen.mp4', 'media/camera.mp4', 'media/voice.wav', 'media/system.wav', THUMB_PATH, PROJECT_FILE, 'events/cursor.jsonl', 'events/clicks.jsonl', 'events/keys.jsonl', 'events/window.jsonl']) {
+      if (rel) await resolveProjectFile(dir, rel)
+    }
+  } catch (err) {
+    snapshot.status = 'failed'
+    snapshot.error = { step: 'save', message: messageOf(err) }
+    deps.onProgress(snapshot)
+    return snapshot
+  }
 
   let lastEmit = 0
   const emit = (force = true): void => {
@@ -193,6 +205,8 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
       })
       // Sem o cursor do sistema no vídeo, o editor precisa desenhar o sintético; com ele, só ripple/halo.
       project.style.cursor.mode = saved.capture.cursorHidden ? 'synthetic' : 'real'
+      if (manifest.script) project.script = manifest.script
+      project.retakeMarks = manifest.retakeMarks ?? []
       const text = serializeProject(project)
       parseProject(text) // o que escrevemos precisa passar pelo mesmo esquema de quem lê
       await writeFileAtomic(join(dir, PROJECT_FILE), text)
@@ -220,10 +234,15 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
       step.status = 'done'
       step.fraction = 1
       if (detail) step.detail = detail
+      manifest.processing = { done: [...ctx.done, id], sources: { ...ctx.sources } }
+      manifest.notes = [...ctx.notes]
+      await writeManifest(dir, manifest)
       ctx.done.add(id)
+      if (id === 'save') await rm(join(dir, 'raw/events.json'), { force: true }).catch((err: unknown) => logger.warn('Não consegui remover os eventos brutos já salvos.', err))
       logger.info(`Processamento: passo "${id}" concluído${detail ? ` (${detail})` : ''}.`)
       emit()
     } catch (err) {
+      manifest.processing = { done: [...ctx.done], sources: { ...ctx.sources } }
       const message = messageOf(err)
       step.status = 'error'
       step.detail = message

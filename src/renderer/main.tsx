@@ -4,6 +4,7 @@ import { App } from './App'
 import { Bar } from './overlay/Bar'
 import { Bubble } from './overlay/Bubble'
 import { Countdown } from './overlay/Countdown'
+import { Teleprompter } from './overlay/Teleprompter'
 import './styles.css'
 
 // Nenhuma falha silenciosa: o que escapar da interface vai para o arquivo de log.
@@ -16,7 +17,7 @@ window.addEventListener('unhandledrejection', (e) => {
 })
 
 // A mesma interface serve às janelas auxiliares da gravação (barra, contagem, bolha): o main as abre com #nome.
-const AUX = { bar: Bar, countdown: Countdown, bubble: Bubble } as const
+const AUX = { bar: Bar, countdown: Countdown, bubble: Bubble, teleprompter: Teleprompter } as const
 const hash = window.location.hash.replace(/^#/, '')
 const Aux = hash in AUX ? AUX[hash as keyof typeof AUX] : null
 if (Aux) document.documentElement.dataset.aux = hash

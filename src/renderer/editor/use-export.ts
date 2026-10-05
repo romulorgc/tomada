@@ -25,7 +25,7 @@ export type ExportController = {
 const FINAL = new Set<ExportProgress['phase']>(['done', 'error', 'cancelled'])
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-export function useExportController(projectId: string, flush: () => Promise<void>): ExportController {
+export function useExportController(projectId: string, flush: () => Promise<void>, itemId?: string): ExportController {
   const notify = useApp((s) => s.notify)
   const [progress, setProgress] = useState<ExportProgress | null>(null)
   const [cancelling, setCancelling] = useState(false)
@@ -40,7 +40,7 @@ export function useExportController(projectId: string, flush: () => Promise<void
     let alive = true
     const off = window.tomada.on('export:progress', (p) => {
       // a exportação de um corte (fila da aba Cortes) tem o andamento dela; este controle é do vídeo inteiro
-      if (p.projectId !== projectId || !alive || p.clipId !== undefined) return
+      if (p.projectId !== projectId || !alive || p.clipId !== (itemId && itemId !== 'youtube' ? itemId : undefined)) return
       setProgress(p)
       if (FINAL.has(p.phase)) {
         setCancelling(false)
@@ -51,13 +51,13 @@ export function useExportController(projectId: string, flush: () => Promise<void
     })
     // abriu o projeto com uma exportação ainda rodando: retoma o acompanhamento
     void window.tomada.exporter.status().then((p) => {
-      if (alive && p && p.projectId === projectId && p.clipId === undefined && !FINAL.has(p.phase)) setProgress(p)
+      if (alive && p && p.projectId === projectId && p.clipId === (itemId && itemId !== 'youtube' ? itemId : undefined) && !FINAL.has(p.phase)) setProgress(p)
     })
     return () => {
       alive = false
       off()
     }
-  }, [projectId, notify])
+  }, [projectId, notify, itemId])
 
   const start = useCallback(
     async (options: ExportOptions) => {
@@ -65,7 +65,7 @@ export function useExportController(projectId: string, flush: () => Promise<void
       setProgress(null)
       try {
         await flush()
-        await window.tomada.exporter.start({ projectId, ...options })
+        await window.tomada.exporter.start({ projectId, ...options, ...(itemId && itemId !== 'youtube' ? {clipId:itemId} : {}) })
       } catch (err) {
         setProgress({
           exportId: '',
@@ -81,7 +81,7 @@ export function useExportController(projectId: string, flush: () => Promise<void
         })
       }
     },
-    [flush, projectId]
+    [flush, projectId, itemId]
   )
 
   const cancel = useCallback(async () => {

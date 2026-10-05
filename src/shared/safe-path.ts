@@ -61,7 +61,7 @@ export function assertSafeRelativePath(rel: unknown, field?: string): string {
 }
 
 /** Todo caminho relativo que o documento guarda (mídias e imagem de fundo), com o nome do campo para a mensagem. */
-export function documentFilePaths(project: Pick<Project, 'sources' | 'style'>): { field: string; path: string }[] {
+export function documentFilePaths(project: Pick<Project, 'sources' | 'style' | 'review'>): { field: string; path: string }[] {
   const out: { field: string; path: string }[] = []
   for (const key of ['screen', 'camera', 'voice', 'system'] as const) {
     const src = project.sources[key]
@@ -69,10 +69,16 @@ export function documentFilePaths(project: Pick<Project, 'sources' | 'style'>): 
   }
   const bg = project.style.background
   if (bg.type === 'image') out.push({ field: 'style.background.path', path: bg.path })
+  for (const [id,item] of Object.entries(project.review?.items ?? {})) {
+    if(item.exportPath) out.push({field:`review.items.${id}.exportPath`,path:item.exportPath})
+    if(item.textPath) out.push({field:`review.items.${id}.textPath`,path:item.textPath})
+    const background = item.edits?.style.background
+    if(background?.type === 'image') out.push({field:`review.items.${id}.edits.style.background.path`,path:background.path})
+  }
   return out
 }
 
 /** Confere (só pelo texto) todos os caminhos do documento; lança `UnsafePathError` no primeiro ruim. */
-export function assertDocumentPathsSafe(project: Pick<Project, 'sources' | 'style'>): void {
+export function assertDocumentPathsSafe(project: Pick<Project, 'sources' | 'style' | 'review'>): void {
   for (const { field, path } of documentFilePaths(project)) assertSafeRelativePath(path, field)
 }

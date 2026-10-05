@@ -8,7 +8,8 @@ import { t } from './i18n/pt-BR'
 
 export type View =
   | { name: 'library' }
-  | { name: 'project'; id: string }
+  | { name: 'project'; id: string; itemId?: string }
+  | { name: 'review'; id: string }
   | { name: 'record' }
   | { name: 'processing' }
   | { name: 'settings' }

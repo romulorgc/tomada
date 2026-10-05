@@ -5,6 +5,7 @@ import { CheckIcon, CrossIcon, FolderIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
 import { AiSettings, TranscriptionSettings } from './SettingsTranscription'
+import { SettingsAutopilot } from './SettingsAutopilot'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -117,6 +118,7 @@ export function Settings() {
   return (
     <div className="mx-auto w-full max-w-[64rem] px-10 pb-14 pt-9" data-testid="settings-view">
       <h1 className="mb-8 text-[1.75rem] font-[650] leading-none tracking-[-0.02em]">{t.settings.title}</h1>
+      <Section title={t.autopilot.title} help={t.autopilot.help}><SettingsAutopilot /></Section>
 
       <Section title={t.settings.projects.title} help={t.settings.projects.help} testId="settings-projects">
         <div className="flex items-start gap-3 rounded-thumb border border-line bg-surface px-4 py-3">

@@ -9,7 +9,7 @@
  *   idle → preparing → countdown → recording ⇄ paused → stopping → idle (+ processamento)
  */
 import { existsSync } from 'node:fs'
-import { mkdir, open, rm, statfs, type FileHandle } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rm, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   BarAction,
@@ -34,17 +34,25 @@ import {
   uniqueName,
   validateRecordRequest,
   type Interval,
+  type RawEvents,
   type RecordRequest
 } from '@shared/recording'
 import type { Rect, Size } from '@shared/types'
+import { markRecordingTime, type RetakeMark } from '@shared/retake-marker'
+import type { TeleprompterAction, TeleprompterConfig, TeleprompterState } from '@shared/script'
+import type { PreflightResult } from '@shared/preflight'
+import { checkPreflight } from './preflight'
+import { assertProjectId } from './projects'
+import { resolveProjectFile } from './project-files'
 import type { Ffmpeg } from './ffmpeg'
-import { pathExists } from './fs-utils'
+import { pathExists, writeFileAtomic } from './fs-utils'
 import type { Logger } from './logger'
 import {
   MANIFEST_PATH,
   RAW_CAMERA,
   RAW_MIC,
   RAW_SCREEN,
+  readManifest,
   writeManifest,
   type RecordingManifest
 } from './manifest'
@@ -83,8 +91,11 @@ export interface RecordingWindows {
   hideBar(): void
   showBubble(config: BubbleConfig, displayBoundsDip: Rect | null): void
   hideBubble(): void
+  showTeleprompter?(state: TeleprompterState, displayBoundsDip: Rect | null): void
+  updateTeleprompter?(state: TeleprompterState): void
+  hideTeleprompter?(): void
   /** Registra os atalhos globais; devolve o que conseguiu registrar. */
-  registerHotkeys(handlers: { stop(): void; pause(): void }): { stop: string; pause: string; ok: boolean }
+  registerHotkeys(handlers: { stop(): void; pause(): void; retake?(): void; retakeShortcut?: string }): { stop: string; pause: string; ok: boolean }
   unregisterHotkeys(): void
 }
 
@@ -126,9 +137,17 @@ export interface RecordingService {
   countdownConfig(): CountdownConfig
   bubbleConfig(): BubbleConfig | null
   level(level: number): void
+  markRetake(): Promise<RetakeMark | null>
+  preflight(): Promise<PreflightResult>
+  showTeleprompter(config: TeleprompterConfig): void
+  hideTeleprompter(): void
+  teleprompterState(): TeleprompterState | null
+  teleprompterAction(action: TeleprompterAction): void
   retry(sessionId: string): Promise<void>
   /** Chamado ao fechar o app: encerra rastreador, arquivos e atalhos sem apagar nada. */
   shutdown(): Promise<void>
+  /** Retoma gravações paradas, uma por vez; projeto já concluído não é refeito. */
+  recover(): Promise<void>
   /** Há gravação em andamento (gravando, pausada ou parando)? */
   readonly recording: boolean
 }
@@ -171,6 +190,8 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
   let session: Session | null = null
   let processing: { ctx: ProcessContext; snapshot: ProcessSnapshot; running: boolean } | null = null
   let barSnapshot: BarState | null = null
+  let prompter: TeleprompterState | null = null
+  let recovery: Promise<void> | null = null
   const minFree = deps.minFreeBytes ?? 1_000_000_000
 
   const silent = deps.env.TOMADA_TEST_SILENT === '1'
@@ -199,7 +220,10 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       hasMic: Boolean(s.request.micId),
       hasCamera: s.request.mode !== 'screen' && Boolean(s.request.cameraId),
       shortcutStop: 'Ctrl+Shift+R',
-      shortcutPause: 'Ctrl+Shift+P'
+      shortcutPause: 'Ctrl+Shift+P',
+      shortcutRetake: s.request.retakeShortcut ?? 'Ctrl+Alt+Z',
+      retakeCount: s.manifest.retakeMarks?.length ?? 0,
+      ...(barSnapshot?.retakeAt ? { retakeAt: barSnapshot.retakeAt } : {})
     }
   }
 
@@ -242,6 +266,8 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     deps.windows.unregisterHotkeys()
     deps.windows.hideBar()
     deps.windows.hideBubble()
+    deps.windows.hideTeleprompter?.()
+    prompter = null
     barSnapshot = null
   }
 
@@ -261,7 +287,17 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
   async function startProcessing(s: Session, rawEvents: TrackerResult['raw'] | null): Promise<void> {
     const ff = deps.ffmpeg()
     const ctx = createProcessContext({ dir: s.dir, manifest: s.manifest, rawEvents })
-    processing = { ctx, snapshot: { sessionId: s.id, folder: s.folder, status: 'running', steps: [], notes: [] }, running: false }
+    processing = { ctx, snapshot: { sessionId: s.id, folder: s.folder, status: 'running', steps: [], notes: [] }, running: true }
+    try {
+      if (rawEvents) await writeFileAtomic(join(s.dir, 'raw/events.json'), JSON.stringify(rawEvents))
+    } catch (err) {
+      processing.running = false
+      processing.snapshot = { ...processing.snapshot, status: 'failed', error: { step: 'save', message: messageOf(err) } }
+      deps.emit('process:progress', processing.snapshot)
+      logger.error('Não consegui salvar os eventos para recuperar a gravação.', err)
+      return
+    }
+    processing.running = false
     if (!ff) {
       const message = 'Não encontrei o ffmpeg. A gravação bruta está salva em raw/; escolha o ffmpeg nos Ajustes e clique em "Tentar de novo".'
       processing.snapshot = {
@@ -318,6 +354,68 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     deps.emit('record:command', { cmd: action, source })
   }
 
+  async function markRetake(): Promise<RetakeMark | null> {
+    const s = session
+    if (!s || status !== 'recording' || !s.manifest.clock || s.closed) return null
+    const mark = markRecordingTime(rendererNow(s), s.manifest.clock.t0, s.pauses, s.openPause)
+    if (!mark) return null
+    // Serializa com os pedaços de mídia e com outras marcas: manifesto e JSONL não disputam escrita.
+    const job = s.writes.then(async () => {
+      s.manifest.retakeMarks = [...(s.manifest.retakeMarks ?? []), mark]
+      await mkdir(join(s.dir, 'events'), { recursive: true })
+      await writeFileAtomic(join(s.dir, 'events/retakes.jsonl'), `${s.manifest.retakeMarks.map((m) => JSON.stringify(m)).join('\n')}\n`)
+      await writeManifest(s.dir, s.manifest)
+      if (session === s && !s.closed && (status === 'recording' || status === 'paused')) {
+        barSnapshot = { ...makeBarState(s, status), retakeAt: Date.now() }
+        deps.windows.updateBar(barSnapshot)
+      }
+      return mark
+    })
+    s.writes = job.catch(() => undefined)
+    return job
+  }
+
+  function recover(): Promise<void> {
+    if (recovery) return recovery
+    recovery = (async () => {
+      if (session || processing?.running) return
+      const root = deps.projectsRoot()
+      const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+        try {
+          assertProjectId(entry.name)
+          const dir = await resolveProjectFile(root, entry.name)
+          await resolveProjectFile(dir, MANIFEST_PATH)
+          if (!(await hasManifest(dir))) continue
+          const manifest = await readManifest(dir)
+          if (manifest.processedAt || manifest.endedAt === null || !manifest.clock) continue
+          if (manifest.screen && manifest.screen.file !== RAW_SCREEN) throw new Error('Caminho de tela inválido no manifesto de gravação.')
+          if (manifest.camera && ![RAW_CAMERA, RAW_MIC].includes(manifest.camera.file)) throw new Error('Caminho de câmera inválido no manifesto de gravação.')
+          manifest.folder = entry.name
+          const eventsPath = await resolveProjectFile(dir, 'raw/events.json')
+          const rawEvents = await readFile(eventsPath, 'utf8').then((text) => JSON.parse(text) as RawEvents).catch(() => null)
+          const ctx = createProcessContext({ dir, manifest, rawEvents })
+          processing = { ctx, snapshot: { sessionId: manifest.sessionId, folder: entry.name, status: 'running', steps: [], notes: [...manifest.notes] }, running: false }
+          const ff = deps.ffmpeg()
+          if (!ff) {
+            const message = 'Não encontrei o ffmpeg. A gravação bruta está salva em raw/; escolha o ffmpeg nos Ajustes e clique em "Tentar de novo".'
+            processing.snapshot = { ...processing.snapshot, status: 'failed', error: { step: 'save', message } }
+            logger.error(message)
+            deps.emit('process:progress', processing.snapshot)
+            continue
+          }
+          logger.info(`Retomando o processamento: ${entry.name}.`)
+          await runOnce(ff)
+        } catch (err) {
+          logger.error(`Não consegui retomar a gravação ${entry.name}.`, err)
+          deps.emit('record:notice', { kind: 'error', text: 'Não consegui retomar o processamento de uma gravação.', detail: messageOf(err) })
+        }
+      }
+    })().finally(() => { recovery = null })
+    return recovery
+  }
+
   return {
     get recording() {
       return status === 'recording' || status === 'paused' || status === 'stopping'
@@ -327,6 +425,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
 
     async prepare(request) {
       if (status !== 'idle') throw new Error('Já existe uma gravação em andamento.')
+      if (recovery) throw new Error('Espere a recuperação da gravação anterior terminar.')
       if (processing?.running) throw new Error('Espere o processamento da gravação anterior terminar.')
       const problem = validateRecordRequest(request)
       if (problem === 'no-source') throw new Error('Escolha a tela ou a janela que vai gravar.')
@@ -336,16 +435,8 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
 
       const root = deps.projectsRoot()
       await mkdir(root, { recursive: true })
-      try {
-        const fs = await statfs(root)
-        const free = Number(fs.bavail) * Number(fs.bsize)
-        if (free < minFree) {
-          throw new Error(`Pouco espaço livre em disco (${(free / 1e9).toFixed(1)} GB) na pasta dos projetos. Libere ao menos ${(minFree / 1e9).toFixed(0)} GB para gravar.`)
-        }
-      } catch (err) {
-        if (err instanceof Error && err.message.startsWith('Pouco espaço')) throw err
-        logger.warn('Não consegui medir o espaço livre em disco.', err)
-      }
+      const preflight = await checkPreflight(root, minFree)
+      if (preflight.disk === 'low') deps.emit('record:notice', { kind: 'info', text: 'Pouco espaço livre em disco. A gravação segue; confira a pasta dos projetos.' })
 
       setStatus('preparing')
       try {
@@ -366,7 +457,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           version: 1,
           sessionId,
           folder,
-          title: defaultRecordingTitle(date),
+          title: request.script?.title ?? defaultRecordingTitle(date),
           createdAt: date.toISOString(),
           mode: request.mode,
           fps: request.fps,
@@ -396,7 +487,9 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           recordedMs: null,
           notes: [],
           saved: null,
-          processedAt: null
+          processedAt: null,
+          ...(request.script ? { script: request.script } : {}),
+          retakeMarks: []
         }
         await writeManifest(dir, manifest)
 
@@ -513,7 +606,9 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       barSnapshot = state
       const hotkeys = deps.windows.registerHotkeys({
         stop: () => command('stop', 'hotkey'),
-        pause: () => command(status === 'paused' ? 'resume' : 'pause', 'hotkey')
+        pause: () => command(status === 'paused' ? 'resume' : 'pause', 'hotkey'),
+        retakeShortcut: s.request.retakeShortcut ?? 'Ctrl+Alt+Z',
+        retake: () => { void markRetake().catch((err) => { logger.error('Falha ao marcar regravação.', err); deps.emit('record:notice', { kind: 'error', text: 'Não consegui salvar a marca de regravação. Tente de novo.', detail: messageOf(err) }) }) }
       })
       if (!hotkeys.ok) {
         deps.emit('record:notice', {
@@ -522,6 +617,10 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
         })
       }
       deps.windows.showBar({ ...state, shortcutStop: hotkeys.stop, shortcutPause: hotkeys.pause }, s.source?.displayBoundsDip ?? null)
+      if (prompter) {
+        if (s.request.script) prompter = { ...prompter, script: s.request.script }
+        deps.windows.showTeleprompter?.(prompter, s.source?.displayBoundsDip ?? null)
+      }
       if (s.request.showBubble && s.request.cameraId && s.request.mode === 'screen-camera') {
         deps.windows.showBubble({ cameraId: s.request.cameraId, mirror: true }, s.source?.displayBoundsDip ?? null)
       }
@@ -649,6 +748,25 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
 
     level(level) {
       if (status === 'recording' || status === 'paused') deps.windows.barLevel(level)
+    },
+    markRetake,
+    recover,
+    preflight: () => checkPreflight(deps.projectsRoot(), minFree),
+    showTeleprompter(config) {
+      prompter = { ...config, paused: false, topicIndex: 0 }
+      deps.windows.showTeleprompter?.(prompter, session?.source?.displayBoundsDip ?? null)
+    },
+    hideTeleprompter() {
+      deps.windows.hideTeleprompter?.()
+      prompter = null
+    },
+    teleprompterState: () => prompter,
+    teleprompterAction(action) {
+      if (!prompter) return
+      if (action === 'pause') prompter = { ...prompter, paused: !prompter.paused }
+      else if (action === 'faster' || action === 'slower') prompter = { ...prompter, speed: Math.max(10, Math.min(120, prompter.speed + (action === 'faster' ? 10 : -10))) }
+      else prompter = { ...prompter, topicIndex: Math.max(0, Math.min(prompter.script.topics.length + 1, prompter.topicIndex + (action === 'next' ? 1 : -1))) }
+      deps.windows.updateTeleprompter?.(prompter)
     },
 
     async retry(sessionId) {

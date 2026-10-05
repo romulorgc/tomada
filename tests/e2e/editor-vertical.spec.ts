@@ -146,18 +146,18 @@ test('legendas no 9:16: Natural (caixa mista) de partida, estilos e ajustes do v
   await expect.poll(() => readSaved(s!).vertical?.captions?.size, { timeout: 10_000 }).toBe(1.3)
   await expect.poll(() => readSaved(s!).vertical?.captions?.wordsPerLine, { timeout: 10_000 }).toBe(3)
   const doc = readSaved(s)
-  expect(doc.captions).toEqual(captions16) // a legenda do 16:9 não mudou (no projeto de exemplo é o Karaokê, desligada)
+  expect(doc.captions).toEqual(captions16) // a legenda do 16:9 não mudou
   await shot(page, '64-legenda-clean-vertical')
 
   // o 16:9 tem a legenda dele: desligada, Natural
   await page.getByTestId('ratio-16-9').click()
   await expect(page.getByTestId('captions-show')).toHaveAttribute('aria-checked', 'false')
-  await expect(page.getByTestId('caption-style-karaoke')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId(`caption-style-${captions16.style}`)).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('captions-format-note')).toContainText(/16:9/)
   await page.getByTestId('captions-show').click()
   await expect.poll(() => readSaved(s!).captions.enabled, { timeout: 10_000 }).toBe(true)
   expect(readSaved(s).vertical?.captions?.style).toBe('clean') // e o vertical segue como estava
-  await shot(page, '65-legenda-karaoke-16x9')
+  await shot(page, '65-legenda-16x9')
 })
 
 test('o usuário ajusta o que o automático escolheu: câmera em cima, palavra em destaque, posição da legenda e palavras por linha (cada formato com o seu)', async () => {
