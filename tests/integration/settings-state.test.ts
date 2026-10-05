@@ -9,7 +9,7 @@ import { loadSettings, saveSettings } from '../../src/main/settings'
 import { createAppState } from '../../src/main/state'
 import { locateFfmpeg } from '../../src/main/ffmpeg'
 import { copyTree, FIX, useTmpDir } from '../helpers/env'
-import { createIdleRecordingService } from '../helpers/recording'
+import { createIdleExportService, createIdleRecordingService } from '../helpers/recording'
 
 const tmp = useTmpDir()
 
@@ -199,6 +199,7 @@ describe('handlers de IPC (contrato completo, sem Electron)', () => {
       pickFolder: async () => null,
       pickFfmpeg: async () => null,
       recording: createIdleRecordingService(),
+      exporter: createIdleExportService(),
       finishCountdown: () => undefined,
       clock: () => 0
     })
@@ -248,6 +249,7 @@ describe('handlers de IPC (contrato completo, sem Electron)', () => {
       pickFolder: async () => null,
       pickFfmpeg: async () => null,
       recording: createIdleRecordingService(),
+      exporter: createIdleExportService(),
       finishCountdown: () => undefined,
       clock: () => 0
     })

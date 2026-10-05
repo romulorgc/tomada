@@ -271,6 +271,10 @@ export type ProbeStream = {
   height?: number
   /** Quadros por segundo médios (avg_frame_rate; r_frame_rate se faltar). */
   fps?: number
+  /** `r_frame_rate` (a taxa base do fluxo): igual a `fps` quando a taxa é constante. */
+  rFps?: number
+  /** Perfil do codec (ex.: "High"), quando o ffprobe informa. */
+  profile?: string
   sampleRate?: number
   channels?: number
   durationMs?: number
@@ -304,6 +308,7 @@ type RawStream = {
   height?: number
   avg_frame_rate?: string
   r_frame_rate?: string
+  profile?: string
   sample_rate?: string
   channels?: number
   duration?: string
@@ -325,6 +330,9 @@ export function parseProbe(raw: unknown): ProbeResult {
     if (s.height) stream.height = s.height
     const fps = parseFrameRate(s.avg_frame_rate) ?? parseFrameRate(s.r_frame_rate)
     if (type === 'video' && fps) stream.fps = fps
+    const rFps = parseFrameRate(s.r_frame_rate)
+    if (type === 'video' && rFps) stream.rFps = rFps
+    if (s.profile) stream.profile = s.profile
     if (s.sample_rate) stream.sampleRate = Number(s.sample_rate)
     if (s.channels) stream.channels = s.channels
     const d = secondsToMs(s.duration)

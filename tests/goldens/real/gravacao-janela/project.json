@@ -1,0 +1,78 @@
+{
+  "version": 2,
+  "id": "92702c02-fe84-475c-8cee-c253c1c006d8",
+  "title": "Gravação 02:02",
+  "createdAt": "2026-10-05T05:02:15.244Z",
+  "sources": {
+    "screen": {
+      "path": "media/screen.mp4",
+      "w": 1132,
+      "h": 788,
+      "fps": 30,
+      "durationMs": 12867
+    }
+  },
+  "sync": {
+    "screenOffsetMs": 0,
+    "cameraOffsetMs": 0
+  },
+  "capture": {
+    "kind": "window",
+    "boundsPx": {
+      "x": 158,
+      "y": 125,
+      "w": 1132,
+      "h": 788
+    },
+    "scale": 1.25,
+    "frameSize": {
+      "w": 1132,
+      "h": 788
+    },
+    "cursorHidden": false,
+    "sourceName": "Tomada-Alvo"
+  },
+  "cuts": [],
+  "zooms": [],
+  "layouts": [],
+  "style": {
+    "background": {
+      "type": "gradient",
+      "from": "#1d2740",
+      "to": "#0b0c10",
+      "angle": 135
+    },
+    "padding": 0.06,
+    "radius": 18,
+    "shadow": {
+      "blur": 40,
+      "opacity": 0.45,
+      "offsetY": 16
+    },
+    "defaultLayout": "bubble",
+    "camera": {
+      "shape": "circle",
+      "size": 0.26,
+      "corner": "bottom-right",
+      "borderWidth": 4,
+      "borderColor": "#ffffff",
+      "mirror": false
+    },
+    "cursor": {
+      "mode": "real",
+      "scale": 2,
+      "ripple": true,
+      "hideAfterIdleMs": 2000,
+      "halo": false
+    }
+  },
+  "captions": {
+    "enabled": false,
+    "style": "karaoke",
+    "wordsPerLine": 5,
+    "position": "bottom",
+    "box": false,
+    "highlightColor": "#FFD93D"
+  },
+  "clips": []
+}

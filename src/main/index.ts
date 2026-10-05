@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
 import { LEVEL_CHANNEL, type AppInfo, type IpcEvents } from '@shared/ipc'
 import { createSourceProvider } from './capture-sources'
+import { createExporterWindowFactory } from './export-window'
+import { createExportService } from './export-service'
 import { createFfmpeg, locateFfmpeg } from './ffmpeg'
 import { createHandlers } from './handlers'
 import { registerIpc } from './ipc'
@@ -39,6 +41,14 @@ function isAppUrl(url: string): boolean {
 
 /** Em modo de teste (pasta de projetos definida por variável), apagar remove direto do disco. */
 const testMode = Boolean(process.env[ENV_PROJECTS_DIR])
+
+/**
+ * Em notebook com duas placas (a integrada da Intel e uma NVIDIA/AMD), o Chromium usa a integrada. Medido
+ * aqui (RTX 3050 + Intel UHD, 3 min de vídeo 1080p30 com cortes e zooms): 41 qps na integrada, 144 qps na
+ * dedicada, na MESMA exportação. Pedimos a placa de alto desempenho; em máquina de uma placa só não muda
+ * nada. `TOMADA_GPU=auto` deixa o sistema escolher (para comparar ou se a dedicada der problema).
+ */
+if (process.env.TOMADA_GPU !== 'auto') app.commandLine.appendSwitch('force_high_performance_gpu')
 
 async function main(): Promise<void> {
   await app.whenReady()
@@ -136,6 +146,24 @@ async function main(): Promise<void> {
     now: () => new Date(),
     env: process.env
   })
+  // --- Exportação: áudio no ffmpeg, vídeo numa janela escondida, mux e conferência ------------------
+  const exporter = createExportService({
+    logger,
+    read: (id) => store.read(id),
+    ffmpeg: () => {
+      const paths = locateFfmpeg(state.ffmpegLocateOptions())
+      return paths ? createFfmpeg(paths) : null
+    },
+    openExporterWindow: createExporterWindowFactory({
+      preload: join(__dirname, '../preload/index.js'),
+      rendererUrl,
+      rendererFile: join(__dirname, '../renderer/index.html'),
+      logger
+    }),
+    emit: (progress) => emit('export:progress', progress),
+    now: () => performance.now()
+  })
+
   // Nível do microfone (só de ida) → mini medidor da barra.
   ipcMain.on(LEVEL_CHANNEL, (_event, level: unknown) => {
     if (typeof level === 'number' && Number.isFinite(level)) recording.level(level)
@@ -144,6 +172,7 @@ async function main(): Promise<void> {
   app.on('before-quit', () => {
     quitting = true
     void recording.shutdown()
+    void exporter.shutdown()
     windows.closeAll()
   })
 
@@ -154,6 +183,7 @@ async function main(): Promise<void> {
       store,
       logger,
       recording,
+      exporter,
       finishCountdown: (completed) => windows.finishCountdown(completed),
       clock,
       pickFolder: async (defaultPath) => {

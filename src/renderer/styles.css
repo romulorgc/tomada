@@ -665,3 +665,85 @@ html[data-aux] #root {
   height: 100%;
   object-fit: cover;
 }
+
+/* ---------------------------------------------------------------------------
+ * Editor: prévia (canvas), fontes escondidas, painéis de aparência
+ */
+.preview-frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--radius-thumb);
+  background: #000;
+  box-shadow: inset 0 0 0 1px var(--color-line);
+}
+.preview-frame > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Os <video> da prévia decodificam na página, mas quem aparece é o canvas. */
+.preview-source {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 2px;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.panel-label {
+  margin-bottom: 0.4rem;
+  color: var(--color-muted);
+  font-size: 0.8125rem;
+  font-weight: 560;
+}
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(1.75rem, 1fr));
+  gap: 0.4rem;
+}
+.swatch {
+  aspect-ratio: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
+  transition: transform 90ms ease;
+}
+.swatch:hover {
+  transform: scale(1.08);
+}
+.swatch[aria-pressed='true'] {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+.corner-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1.6rem);
+  gap: 0.3rem;
+  padding: 0.35rem;
+  width: max-content;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-control);
+  background: var(--color-panel);
+}
+.corner-grid > button {
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 0;
+  border-radius: 0.3rem;
+  background: var(--color-raised);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.corner-grid > button:hover {
+  background: var(--color-line-strong);
+}
+.corner-grid > button[aria-pressed='true'] {
+  background: var(--color-ink);
+}

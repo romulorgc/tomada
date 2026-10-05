@@ -4,6 +4,7 @@
  * e o preload e o renderer só enxergam o que está declarado.
  * Código puro: sem DOM, sem Node.
  */
+import type { ExportOptions } from './export'
 import type { RecordPrefs, RecordRequest } from './recording'
 import type { Project, ProjectSummary, Size } from './types'
 
@@ -67,6 +68,8 @@ export type ProjectDetail = {
     screen: MediaFile | null
     camera: MediaFile | null
   }
+  /** URLs dos arquivos de eventos (null = o arquivo não existe, ex.: gravação só de câmera). */
+  events: { cursor: string | null; clicks: string | null; keys: string | null }
 }
 
 export type MediaFile = {
@@ -188,6 +191,72 @@ export type BarState = {
 export type CountdownConfig = { seconds: number; silent: boolean }
 export type BubbleConfig = { cameraId: string; mirror: boolean }
 
+// --- Exportação (M2a) ----------------------------------------------------------
+
+export type ExportRequest = ExportOptions & { projectId: string }
+
+export type ExportPhase = 'preparing' | 'rendering' | 'mux' | 'checking' | 'done' | 'error' | 'cancelled'
+
+/** Resultado da conferência final (ffprobe) e da medição da exportação. */
+export type ExportReport = {
+  outputPath: string
+  bytes: number
+  width: number
+  height: number
+  /** Duração do arquivo (ms) e a esperada pelo documento (`outputDuration`). */
+  durationMs: number
+  expectedMs: number
+  fps: number
+  frames: number
+  hasAudio: boolean
+  /** |duração do vídeo − duração do áudio| (ms): acima de 50 é erro. */
+  audioVideoDiffMs: number
+  /** Quadros por segundo da renderização (só a fase de vídeo). */
+  renderFps: number
+  elapsedMs: number
+  profile: string | null
+  /** Onde o tempo do vídeo foi (decodificar, desenhar, codificar), para depurar a velocidade. */
+  timing: string | null
+}
+
+export type ExportProgress = {
+  exportId: string
+  projectId: string
+  phase: ExportPhase
+  /** 0..1 do trabalho todo. */
+  fraction: number
+  frame: number
+  totalFrames: number
+  renderFps: number | null
+  etaMs: number | null
+  /** O áudio já ficou pronto (ele roda ao lado do vídeo). */
+  audioReady: boolean
+  /** Motivo, em `error`/`cancelled`; aviso de bastidor nas demais fases. */
+  message?: string
+  outputPath?: string
+  report?: ExportReport
+}
+
+/** O que a janela escondida de exportação recebe do processo principal. */
+export type ExportJob = {
+  exportId: string
+  projectId: string
+  /** O documento a exportar (com as edições ainda não salvas, se for o caso). */
+  project: Project
+  width: number
+  height: number
+  fps: number
+  bitrate: number
+  /** URLs `tomada-media://` das mídias (null = sem essa fonte). */
+  screenUrl: string | null
+  cameraUrl: string | null
+  /** URLs dos eventos. */
+  eventUrls: { cursor: string | null; clicks: string | null; keys: string | null }
+}
+
+/** O que a janela de exportação informa ao terminar a fase de vídeo. */
+export type ExporterResult = { ok: true; frames: number; encoder: string; timing?: string } | { ok: false; message: string }
+
 // --- Contrato ------------------------------------------------------------------
 
 export type IpcContract = {
@@ -196,6 +265,8 @@ export type IpcContract = {
   'projects:list': { args: []; result: ProjectSummary[] }
   'projects:get': { args: [id: string]; result: ProjectDetail }
   'projects:rename': { args: [id: string, title: string]; result: ProjectSummary }
+  /** Valida e grava o documento (atômico). Devolve o documento como foi gravado. */
+  'projects:save': { args: [id: string, project: Project]; result: Project }
   'projects:trash': { args: [id: string]; result: void }
   'projects:reveal': { args: [id: string]; result: void }
 
@@ -225,6 +296,16 @@ export type IpcContract = {
   'record:status': { args: []; result: RecordingStatusView }
   'process:retry': { args: [sessionId: string]; result: void }
 
+  // Exportação: a interface pede; o main orquestra áudio (ffmpeg), vídeo (janela escondida) e mux.
+  'export:start': { args: [request: ExportRequest]; result: { exportId: string } }
+  'export:cancel': { args: [exportId: string]; result: void }
+  'export:status': { args: []; result: ExportProgress | null }
+  // Canais da janela escondida de exportação (identificada pelo `exportId` que vai no hash da URL).
+  'exporter:job': { args: [exportId: string]; result: ExportJob }
+  'exporter:write': { args: [exportId: string, position: number, data: Uint8Array]; result: void }
+  'exporter:progress': { args: [exportId: string, frame: number, renderFps: number | null]; result: void }
+  'exporter:finish': { args: [exportId: string, result: ExporterResult]; result: void }
+
   // Janelas auxiliares (barra flutuante, contagem, bolha da câmera)
   'bar:state': { args: []; result: BarState | null }
   'bar:action': { args: [action: BarAction]; result: void }
@@ -243,6 +324,7 @@ export type IpcEvents = {
   'process:progress': ProcessSnapshot
   'bar:state': BarState
   'bar:level': { level: number }
+  'export:progress': ExportProgress
 }
 
 export type IpcChannel = keyof IpcContract
@@ -270,6 +352,7 @@ export type TomadaApi = {
     list(): Promise<ProjectSummary[]>
     get(id: string): Promise<ProjectDetail>
     rename(id: string, title: string): Promise<ProjectSummary>
+    save(id: string, project: Project): Promise<Project>
     trash(id: string): Promise<void>
     reveal(id: string): Promise<void>
   }
@@ -305,6 +388,18 @@ export type TomadaApi = {
     level(level: number): void
   }
   processing: { retry(sessionId: string): Promise<void> }
+  exporter: {
+    start(request: ExportRequest): Promise<{ exportId: string }>
+    cancel(exportId: string): Promise<void>
+    status(): Promise<ExportProgress | null>
+  }
+  /** Só para a janela escondida de exportação. */
+  exportWorker: {
+    job(exportId: string): Promise<ExportJob>
+    write(exportId: string, position: number, data: Uint8Array): Promise<void>
+    progress(exportId: string, frame: number, renderFps: number | null): Promise<void>
+    finish(exportId: string, result: ExporterResult): Promise<void>
+  }
   bar: { state(): Promise<BarState | null>; action(action: BarAction): Promise<void> }
   countdown: { begin(): Promise<CountdownConfig>; finish(completed: boolean): Promise<void> }
   bubble: { config(): Promise<BubbleConfig | null> }

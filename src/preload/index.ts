@@ -27,6 +27,7 @@ const api: TomadaApi = {
     list: () => invoke('projects:list'),
     get: (id) => invoke('projects:get', id),
     rename: (id, title) => invoke('projects:rename', id, title),
+    save: (id, project) => invoke('projects:save', id, project),
     trash: (id) => invoke('projects:trash', id),
     reveal: (id) => invoke('projects:reveal', id)
   },
@@ -58,6 +59,17 @@ const api: TomadaApi = {
     level: (level) => ipcRenderer.send(LEVEL_CHANNEL, level)
   },
   processing: { retry: (sessionId) => invoke('process:retry', sessionId) },
+  exporter: {
+    start: (request) => invoke('export:start', request),
+    cancel: (exportId) => invoke('export:cancel', exportId),
+    status: () => invoke('export:status')
+  },
+  exportWorker: {
+    job: (exportId) => invoke('exporter:job', exportId),
+    write: (exportId, position, data) => invoke('exporter:write', exportId, position, data),
+    progress: (exportId, frame, renderFps) => invoke('exporter:progress', exportId, frame, renderFps),
+    finish: (exportId, result) => invoke('exporter:finish', exportId, result)
+  },
   bar: { state: () => invoke('bar:state'), action: (action) => invoke('bar:action', action) },
   countdown: { begin: () => invoke('countdown:begin'), finish: (completed) => invoke('countdown:finish', completed) },
   bubble: { config: () => invoke('bubble:config') },

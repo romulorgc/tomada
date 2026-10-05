@@ -34,7 +34,7 @@ export function defaultStyle(): Style {
       borderColor: '#ffffff',
       mirror: false
     },
-    cursor: { mode: 'real', scale: 2, ripple: true, hideAfterIdleMs: 2000 }
+    cursor: { mode: 'real', scale: 2, ripple: true, hideAfterIdleMs: 2000, halo: false }
   }
 }
 
@@ -98,13 +98,26 @@ const layoutSegSchema = z.looseObject({
 
 const backgroundSchema = z.union([
   z.looseObject({ type: z.literal('gradient'), from: z.string(), to: z.string(), angle: z.number() }),
-  z.looseObject({ type: z.literal('solid'), color: z.string() })
+  z.looseObject({ type: z.literal('solid'), color: z.string() }),
+  z.looseObject({ type: z.literal('image'), path: z.string() })
+])
+
+const cornerSchema = z.enum([
+  'top-left',
+  'top-center',
+  'top-right',
+  'middle-left',
+  'middle-center',
+  'middle-right',
+  'bottom-left',
+  'bottom-center',
+  'bottom-right'
 ])
 
 const cameraStyleSchema = z.looseObject({
   shape: z.enum(['circle', 'rounded', 'square']).default(D.camera.shape),
   size: z.number().default(D.camera.size),
-  corner: z.enum(['top-left', 'top-right', 'bottom-left', 'bottom-right']).default(D.camera.corner),
+  corner: cornerSchema.default(D.camera.corner),
   borderWidth: z.number().default(D.camera.borderWidth),
   borderColor: z.string().default(D.camera.borderColor),
   mirror: z.boolean().default(D.camera.mirror)
@@ -114,7 +127,8 @@ const cursorStyleSchema = z.looseObject({
   mode: z.enum(['real', 'synthetic']).default(D.cursor.mode),
   scale: z.number().default(D.cursor.scale),
   ripple: z.boolean().default(D.cursor.ripple),
-  hideAfterIdleMs: z.number().default(D.cursor.hideAfterIdleMs)
+  hideAfterIdleMs: z.number().default(D.cursor.hideAfterIdleMs),
+  halo: z.boolean().default(D.cursor.halo)
 })
 
 const styleSchema = z.looseObject({
@@ -188,6 +202,7 @@ export const projectSchema = z.looseObject({
   style: styleSchema.prefault({}),
   captions: captionStyleSchema.prefault({}),
   clips: z.array(clipSchema).default([]),
+  zoomPreset: z.enum(['subtle', 'moderate', 'intense', 'off']).optional(),
   meta: z.looseObject({}).optional()
 })
 

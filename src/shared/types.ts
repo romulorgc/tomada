@@ -62,15 +62,28 @@ export type LayoutSeg = {
   layout: LayoutKind
 }
 
-export type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+/** Posição da câmera numa grade 3×3 (relativa à tela, no layout de bolha). */
+export type Corner =
+  | 'top-left'
+  | 'top-center'
+  | 'top-right'
+  | 'middle-left'
+  | 'middle-center'
+  | 'middle-right'
+  | 'bottom-left'
+  | 'bottom-center'
+  | 'bottom-right'
 
 export type Background =
+  /** `angle` em graus no padrão do CSS: 0 = para cima, 90 = para a direita, 135 = para o canto inferior direito. */
   | { type: 'gradient'; from: string; to: string; angle: number }
   | { type: 'solid'; color: string }
+  /** Imagem (cobre o quadro). `path` é relativo à pasta do projeto, ou uma URL que o chamador resolva. */
+  | { type: 'image'; path: string }
 
 export type CameraStyle = {
   shape: 'circle' | 'rounded' | 'square'
-  /** Lado da câmera como fração da altura do quadro (0..1). */
+  /** Lado da câmera (diâmetro do círculo, altura dos retângulos) como fração do LADO MENOR do quadro (0..1). */
   size: number
   corner: Corner
   borderWidth: number
@@ -86,6 +99,8 @@ export type CursorStyle = {
   ripple: boolean
   /** Some depois de parado por esse tempo (ms). 0 = nunca. */
   hideAfterIdleMs: number
+  /** Halo suave em volta do cursor (modo 'real': desenhado por cima do cursor que já está no vídeo). */
+  halo: boolean
 }
 
 export type Style = {
@@ -99,6 +114,9 @@ export type Style = {
   camera: CameraStyle
   cursor: CursorStyle
 }
+
+/** Intensidade do zoom automático. */
+export type ZoomPresetId = 'subtle' | 'moderate' | 'intense'
 
 export type CaptionStyle = {
   enabled: boolean
@@ -175,6 +193,12 @@ export type Project = {
   style: Style
   captions: CaptionStyle
   clips: Clip[]
+  /**
+   * Preset com o qual os zooms `origin: 'auto'` foram gerados. Ausente = os zooms automáticos
+   * nunca foram gerados (o editor gera os do preset padrão ao abrir). `'off'` = o usuário
+   * desligou o zoom automático (não regenerar).
+   */
+  zoomPreset?: ZoomPresetId | 'off'
   meta?: ProjectMeta
 }
 

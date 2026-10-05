@@ -3,6 +3,7 @@
  * rastreador falsos, e um serviço pronto para os testes de handlers.
  */
 import { rm } from 'node:fs/promises'
+import { createExportService, type ExportService } from '../../src/main/export-service'
 import type { IpcEvents } from '../../src/shared/ipc'
 import type { RawEvents } from '../../src/shared/recording'
 import type { Ffmpeg } from '../../src/main/ffmpeg'
@@ -178,6 +179,20 @@ export function createFakeWorld(args: {
     countdownResult,
     logger
   }
+}
+
+/** Um serviço de exportação ocioso, só para quem precisa montar `createHandlers`. */
+export function createIdleExportService(): ExportService {
+  return createExportService({
+    logger: createMemoryLogger(),
+    read: async () => {
+      throw new Error('sem projetos neste teste')
+    },
+    ffmpeg: () => null,
+    openExporterWindow: () => ({ destroy: () => undefined }),
+    emit: () => undefined,
+    now: () => performance.now()
+  })
 }
 
 /** Um serviço qualquer, só para quem precisa montar `createHandlers` e não grava nada. */

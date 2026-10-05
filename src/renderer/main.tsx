@@ -21,6 +21,15 @@ const hash = window.location.hash.replace(/^#/, '')
 const Aux = hash in AUX ? AUX[hash as keyof typeof AUX] : null
 if (Aux) document.documentElement.dataset.aux = hash
 
-const root = document.getElementById('root')
-if (!root) throw new Error('Elemento #root não encontrado em index.html')
-createRoot(root).render(<StrictMode>{Aux ? <Aux /> : <App />}</StrictMode>)
+if (hash.startsWith('export:') || hash === 'export-lab') {
+  // Janela ESCONDIDA da exportação: sem React, só o motor de render (processo à parte da interface).
+  document.documentElement.dataset.aux = 'export'
+  void import('./export/exporter').then((m) => {
+    if (hash === 'export-lab') m.runExportLab()
+    else void m.runExporterWindow(hash.slice('export:'.length))
+  })
+} else {
+  const root = document.getElementById('root')
+  if (!root) throw new Error('Elemento #root não encontrado em index.html')
+  createRoot(root).render(<StrictMode>{Aux ? <Aux /> : <App />}</StrictMode>)
+}

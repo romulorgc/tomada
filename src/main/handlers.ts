@@ -2,8 +2,11 @@
  * Implementação de todos os canais do contrato de IPC. Sem Electron: o que depende
  * dele (diálogos de escolher pasta/arquivo) entra por parâmetro.
  */
+import { exportRequestSchema } from '@shared/export'
 import type { AppInfo, ChunkKind, IpcHandlers } from '@shared/ipc'
+import { migrate } from '@shared/project'
 import { recordRequestSchema } from '@shared/recording'
+import type { ExportService } from './export-service'
 import { locateFfmpeg } from './ffmpeg'
 import { getFfmpegStatus, runFfmpegSelfTest } from './ffmpeg-status'
 import type { Logger } from './logger'
@@ -19,6 +22,7 @@ export type HandlerDeps = {
   pickFolder(defaultPath?: string): Promise<string | null>
   pickFfmpeg(): Promise<string | null>
   recording: RecordingService
+  exporter: ExportService
   /** A janela de contagem avisa que terminou (true) ou foi cancelada (false). */
   finishCountdown(completed: boolean): void
   /** Relógio do processo principal (`performance.timeOrigin + performance.now()`). */
@@ -28,13 +32,19 @@ export type HandlerDeps = {
 const CHUNK_KINDS: readonly ChunkKind[] = ['screen', 'camera', 'mic']
 
 export function createHandlers(deps: HandlerDeps): IpcHandlers {
-  const { state, store, logger, recording } = deps
+  const { state, store, logger, recording, exporter } = deps
   return {
     'app:info': async () => deps.info,
 
     'projects:list': () => store.list(),
     'projects:get': (id) => store.detail(id),
     'projects:rename': (id, title) => store.rename(id, title),
+    'projects:save': async (id, project) => {
+      // o que vai para o disco passa pelo mesmo esquema de quem lê; campos desconhecidos são preservados
+      const checked = migrate(project)
+      await store.write(id, checked)
+      return checked
+    },
     'projects:trash': (id) => store.trash(id),
     'projects:reveal': (id) => store.reveal(id),
 
@@ -64,6 +74,14 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'record:abort': (reason) => recording.abort(reason),
     'record:status': async () => recording.status(),
     'process:retry': (sessionId) => recording.retry(sessionId),
+
+    'export:start': (request) => exporter.start(exportRequestSchema.parse(request)),
+    'export:cancel': (exportId) => exporter.cancel(exportId),
+    'export:status': async () => exporter.status(),
+    'exporter:job': async (exportId) => exporter.job(exportId),
+    'exporter:write': (exportId, position, data) => exporter.write(exportId, position, data),
+    'exporter:progress': async (exportId, frame, renderFps) => exporter.progress(exportId, frame, renderFps),
+    'exporter:finish': async (exportId, result) => exporter.finish(exportId, result),
 
     'bar:state': async () => recording.barState(),
     'bar:action': async (action) => {

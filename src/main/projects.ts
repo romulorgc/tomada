@@ -6,6 +6,7 @@
 import { mkdir, readFile, readdir, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import type { MediaFile, ProjectDetail } from '@shared/ipc'
+import { EVENT_FILES } from '@shared/events'
 import { mediaUrl } from '@shared/media-url'
 import { ProjectFormatError, parseProject, projectDurationMs, serializeProject } from '@shared/project'
 import type { Project, ProjectSummary, Src } from '@shared/types'
@@ -168,6 +169,11 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
         media: {
           screen: await mediaFile(id, dir, project.sources.screen),
           camera: await mediaFile(id, dir, project.sources.camera)
+        },
+        events: {
+          cursor: (await pathExists(join(dir, EVENT_FILES.cursor))) ? mediaUrl(id, EVENT_FILES.cursor) : null,
+          clicks: (await pathExists(join(dir, EVENT_FILES.clicks))) ? mediaUrl(id, EVENT_FILES.clicks) : null,
+          keys: (await pathExists(join(dir, EVENT_FILES.keys))) ? mediaUrl(id, EVENT_FILES.keys) : null
         }
       }
     },

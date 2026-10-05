@@ -63,7 +63,6 @@ export const ptBR = {
     play: 'Reproduzir',
     pause: 'Pausar',
     position: 'Posição no vídeo',
-    provisional: 'Visualização provisória. O editor chega na próxima etapa.',
     files: 'Arquivos',
     folder: 'Pasta',
     created: 'Criada em',
@@ -72,6 +71,59 @@ export const ptBR = {
     videoError: 'O vídeo não abriu. Veja o arquivo na pasta do projeto.',
     revealFolder: 'Mostrar na pasta',
     fileLine: (w: number, h: number, fps: number): string => `${w}×${h}, ${Math.round(fps)} quadros por segundo`
+  },
+
+  editor: {
+    preview: 'Prévia do vídeo',
+    saveFailed: 'Não consegui salvar as mudanças',
+    playFailed: 'Não consegui reproduzir',
+    noEvents: 'Esta gravação não tem cursor e cliques: o zoom automático fica desligado.',
+    style: {
+      title: 'Aparência',
+      background: 'Fundo',
+      layout: 'Layout',
+      layouts: { bubble: 'Tela e câmera', 'side-by-side': 'Lado a lado', screen: 'Só a tela', camera: 'Só a câmera' },
+      cameraPosition: 'Posição da câmera',
+      positions: {
+        'top-left': 'No alto, à esquerda',
+        'top-center': 'No alto, no centro',
+        'top-right': 'No alto, à direita',
+        'middle-left': 'No meio, à esquerda',
+        'middle-center': 'No centro',
+        'middle-right': 'No meio, à direita',
+        'bottom-left': 'Embaixo, à esquerda',
+        'bottom-center': 'Embaixo, no centro',
+        'bottom-right': 'Embaixo, à direita'
+      },
+      zoom: 'Zoom automático',
+      zooms: { off: 'Desligado', subtle: 'Sutil', moderate: 'Moderado', intense: 'Intenso' },
+      zoomCount: (n: number): string => (n === 0 ? 'Nenhum zoom' : n === 1 ? '1 zoom' : `${n} zooms`)
+    },
+    export: {
+      title: 'Exportar',
+      resolution: 'Resolução',
+      fps: 'Quadros por segundo',
+      button: (label: string): string => `Exportar ${label}`,
+      cancel: 'Cancelar',
+      cancelling: 'Cancelando…',
+      outputTime: (s: string): string => `Vídeo final: ${s}`,
+      phases: {
+        preparing: 'Preparando…',
+        rendering: 'Gerando o vídeo',
+        mux: 'Juntando o vídeo e o áudio…',
+        checking: 'Conferindo o arquivo…'
+      },
+      frames: (frame: number, total: number): string => `${frame} de ${total} quadros`,
+      speed: (fps: number): string => `${fps} quadros por segundo`,
+      eta: (text: string): string => `faltam ${text}`,
+      audioReady: 'Áudio pronto',
+      doneTitle: 'Vídeo exportado',
+      doneBody: (name: string): string => `Salvo em exports/${name}`,
+      reveal: 'Mostrar na pasta',
+      failedTitle: 'Não consegui exportar',
+      retry: 'Tentar de novo',
+      cancelled: 'Exportação cancelada.'
+    }
   },
 
   record: {

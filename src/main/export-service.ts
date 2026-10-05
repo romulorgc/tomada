@@ -1,0 +1,497 @@
+/**
+ * Exportação 16:9 no processo principal. Orquestra três coisas e confere o resultado:
+ *
+ *  1. ÁUDIO (ffmpeg): trechos mantidos com `atrim` + fade de 30 ms → cadeia de voz → mistura com o
+ *     som do sistema → `loudnorm` em dois passes → AAC. O grafo vai em arquivo (centenas de trechos
+ *     estouram a linha de comando do Windows).
+ *  2. VÍDEO (janela escondida, processo à parte da interface): mediabunny lê as mídias por
+ *     `tomada-media://`, `evaluateScene` + `renderFrame` desenham cada quadro e o VideoEncoder
+ *     codifica H.264 por hardware; os pedaços chegam aqui (posição + bytes) e vão direto ao disco.
+ *  3. MUX + CONFERÊNCIA: `-c copy -movflags +faststart`; ffprobe confere duração, taxa constante,
+ *     trilhas e a diferença áudio × vídeo (> 50 ms = erro visível).
+ *
+ * Áudio e vídeo rodam ao mesmo tempo. Cancelar derruba a janela e o ffmpeg e apaga o parcial.
+ * Sem Electron: a janela entra por interface, então roda em teste com uma janela falsa.
+ */
+import { randomUUID } from 'node:crypto'
+import type { FileHandle } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, open, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import {
+  EXPORT_RESOLUTION_LABEL,
+  etaMs,
+  exportBitrate,
+  exportFileName,
+  exportFormat,
+  outputFrameCount
+} from '@shared/export'
+import { EVENT_FILES } from '@shared/events'
+import type { ExportJob, ExportProgress, ExportReport, ExportRequest, ExporterResult } from '@shared/ipc'
+import { mediaUrl } from '@shared/media-url'
+import { projectDurationMs } from '@shared/project'
+import { uniqueName } from '@shared/recording'
+import { keptRanges, outputDuration } from '@shared/timeline'
+import type { Project } from '@shared/types'
+import {
+  buildAudioArgs,
+  buildAudioGraph,
+  buildMeasureArgs,
+  buildMuxArgs,
+  buildSilentAudioArgs,
+  parseLoudnormMeasure
+} from './audio-graph'
+import type { Ffmpeg } from './ffmpeg'
+import { pathExists } from './fs-utils'
+import type { Logger } from './logger'
+
+/** Diferença máxima aceita entre a duração do áudio e a do vídeo (ms). */
+export const MAX_AV_DIFF_MS = 50
+/** Sem sinal de vida da janela de vídeo por tanto tempo, a exportação é dada como travada. */
+export const STALL_TIMEOUT_MS = 120_000
+
+export class ExportError extends Error {
+  override readonly name = 'ExportError'
+}
+class CancelledError extends Error {
+  override readonly name = 'CancelledError'
+}
+
+export type ExporterWindow = { destroy(): void }
+
+export type ExportServiceDeps = {
+  logger: Logger
+  /** Lê o projeto (documento + pasta). */
+  read(id: string): Promise<{ project: Project; dir: string }>
+  ffmpeg(): Ffmpeg | null
+  /** Abre a janela escondida que renderiza o vídeo. `onGone` avisa se ela caiu antes de terminar. */
+  openExporterWindow(exportId: string, hooks: { onGone(reason: string): void }): ExporterWindow
+  emit(progress: ExportProgress): void
+  /** Relógio monotônico em ms. */
+  now(): number
+  /** Troca o tempo limite de "travou" (testes). */
+  stallTimeoutMs?: number
+}
+
+export interface ExportService {
+  start(request: ExportRequest): Promise<{ exportId: string }>
+  cancel(exportId: string): Promise<void>
+  status(): ExportProgress | null
+  /** Canais da janela escondida. */
+  job(exportId: string): ExportJob
+  write(exportId: string, position: number, data: Uint8Array): Promise<void>
+  progress(exportId: string, frame: number, renderFps: number | null): void
+  finish(exportId: string, result: ExporterResult): void
+  /** Espera a exportação em andamento terminar (testes). */
+  idle(): Promise<void>
+  shutdown(): Promise<void>
+}
+
+type Run = {
+  id: string
+  req: ExportRequest
+  project: Project
+  dir: string
+  startedAt: number
+  abort: AbortController
+  cancelled: boolean
+  win: ExporterWindow | null
+  tmpDir: string
+  videoPath: string
+  audioPath: string
+  finalPath: string
+  partialFinal: string
+  handle: FileHandle | null
+  progress: ExportProgress
+  video: { resolve(r: ExporterResult): void; reject(e: unknown): void } | null
+  audioFraction: number
+  videoFraction: number
+  lastSign: number
+  lastEmit: number
+  renderStartedAt: number | null
+  renderEndedAt: number | null
+  timing: string | null
+  done: Promise<void>
+  job: ExportJob
+}
+
+/** URL do arquivo de eventos, ou null se ele não existe (gravação só de câmera): evita um 404 no console. */
+async function eventUrl(projectId: string, dir: string, rel: string): Promise<string | null> {
+  return (await pathExists(join(dir, rel))) ? mediaUrl(projectId, rel) : null
+}
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+export function createExportService(deps: ExportServiceDeps): ExportService {
+  const { logger } = deps
+  let current: Run | null = null
+  let last: ExportProgress | null = null
+
+  const emit = (run: Run, force = false): void => {
+    const now = deps.now()
+    if (!force && now - run.lastEmit < 100) return
+    run.lastEmit = now
+    const p = run.progress
+    // 90% o vídeo, 5% o áudio, 5% a emenda e a conferência
+    const mux = p.phase === 'checking' || p.phase === 'done' ? 0.05 : 0
+    p.fraction = Math.min(1, run.videoFraction * 0.9 + run.audioFraction * 0.05 + mux)
+    p.audioReady = run.audioFraction >= 1
+    last = { ...p }
+    deps.emit({ ...p })
+  }
+
+  const setPhase = (run: Run, phase: ExportProgress['phase'], extra: Partial<ExportProgress> = {}): void => {
+    run.progress = { ...run.progress, phase, ...extra }
+    emit(run, true)
+  }
+
+  const assertActive = (id: string): Run => {
+    if (!current || current.id !== id) throw new ExportError('Essa exportação não está mais em andamento.')
+    return current
+  }
+
+  // --- áudio -----------------------------------------------------------------------------------
+  async function renderAudio(run: Run, ff: Ffmpeg): Promise<void> {
+    const { project, dir } = run
+    const durationMs = projectDurationMs(project)
+    const kept = keptRanges(durationMs, project.cuts)
+    const outMs = outputDuration(durationMs, project.cuts)
+    const signal = run.abort.signal
+
+    const voicePath = project.sources.voice ? join(dir, project.sources.voice.path) : null
+    const systemPath = project.sources.system ? join(dir, project.sources.system.path) : null
+    const hasVoice = voicePath !== null && (await pathExists(voicePath))
+    const hasSystem = systemPath !== null && (await pathExists(systemPath))
+    if (project.sources.voice && !hasVoice) logger.warn(`Exportação: o arquivo de voz do projeto não existe (${voicePath}); a trilha sai sem voz.`)
+
+    if (!hasVoice && !hasSystem) {
+      await ff.run(buildSilentAudioArgs({ durationMs: outMs, output: run.audioPath }), { signal })
+      run.audioFraction = 1
+      emit(run)
+      return
+    }
+
+    const inputs: string[] = []
+    const voice = hasVoice ? { input: inputs.push(voicePath!) - 1, offsetMs: project.sync.cameraOffsetMs, channels: 1 as const } : null
+    const system = hasSystem ? { input: inputs.push(systemPath!) - 1, offsetMs: project.sync.screenOffsetMs, channels: 2 as const } : null
+
+    // passe 1: mede (ffmpeg imprime o JSON do loudnorm no stderr)
+    const graph1 = buildAudioGraph({ kept, voice, system, mode: 'measure' })
+    const graphFile1 = join(run.tmpDir, 'audio-medir.txt')
+    await writeFile(graphFile1, graph1.graph, 'utf8')
+    const measureRun = await ff.run(buildMeasureArgs({ inputs, graphFile: graphFile1 }), {
+      signal,
+      onProgress: (p) => {
+        run.audioFraction = Math.min(0.5, (p.timeMs / Math.max(1, outMs)) * 0.5)
+        emit(run)
+      }
+    })
+    const measured = parseLoudnormMeasure(measureRun.stderr)
+    if (!measured) logger.warn('Exportação: o primeiro passe do loudnorm não deu medição válida (faixa muda?); usando o passe único.')
+
+    // passe 2: aplica
+    const graph2 = buildAudioGraph({ kept, voice, system, mode: 'final', measured })
+    const graphFile2 = join(run.tmpDir, 'audio-final.txt')
+    await writeFile(graphFile2, graph2.graph, 'utf8')
+    await ff.run(buildAudioArgs({ inputs, graphFile: graphFile2, output: run.audioPath }), {
+      signal,
+      onProgress: (p) => {
+        run.audioFraction = Math.min(0.99, 0.5 + (p.timeMs / Math.max(1, outMs)) * 0.5)
+        emit(run)
+      }
+    })
+    run.audioFraction = 1
+    emit(run)
+  }
+
+  // --- vídeo -----------------------------------------------------------------------------------
+  function renderVideo(run: Run): Promise<ExporterResult> {
+    return new Promise<ExporterResult>((resolve, reject) => {
+      run.video = { resolve, reject }
+      run.renderStartedAt = deps.now()
+      try {
+        run.win = deps.openExporterWindow(run.id, {
+          onGone: (reason) => {
+            if (run.video) {
+              run.video.reject(new ExportError(`A janela que renderiza o vídeo fechou antes de terminar (${reason}).`))
+              run.video = null
+            }
+          }
+        })
+      } catch (err) {
+        reject(err)
+      }
+    })
+  }
+
+  // --- execução --------------------------------------------------------------------------------
+  async function execute(run: Run): Promise<void> {
+    const ff = deps.ffmpeg()
+    let watchdog: NodeJS.Timeout | undefined
+    try {
+      if (!ff) throw new ExportError('Não encontrei o ffmpeg. Escolha o ffmpeg nos Ajustes e tente de novo.')
+      const exportsDir = join(run.dir, 'exports')
+      await mkdir(run.tmpDir, { recursive: true })
+      run.handle = await open(run.videoPath, 'w+')
+
+      const label = `${EXPORT_RESOLUTION_LABEL[run.req.resolution]}${run.req.fps}`
+      logger.info(`Exportação ${run.id} (${label}) do projeto ${run.req.projectId}: ${run.progress.totalFrames} quadros.`)
+      setPhase(run, 'rendering')
+
+      const stall = deps.stallTimeoutMs ?? STALL_TIMEOUT_MS
+      watchdog = setInterval(() => {
+        if (deps.now() - run.lastSign > stall && run.video) {
+          run.video.reject(new ExportError(`A exportação travou: a janela de vídeo ficou ${Math.round(stall / 1000)} s sem responder.`))
+          run.video = null
+        }
+      }, Math.min(5000, Math.max(50, stall / 4)))
+
+      const guard = <T>(p: Promise<T>): Promise<T> =>
+        p.catch((err: unknown) => {
+          run.abort.abort()
+          run.win?.destroy()
+          throw err
+        })
+      const [videoResult] = await Promise.all([guard(renderVideo(run)), guard(renderAudio(run, ff))])
+      if (run.cancelled) throw new CancelledError('cancelada')
+      if (!videoResult.ok) throw new ExportError(videoResult.message)
+      run.renderEndedAt = deps.now()
+      run.win?.destroy()
+      run.win = null
+      await run.handle.sync()
+      await run.handle.close()
+      run.handle = null
+      run.videoFraction = 1
+      run.timing = videoResult.timing ?? null
+      logger.info(`Exportação ${run.id}: vídeo pronto (${videoResult.frames} quadros, ${videoResult.encoder}). ${videoResult.timing ?? ''}`)
+
+      // mux
+      setPhase(run, 'mux')
+      await mkdir(exportsDir, { recursive: true })
+      await ff.run(buildMuxArgs({ video: run.videoPath, audio: run.audioPath, output: run.partialFinal }), { signal: run.abort.signal })
+
+      // conferência
+      setPhase(run, 'checking')
+      const report = await checkOutput(ff, run, videoResult.frames)
+      await rm(run.finalPath, { force: true })
+      await rename(run.partialFinal, run.finalPath)
+      logger.info(`Exportação ${run.id} pronta: ${run.finalPath} (${report.renderFps.toFixed(1)} qps, áudio×vídeo ${report.audioVideoDiffMs} ms).`)
+      run.videoFraction = 1
+      setPhase(run, 'done', { outputPath: run.finalPath, report, etaMs: 0, frame: run.progress.totalFrames })
+    } catch (err) {
+      if (run.cancelled || err instanceof CancelledError) {
+        logger.info(`Exportação ${run.id} cancelada.`)
+        setPhase(run, 'cancelled', { message: 'Exportação cancelada.' })
+      } else {
+        const message = messageOf(err)
+        logger.error(`Exportação ${run.id} falhou`, err)
+        setPhase(run, 'error', { message })
+      }
+    } finally {
+      if (watchdog) clearInterval(watchdog)
+      run.abort.abort()
+      run.win?.destroy()
+      run.win = null
+      if (run.handle) await run.handle.close().catch(() => undefined)
+      run.handle = null
+      // parcial nunca fica com cara de bom: some tudo que não é o arquivo final
+      await rm(run.tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined)
+      if (run.progress.phase !== 'done') {
+        await rm(run.partialFinal, { force: true }).catch(() => undefined)
+        await rm(run.finalPath, { force: true }).catch(() => undefined)
+      }
+      current = null
+    }
+  }
+
+  /** ffprobe do arquivo final: trilhas, duração, taxa constante e diferença áudio × vídeo. */
+  async function checkOutput(ff: Ffmpeg, run: Run, frames: number): Promise<ExportReport> {
+    const probe = await ff.probe(run.partialFinal)
+    const videos = probe.streams.filter((s) => s.type === 'video')
+    const audios = probe.streams.filter((s) => s.type === 'audio')
+    const fail = (why: string): never => {
+      throw new ExportError(`O arquivo exportado não passou na conferência: ${why}`)
+    }
+    if (videos.length !== 1) fail(`esperava 1 trilha de vídeo e achou ${videos.length}.`)
+    if (audios.length !== 1) fail(`esperava 1 trilha de áudio e achou ${audios.length}.`)
+    const v = videos[0]!
+    const a = audios[0]!
+    const fps = run.req.fps
+    const frameMs = 1000 / fps
+    const expectedMs = outputDuration(projectDurationMs(run.project), run.project.cuts)
+    const vMs = v.durationMs ?? probe.durationMs
+    const aMs = a.durationMs ?? probe.durationMs
+    if (Math.abs(vMs - expectedMs) > frameMs * 1.5) {
+      fail(`a duração do vídeo é ${(vMs / 1000).toFixed(2)} s e o esperado era ${(expectedMs / 1000).toFixed(2)} s.`)
+    }
+    if (!v.fps || !v.rFps || Math.abs(v.fps - v.rFps) > 0.01 || Math.abs(v.fps - fps) > 0.01) {
+      fail(`a taxa de quadros não é constante em ${fps} qps (média ${v.fps?.toFixed(3) ?? '?'}, base ${v.rFps?.toFixed(3) ?? '?'}).`)
+    }
+    if (v.nbFrames !== undefined && Math.abs(v.nbFrames - frames) > 1) {
+      fail(`o arquivo tem ${v.nbFrames} quadros e foram renderizados ${frames}.`)
+    }
+    const diff = Math.abs(aMs - vMs)
+    if (diff > MAX_AV_DIFF_MS) {
+      fail(`o áudio (${(aMs / 1000).toFixed(3)} s) e o vídeo (${(vMs / 1000).toFixed(3)} s) diferem em ${Math.round(diff)} ms (o limite é ${MAX_AV_DIFF_MS} ms).`)
+    }
+    const info = await stat(run.partialFinal)
+    const renderMs = Math.max(1, (run.renderEndedAt ?? deps.now()) - (run.renderStartedAt ?? run.startedAt))
+    return {
+      outputPath: run.finalPath,
+      bytes: info.size,
+      width: v.width ?? 0,
+      height: v.height ?? 0,
+      durationMs: vMs,
+      expectedMs,
+      fps: v.fps ?? fps,
+      frames: v.nbFrames ?? frames,
+      hasAudio: true,
+      audioVideoDiffMs: Math.round(diff),
+      renderFps: (frames / renderMs) * 1000,
+      elapsedMs: deps.now() - run.startedAt,
+      profile: v.profile ?? null,
+      timing: run.timing
+    }
+  }
+
+  return {
+    async start(request) {
+      if (current) throw new ExportError('Já há uma exportação em andamento. Espere terminar ou cancele.')
+      const { project, dir } = await deps.read(request.projectId)
+      if (!project.sources.screen && !project.sources.camera) {
+        throw new ExportError('Este projeto não tem vídeo da tela nem da câmera para exportar.')
+      }
+      const format = exportFormat(request)
+      const durationMs = projectDurationMs(project)
+      const outMs = outputDuration(durationMs, project.cuts)
+      const totalFrames = outputFrameCount(outMs, request.fps)
+      if (totalFrames === 0) throw new ExportError('Não há nada para exportar: todos os trechos foram cortados.')
+
+      const id = randomUUID()
+      const exportsDir = join(dir, 'exports')
+      const base = exportFileName(project.title, request)
+      await mkdir(exportsDir, { recursive: true })
+      const stem = base.replace(/\.mp4$/, '')
+      const unique = uniqueName(stem, (n) => existsSync(join(exportsDir, `${n}.mp4`)))
+      const finalPath = join(exportsDir, `${unique}.mp4`)
+      const tmpDir = join(exportsDir, `.tmp-${id.slice(0, 8)}`)
+      const job: ExportJob = {
+        exportId: id,
+        projectId: request.projectId,
+        project,
+        width: format.w,
+        height: format.h,
+        fps: request.fps,
+        bitrate: exportBitrate(request.resolution, request.fps),
+        screenUrl: project.sources.screen ? mediaUrl(request.projectId, project.sources.screen.path) : null,
+        cameraUrl: project.sources.camera ? mediaUrl(request.projectId, project.sources.camera.path) : null,
+        eventUrls: {
+          cursor: await eventUrl(request.projectId, dir, EVENT_FILES.cursor),
+          clicks: await eventUrl(request.projectId, dir, EVENT_FILES.clicks),
+          keys: await eventUrl(request.projectId, dir, EVENT_FILES.keys)
+        }
+      }
+      const now = deps.now()
+      const run: Run = {
+        id,
+        req: request,
+        project,
+        dir,
+        startedAt: now,
+        abort: new AbortController(),
+        cancelled: false,
+        win: null,
+        tmpDir,
+        videoPath: join(tmpDir, 'video.mp4'),
+        audioPath: join(tmpDir, 'audio.m4a'),
+        finalPath,
+        partialFinal: `${finalPath}.parcial`,
+        handle: null,
+        progress: {
+          exportId: id,
+          projectId: request.projectId,
+          phase: 'preparing',
+          fraction: 0,
+          frame: 0,
+          totalFrames,
+          renderFps: null,
+          etaMs: null,
+          audioReady: false
+        },
+        video: null,
+        audioFraction: 0,
+        videoFraction: 0,
+        lastSign: now,
+        lastEmit: 0,
+        renderStartedAt: null,
+        renderEndedAt: null,
+        timing: null,
+        done: Promise.resolve(),
+        job
+      }
+      current = run
+      emit(run, true)
+      run.done = execute(run)
+      return { exportId: id }
+    },
+
+    async cancel(exportId) {
+      const run = current
+      if (!run || run.id !== exportId) return
+      run.cancelled = true
+      run.abort.abort()
+      run.win?.destroy()
+      if (run.video) {
+        run.video.reject(new CancelledError('cancelada'))
+        run.video = null
+      }
+      await run.done
+    },
+
+    status() {
+      return current ? { ...current.progress } : last ? { ...last } : null
+    },
+
+    job(exportId) {
+      const run = assertActive(exportId)
+      run.lastSign = deps.now()
+      return run.job
+    },
+
+    async write(exportId, position, data) {
+      const run = assertActive(exportId)
+      if (!run.handle) throw new ExportError('O arquivo de vídeo já foi fechado.')
+      run.lastSign = deps.now()
+      const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+      await run.handle.write(buf, 0, buf.byteLength, position)
+    },
+
+    progress(exportId, frame, renderFps) {
+      const run = current
+      if (!run || run.id !== exportId) return
+      run.lastSign = deps.now()
+      const total = run.progress.totalFrames
+      run.videoFraction = total > 0 ? Math.min(1, frame / total) : 0
+      const fps = renderFps ?? run.progress.renderFps
+      run.progress = { ...run.progress, frame, renderFps: fps, etaMs: fps ? etaMs(frame, total, fps) : null }
+      emit(run)
+    },
+
+    finish(exportId, result) {
+      const run = current
+      if (!run || run.id !== exportId || !run.video) return
+      run.lastSign = deps.now()
+      const video = run.video
+      run.video = null
+      video.resolve(result)
+    },
+
+    async idle() {
+      while (current) await current.done
+    },
+
+    async shutdown() {
+      if (current) await this.cancel(current.id)
+    }
+  }
+}
