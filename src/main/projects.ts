@@ -1,0 +1,208 @@
+/**
+ * Armazenamento de projetos em disco: cada projeto é uma pasta dentro da raiz,
+ * com um `project.json`. Sem Electron: lixeira e "abrir no Explorer"
+ * entram por parâmetro, então tudo isto roda igual nos testes.
+ */
+import { mkdir, readFile, readdir, stat } from 'node:fs/promises'
+import { isAbsolute, join, relative, sep } from 'node:path'
+import type { MediaFile, ProjectDetail } from '@shared/ipc'
+import { mediaUrl } from '@shared/media-url'
+import { ProjectFormatError, parseProject, projectDurationMs, serializeProject } from '@shared/project'
+import type { Project, ProjectSummary, Src } from '@shared/types'
+import { pathExists, writeFileAtomic } from './fs-utils'
+import type { Logger } from './logger'
+
+export const PROJECT_FILE = 'project.json'
+export const THUMB_PATH = 'media/thumb.jpg'
+export const MAX_TITLE_LENGTH = 200
+
+export class InvalidProjectIdError extends Error {
+  override readonly name = 'InvalidProjectIdError'
+}
+export class ProjectNotFoundError extends Error {
+  override readonly name = 'ProjectNotFoundError'
+}
+
+export type ProjectStoreDeps = {
+  /** Raiz atual dos projetos (relida a cada chamada: o usuário pode mudar nos Ajustes). */
+  root: () => string
+  logger: Logger
+  /** Manda a pasta para a Lixeira do sistema (`shell.trashItem`). */
+  trash: (path: string) => Promise<void>
+  /** Abre a pasta no Explorer. */
+  openFolder: (path: string) => Promise<void>
+}
+
+export interface ProjectStore {
+  /** Pasta absoluta do projeto; lança `InvalidProjectIdError` se o id tentar escapar da raiz. */
+  dirOf(id: string): string
+  list(): Promise<ProjectSummary[]>
+  read(id: string): Promise<{ project: Project; dir: string }>
+  detail(id: string): Promise<ProjectDetail>
+  /** Grava o `project.json` de forma atômica. */
+  write(id: string, project: Project): Promise<void>
+  rename(id: string, title: string): Promise<ProjectSummary>
+  trash(id: string): Promise<void>
+  reveal(id: string): Promise<void>
+}
+
+/** O id é o nome da pasta: um único segmento, sem separadores nem `..`. */
+export function assertProjectId(id: unknown): asserts id is string {
+  if (
+    typeof id !== 'string' ||
+    id.length === 0 ||
+    id === '.' ||
+    id === '..' ||
+    /[\\/:*?"<>|\0]/.test(id) ||
+    id !== id.trim()
+  ) {
+    throw new InvalidProjectIdError(`Identificador de projeto inválido: ${JSON.stringify(id)}`)
+  }
+}
+
+export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
+  const { logger } = deps
+  // Evita encher o log com o mesmo aviso a cada atualização da biblioteca.
+  const warned = new Set<string>()
+  const warnOnce = (key: string, message: string, detail?: unknown): void => {
+    if (warned.has(key)) return
+    warned.add(key)
+    logger.warn(message, detail)
+  }
+
+  const dirOf = (id: string): string => {
+    assertProjectId(id)
+    const root = deps.root()
+    const dir = join(root, id)
+    const rel = relative(root, dir)
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel) || rel.includes(sep)) {
+      throw new InvalidProjectIdError(`Identificador de projeto inválido: ${JSON.stringify(id)}`)
+    }
+    return dir
+  }
+
+  const readProject = async (dir: string): Promise<Project> => {
+    const text = await readFile(join(dir, PROJECT_FILE), 'utf8')
+    return parseProject(text)
+  }
+
+  const summarize = async (id: string, dir: string, project: Project): Promise<ProjectSummary> => {
+    let thumbPath: string | null = null
+    let thumbVersion = 0
+    try {
+      const info = await stat(join(dir, THUMB_PATH))
+      if (info.isFile() && info.size > 0) {
+        thumbPath = THUMB_PATH
+        thumbVersion = Math.trunc(info.mtimeMs)
+      }
+    } catch {
+      // sem miniatura: o cartão mostra um espaço reservado
+    }
+    return {
+      id,
+      title: project.title,
+      createdAt: project.createdAt,
+      durationMs: projectDurationMs(project),
+      thumbPath,
+      thumbVersion,
+      hasScreen: Boolean(project.sources.screen),
+      hasCamera: Boolean(project.sources.camera)
+    }
+  }
+
+  const mediaFile = async (id: string, dir: string, src: Src | undefined): Promise<MediaFile | null> => {
+    if (!src) return null
+    try {
+      const info = await stat(join(dir, src.path))
+      if (!info.isFile()) throw new Error('não é um arquivo')
+      return { url: mediaUrl(id, src.path, info.mtimeMs), bytes: info.size }
+    } catch (err) {
+      logger.warn(`Arquivo de mídia do projeto ${id} não encontrado: ${src.path}`, err)
+      return null
+    }
+  }
+
+  return {
+    dirOf,
+
+    async list() {
+      const root = deps.root()
+      await mkdir(root, { recursive: true })
+      const entries = await readdir(root, { withFileTypes: true })
+      const out: ProjectSummary[] = []
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+        const dir = join(root, entry.name)
+        try {
+          const project = await readProject(dir)
+          out.push(await summarize(entry.name, dir, project))
+        } catch (err) {
+          const missing = (err as NodeJS.ErrnoException).code === 'ENOENT'
+          const reason = err instanceof ProjectFormatError ? err.message : missing ? `sem ${PROJECT_FILE}` : String(err)
+          warnOnce(`${dir}::${reason}`, `Pasta ignorada na biblioteca (${entry.name}): ${reason}`)
+        }
+      }
+      out.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || a.id.localeCompare(b.id))
+      return out
+    },
+
+    async read(id) {
+      const dir = dirOf(id)
+      if (!(await pathExists(dir))) throw new ProjectNotFoundError(`Projeto não encontrado: ${id}`)
+      try {
+        return { project: await readProject(dir), dir }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new ProjectNotFoundError(`O projeto ${id} não tem ${PROJECT_FILE}.`)
+        }
+        throw err
+      }
+    },
+
+    async detail(id) {
+      const { project, dir } = await this.read(id)
+      return {
+        id,
+        dir,
+        project,
+        media: {
+          screen: await mediaFile(id, dir, project.sources.screen),
+          camera: await mediaFile(id, dir, project.sources.camera)
+        }
+      }
+    },
+
+    async write(id, project) {
+      const dir = dirOf(id)
+      await writeFileAtomic(join(dir, PROJECT_FILE), serializeProject(project))
+    },
+
+    async rename(id, title) {
+      const clean = typeof title === 'string' ? title.trim() : ''
+      if (!clean) throw new Error('O título não pode ficar vazio.')
+      if (clean.length > MAX_TITLE_LENGTH) throw new Error(`O título passa de ${MAX_TITLE_LENGTH} caracteres.`)
+      const { project, dir } = await this.read(id)
+      const updated: Project = { ...project, title: clean }
+      await writeFileAtomic(join(dir, PROJECT_FILE), serializeProject(updated))
+      logger.info(`Projeto renomeado: ${id} → "${clean}"`)
+      return summarize(id, dir, updated)
+    },
+
+    async trash(id) {
+      const dir = dirOf(id)
+      if (!(await pathExists(dir))) throw new ProjectNotFoundError(`Projeto não encontrado: ${id}`)
+      await deps.trash(dir)
+      // "Deu certo" só se a pasta saiu mesmo do lugar.
+      if (await pathExists(dir)) {
+        throw new Error(`Não consegui mandar o projeto para a Lixeira: a pasta continua em ${dir}.`)
+      }
+      logger.info(`Projeto enviado para a Lixeira: ${id}`)
+    },
+
+    async reveal(id) {
+      const dir = dirOf(id)
+      if (!(await pathExists(dir))) throw new ProjectNotFoundError(`Projeto não encontrado: ${id}`)
+      await deps.openFolder(dir)
+    }
+  }
+}

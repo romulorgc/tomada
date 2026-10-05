@@ -1,0 +1,21 @@
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import { App } from './App'
+import './styles.css'
+
+// Nenhuma falha silenciosa: o que escapar da interface vai para o arquivo de log.
+window.addEventListener('error', (e) => {
+  window.tomada.log({ level: 'error', message: `Erro não tratado: ${e.message}`, detail: `${e.filename}:${e.lineno}:${e.colno}` })
+})
+window.addEventListener('unhandledrejection', (e) => {
+  const reason = e.reason instanceof Error ? (e.reason.stack ?? e.reason.message) : String(e.reason)
+  window.tomada.log({ level: 'error', message: 'Promessa rejeitada sem tratamento', detail: reason })
+})
+
+const root = document.getElementById('root')
+if (!root) throw new Error('Elemento #root não encontrado em index.html')
+createRoot(root).render(
+  <StrictMode>
+    <App />
+  </StrictMode>
+)

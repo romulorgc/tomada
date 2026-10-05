@@ -1,0 +1,139 @@
+/**
+ * Construtores PUROS de argumentos do ffmpeg (sem executar nada): testáveis por
+ * unidade. Quem executa é `ffmpeg.ts`; quem orquestra é `normalize.ts`.
+ *
+ * Armadilhas de legado/README.md que estes argumentos respeitam:
+ *  - o container de saída sai do CODEC (H.264 → MP4), nunca da extensão de entrada;
+ *  - o Chrome grava H.264 dentro de .webm e o ffmpeg recusa escrever H.264 em WebM.
+ */
+
+export type VideoEncoder = 'libx264' | 'h264_nvenc'
+
+export type NormalizeVideoArgs = {
+  input: string
+  output: string
+  /** Taxa de quadros CONSTANTE de saída. */
+  fps: number
+  encoder: VideoEncoder
+  /** Tamanho do GOP em segundos (padrão 1 s: busca rápida no editor). */
+  gopSeconds?: number
+  /** Mantém a trilha de áudio (AAC 192 kbps). Padrão: não. */
+  keepAudio?: boolean
+}
+
+function gopFrames(fps: number, gopSeconds: number): number {
+  return Math.max(1, Math.round(fps * gopSeconds))
+}
+
+/** Argumentos de codificação H.264 de acordo com o encoder (qualidade alta para texto nítido). */
+export function encoderArgs(encoder: VideoEncoder, gop: number): string[] {
+  if (encoder === 'h264_nvenc') {
+    return [
+      '-c:v', 'h264_nvenc',
+      '-preset', 'p5',
+      '-tune', 'hq',
+      '-rc', 'vbr',
+      '-cq', '19',
+      '-b:v', '0',
+      '-profile:v', 'high',
+      '-pix_fmt', 'yuv420p',
+      '-g', String(gop),
+      '-no-scenecut', '1',
+      '-forced-idr', '1'
+    ]
+  }
+  return [
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '18',
+    '-profile:v', 'high',
+    '-pix_fmt', 'yuv420p',
+    '-g', String(gop),
+    '-keyint_min', String(gop),
+    '-sc_threshold', '0'
+  ]
+}
+
+/**
+ * Normaliza uma gravação (VFR, WebM) para MP4 H.264 com fps CONSTANTE e GOP = 1 s.
+ * `setpts=PTS-STARTPTS` zera o começo (o MediaRecorder pode começar com PTS ≠ 0) e
+ * `fps=` duplica/descarta quadros para a taxa fixa preservando a duração. As
+ * dimensões saem PARES (exigência do yuv420p).
+ */
+export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
+  if (!(o.fps > 0)) throw new RangeError(`fps inválido: ${o.fps}`)
+  const gop = gopFrames(o.fps, o.gopSeconds ?? 1)
+  const vf = ['setpts=PTS-STARTPTS', `fps=${o.fps}`, 'scale=trunc(iw/2)*2:trunc(ih/2)*2', 'setsar=1'].join(',')
+  const audio = o.keepAudio
+    ? ['-map', '0:a:0?', '-c:a', 'aac', '-b:a', '192k', '-af', 'aresample=async=1:first_pts=0']
+    : ['-an']
+  return [
+    '-i', o.input,
+    '-map', '0:v:0',
+    ...audio,
+    '-vf', vf,
+    '-fps_mode', 'cfr',
+    ...encoderArgs(o.encoder, gop),
+    '-movflags', '+faststart',
+    '-f', 'mp4',
+    o.output
+  ]
+}
+
+export type ExtractAudioArgs = {
+  input: string
+  output: string
+  channels: 1 | 2
+  /** Padrão 48000. */
+  sampleRate?: number
+  /** Índice da trilha de áudio dentro da entrada (padrão 0). */
+  track?: number
+}
+
+/** Extrai áudio como WAV PCM 16 bits (voice.wav: 48 kHz mono; system.wav: 48 kHz estéreo). */
+export function buildExtractAudioArgs(o: ExtractAudioArgs): string[] {
+  return [
+    '-i', o.input,
+    '-map', `0:a:${o.track ?? 0}`,
+    '-vn',
+    '-ac', String(o.channels),
+    '-ar', String(o.sampleRate ?? 48_000),
+    '-c:a', 'pcm_s16le',
+    '-f', 'wav',
+    o.output
+  ]
+}
+
+export type ThumbnailArgs = {
+  input: string
+  output: string
+  atMs: number
+  /** Largura da miniatura (altura proporcional e par). Padrão 640. */
+  width?: number
+}
+
+export function buildThumbnailArgs(o: ThumbnailArgs): string[] {
+  const seconds = Math.max(0, o.atMs) / 1000
+  return [
+    '-ss', seconds.toFixed(3),
+    '-i', o.input,
+    '-frames:v', '1',
+    '-vf', `scale=${o.width ?? 640}:-2`,
+    '-q:v', '4',
+    '-update', '1',
+    '-f', 'image2',
+    o.output
+  ]
+}
+
+/** Codificação mínima (um quadro, sem arquivo) para saber se o encoder realmente funciona aqui. */
+export function buildEncoderProbeArgs(encoder: VideoEncoder): string[] {
+  return [
+    '-f', 'lavfi',
+    '-i', 'color=c=black:s=640x360:r=30:d=0.5',
+    ...encoderArgs(encoder, 30),
+    '-frames:v', '5',
+    '-f', 'null',
+    '-'
+  ]
+}

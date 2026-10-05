@@ -1,0 +1,387 @@
+@import '@fontsource-variable/inter/wght.css';
+@import 'tailwindcss';
+
+/*
+ * Tokens. Grafite QUENTE (não o preto azulado de sempre) e um único acento quente,
+ * reservado para o que grava. Cada papel de cor tem nome; nada de hex solto nos
+ * componentes. Os tokens viram utilitários do Tailwind (bg-surface, text-muted…).
+ */
+@theme {
+  --font-sans: 'Inter Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+
+  --color-bg: #131211;
+  --color-panel: #1a1917;
+  --color-surface: #1f1e1c;
+  --color-raised: #2a2825;
+  --color-line: rgb(255 240 220 / 0.09);
+  --color-line-strong: rgb(255 240 220 / 0.17);
+
+  --color-ink: #ece8e1;
+  --color-muted: #a39d92;
+  --color-faint: #716c64;
+
+  --color-rec: #ff6a3c;
+  --color-rec-hover: #ff875f;
+  --color-rec-ink: #1c0a03;
+  --color-danger: #ef5b5b;
+  --color-danger-hover: #f57878;
+  --color-ok: #8fc79d;
+  --color-focus: #ffc9a8;
+
+  /* Raios por hierarquia: miniatura > modal > botão > selo. */
+  --radius-thumb: 0.625rem;
+  --radius-dialog: 0.875rem;
+  --radius-control: 0.5rem;
+  --radius-chip: 0.375rem;
+
+  --shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(255 240 220 / 0.08);
+}
+
+/* Escala fluida: 1280 px de largura → ~14,4 px; 1920 → ~17,6; 2560 → 20 (teto). Tudo o mais é em rem. */
+html {
+  font-size: clamp(14px, 0.5vw + 8px, 20px);
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss03';
+  font-size: 1rem;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden; /* a rolagem mora dentro de <main> */
+}
+
+#root {
+  height: 100vh;
+}
+
+/* Números de tempo e tamanho não "dançam". */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Foco visível, sempre, em tudo que se aciona pelo teclado. */
+:where(button, a, input, select, textarea, video, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-rec) 45%, transparent);
+}
+
+/* Barras de rolagem discretas, no tom do tema. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-raised) transparent;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------------------
+ * Botões (três pesos: gravar, comum, discreto)
+ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0 0.95rem;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-raised);
+  color: var(--color-ink);
+  font-size: 0.9375rem;
+  font-weight: 560;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 90ms ease;
+}
+.btn:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--color-raised) 80%, var(--color-ink));
+  border-color: color-mix(in oklab, var(--color-line-strong) 60%, var(--color-ink));
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.5;
+}
+
+.btn-rec {
+  background: var(--color-rec);
+  border-color: transparent;
+  color: var(--color-rec-ink);
+  font-weight: 650;
+}
+.btn-rec:hover:not(:disabled) {
+  background: var(--color-rec-hover);
+  border-color: transparent;
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  border-color: transparent;
+  color: #1f0707;
+  font-weight: 650;
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-danger-hover);
+  border-color: transparent;
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-muted);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--color-raised);
+  border-color: transparent;
+  color: var(--color-ink);
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-control);
+  border: 0;
+  background: rgb(19 18 17 / 0.78);
+  color: var(--color-ink);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background-color 120ms ease;
+}
+.icon-btn:hover {
+  background: rgb(42 40 37 / 0.95);
+}
+.icon-btn[data-tone='danger']:hover {
+  background: var(--color-danger);
+  color: #1f0707;
+}
+
+/* ---------------------------------------------------------------------------
+ * Cartão da biblioteca
+ */
+.thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--radius-thumb);
+  background: var(--color-panel);
+  box-shadow: inset 0 0 0 1px var(--color-line);
+}
+.thumb > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.thumb::after {
+  /* filete interno por cima da imagem: separa miniaturas escuras do fundo */
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgb(255 240 220 / 0.08);
+  pointer-events: none;
+}
+
+.card-actions {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+.card:hover .card-actions,
+.card:focus-within .card-actions {
+  opacity: 1;
+  transform: none;
+}
+
+.duration-chip {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-chip);
+  background: rgb(19 18 17 / 0.82);
+  color: var(--color-ink);
+  font-size: 0.8125rem;
+  font-weight: 560;
+  letter-spacing: 0.01em;
+}
+
+/* Cantos de visor: a marca do app e o espaço reservado onde falta imagem. */
+.viewfinder {
+  --vf: var(--color-faint);
+  position: absolute;
+  inset: 12%;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--vf), var(--vf)) top left / 14% 2px no-repeat,
+    linear-gradient(var(--vf), var(--vf)) top left / 2px 22% no-repeat,
+    linear-gradient(var(--vf), var(--vf)) top right / 14% 2px no-repeat,
+    linear-gradient(var(--vf), var(--vf)) top right / 2px 22% no-repeat,
+    linear-gradient(var(--vf), var(--vf)) bottom left / 14% 2px no-repeat,
+    linear-gradient(var(--vf), var(--vf)) bottom left / 2px 22% no-repeat,
+    linear-gradient(var(--vf), var(--vf)) bottom right / 14% 2px no-repeat,
+    linear-gradient(var(--vf), var(--vf)) bottom right / 2px 22% no-repeat;
+}
+
+.skeleton {
+  background: linear-gradient(100deg, var(--color-surface) 30%, var(--color-raised) 50%, var(--color-surface) 70%) 0 0 / 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: var(--radius-thumb);
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Controle de posição do vídeo (a faixa preenchida acompanha --p)
+ */
+.scrubber {
+  --p: 0%;
+  appearance: none;
+  width: 100%;
+  height: 1.25rem;
+  background: transparent;
+  cursor: pointer;
+}
+.scrubber::-webkit-slider-runnable-track {
+  height: 0.3125rem;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--color-ink) var(--p), var(--color-raised) var(--p));
+}
+.scrubber::-webkit-slider-thumb {
+  appearance: none;
+  width: 0.9375rem;
+  height: 0.9375rem;
+  margin-top: -0.3125rem;
+  border-radius: 50%;
+  background: var(--color-ink);
+  border: 2px solid var(--color-bg);
+  box-shadow: 0 0 0 1px var(--color-line-strong);
+}
+.scrubber:disabled {
+  opacity: 0.45;
+}
+
+.video-frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-thumb);
+  background: #000;
+  box-shadow: inset 0 0 0 1px var(--color-line);
+}
+.video-frame > video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+/* ---------------------------------------------------------------------------
+ * Diálogo e avisos
+ */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgb(8 7 6 / 0.66);
+  animation: fade-in 120ms ease-out;
+}
+.dialog {
+  width: min(30rem, 100%);
+  padding: 1.5rem;
+  border-radius: var(--radius-dialog);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-dialog);
+  animation: pop-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+}
+
+.spinner {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  border: 2px solid var(--color-line-strong);
+  border-top-color: var(--color-ink);
+  animation: spin 700ms linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Pulso do ponto de gravação (só decorativo, desliga com reduce-motion). */
+.rec-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--color-rec);
+  box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-rec) 60%, transparent);
+}
+.rec-dot[data-live='true'] {
+  animation: rec-pulse 1.8s ease-out infinite;
+}
+@keyframes rec-pulse {
+  70% {
+    box-shadow: 0 0 0 0.5rem transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

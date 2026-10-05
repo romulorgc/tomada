@@ -12,3 +12,5 @@ modelos/
 test-results/
 playwright-report/
 .env
+tests/fixtures/
+.vscode/
