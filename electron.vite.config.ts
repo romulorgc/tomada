@@ -37,7 +37,11 @@ export default defineConfig({
     resolve: { alias },
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/main/index.ts') }
+        // O rastreador do cursor roda num worker_thread: precisa do próprio arquivo compilado.
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          'tracker-worker': resolve(__dirname, 'src/main/tracker-worker.ts')
+        }
       }
     }
   },

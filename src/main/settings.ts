@@ -12,7 +12,9 @@ import type { Logger } from './logger'
 // "loose": campos que este código não conhece (de uma versão futura, ou da M1b) sobrevivem.
 export const settingsSchema = z.looseObject({
   projectsDir: z.string().min(1).optional(),
-  ffmpegPath: z.string().min(1).optional()
+  ffmpegPath: z.string().min(1).optional(),
+  // Preferências da tela Gravar: validadas na leitura (`normalizeRecordPrefs`), aqui só passam.
+  record: z.looseObject({}).optional()
 })
 
 export async function loadSettings(file: string, logger: Logger): Promise<Settings> {
@@ -43,7 +45,7 @@ export async function saveSettings(file: string, settings: Settings): Promise<vo
  */
 export function applySettingsPatch(current: Settings, patch: Partial<Settings>): Settings {
   const next: Settings = { ...current }
-  for (const key of Object.keys(patch) as (keyof Settings)[]) {
+  for (const key of ['projectsDir', 'ffmpegPath'] as const) {
     const value = patch[key]
     if (value === undefined) continue
     if (value.trim() === '') delete next[key]

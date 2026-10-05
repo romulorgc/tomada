@@ -9,6 +9,7 @@ import { loadSettings, saveSettings } from '../../src/main/settings'
 import { createAppState } from '../../src/main/state'
 import { locateFfmpeg } from '../../src/main/ffmpeg'
 import { copyTree, FIX, useTmpDir } from '../helpers/env'
+import { createIdleRecordingService } from '../helpers/recording'
 
 const tmp = useTmpDir()
 
@@ -115,6 +116,71 @@ describe('AppState', () => {
     const { state } = await make()
     await expect(state.update({ projectsDir: 5 } as never)).rejects.toThrow()
   })
+
+  it('preferências da tela Gravar: padrões, gravadas no disco, lembradas na próxima abertura e sem apagar os outros ajustes', async () => {
+    const { state, file, dir } = await make()
+    expect(state.recordPrefs()).toMatchObject({ mode: 'screen-camera', fps: 30, systemAudio: false, hideCursor: true, setupDone: false, sourceId: null })
+    await state.update({ projectsDir: join(dir, 'p') })
+    const saved = await state.updateRecordPrefs({ mode: 'screen', fps: 60, cameraId: 'cam-7', micId: 'mic-3', systemAudio: true, setupDone: true })
+    expect(saved).toMatchObject({ mode: 'screen', fps: 60, cameraId: 'cam-7', micId: 'mic-3', systemAudio: true, setupDone: true })
+    const onDisk = JSON.parse(readFileSync(file, 'utf8')) as { projectsDir?: string; record?: Record<string, unknown> }
+    expect(onDisk.projectsDir).toBe(join(dir, 'p')) // não derrubou o ajuste vizinho
+    expect(onDisk.record).toMatchObject({ mode: 'screen', fps: 60, cameraId: 'cam-7' })
+
+    const again = await createAppState({ file, env: {}, logger: createMemoryLogger() })
+    expect(again.recordPrefs()).toEqual(saved)
+    expect(again.projectsRoot()).toBe(join(dir, 'p'))
+    // Trocar a pasta dos projetos depois também não derruba as preferências.
+    await again.update({ projectsDir: join(dir, 'q') })
+    expect(again.recordPrefs()).toEqual(saved)
+    expect((JSON.parse(readFileSync(file, 'utf8')) as { record?: unknown }).record).toBeDefined()
+    // Atualização parcial mescla com o que já estava.
+    const merged = await again.updateRecordPrefs({ fps: 30 })
+    expect(merged).toMatchObject({ mode: 'screen', fps: 30, cameraId: 'cam-7' })
+  })
+
+  it('mudanças quase juntas não se apagam: a tela Gravar manda um pedido por controle, sem esperar o anterior', async () => {
+    const { state, file, dir } = await make()
+    const novaPasta = join(dir, 'concorrente')
+    // Tudo disparado no mesmo tique, como a interface faz ao abrir (escolhe câmera, microfone, tela…).
+    const results = await Promise.all([
+      state.updateRecordPrefs({ mode: 'screen' }),
+      state.updateRecordPrefs({ fps: 60 }),
+      state.update({ projectsDir: novaPasta }),
+      state.updateRecordPrefs({ cameraId: 'cam-1' }),
+      state.updateRecordPrefs({ micId: 'mic-1' }),
+      state.updateRecordPrefs({ systemAudio: true }),
+      state.updateRecordPrefs({ sourceId: 'screen:1:0', sourceName: 'Tela 1' })
+    ])
+    expect(results).toHaveLength(7)
+    const expected = { mode: 'screen', fps: 60, cameraId: 'cam-1', micId: 'mic-1', systemAudio: true, sourceId: 'screen:1:0', sourceName: 'Tela 1' }
+    expect(state.recordPrefs()).toMatchObject(expected)
+    expect(state.settings().projectsDir).toBe(novaPasta)
+    const onDisk = JSON.parse(readFileSync(file, 'utf8')) as { projectsDir?: string; record?: Record<string, unknown> }
+    expect(onDisk.projectsDir).toBe(novaPasta)
+    expect(onDisk.record).toMatchObject(expected)
+    const again = await createAppState({ file, env: {}, logger: createMemoryLogger() })
+    expect(again.recordPrefs()).toMatchObject(expected)
+  })
+
+  it('um pedido recusado não trava a fila: o seguinte ainda é gravado', async () => {
+    const { state } = await make()
+    const [bad, good] = await Promise.allSettled([state.update({ projectsDir: 'relativa' }), state.updateRecordPrefs({ fps: 60 })])
+    expect(bad.status).toBe('rejected')
+    expect(good.status).toBe('fulfilled')
+    expect(state.recordPrefs().fps).toBe(60)
+  })
+
+  it('preferência estragada no disco (tipo errado, valor fora da lista) volta ao padrão campo a campo, sem derrubar o app', async () => {
+    const dir = tmp()
+    const file = join(dir, 'settings.json')
+    writeFileSync(file, JSON.stringify({ record: { mode: 'holograma', fps: 144, systemAudio: 'sim', cameraId: 'cam-ok', sourceId: 42, futuro: true } }))
+    const state = await createAppState({ file, env: {}, logger: createMemoryLogger() })
+    expect(state.recordPrefs()).toMatchObject({ mode: 'screen-camera', fps: 30, systemAudio: false, cameraId: 'cam-ok', sourceId: null })
+    writeFileSync(file, JSON.stringify({ record: 'lixo' }))
+    const lixo = await createAppState({ file, env: {}, logger: createMemoryLogger() })
+    expect(lixo.recordPrefs().mode).toBe('screen-camera')
+  })
 })
 
 describe('handlers de IPC (contrato completo, sem Electron)', () => {
@@ -131,7 +197,10 @@ describe('handlers de IPC (contrato completo, sem Electron)', () => {
       store,
       logger: log,
       pickFolder: async () => null,
-      pickFfmpeg: async () => null
+      pickFfmpeg: async () => null,
+      recording: createIdleRecordingService(),
+      finishCountdown: () => undefined,
+      clock: () => 0
     })
     return { handlers, state }
   }
@@ -177,7 +246,10 @@ describe('handlers de IPC (contrato completo, sem Electron)', () => {
       store,
       logger: log,
       pickFolder: async () => null,
-      pickFfmpeg: async () => null
+      pickFfmpeg: async () => null,
+      recording: createIdleRecordingService(),
+      finishCountdown: () => undefined,
+      clock: () => 0
     })
     const status = await handlers['ffmpeg:status']()
     expect(status.found).toBe(false)

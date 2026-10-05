@@ -6,7 +6,7 @@
  * - `TOMADA_PROJECTS_DIR` aponta para uma pasta temporária semeada com o projeto de exemplo.
  * - `TOMADA_USER_DATA_DIR` isola ajustes e logs do app real.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test'
@@ -25,6 +25,30 @@ export type LaunchOptions = {
   base?: string
   /** Variáveis de ambiente extras (ou sobrescritas) para o app. */
   env?: Record<string, string>
+  /** Argumentos extras para o Chromium/Electron. */
+  args?: string[]
+  /** Usa a câmera e o microfone REAIS desta máquina (padrão: dispositivos falsos). */
+  realDevices?: boolean
+}
+
+/**
+ * Câmera e microfone falsos do Chromium: o vídeo vem de `fake-camera.y4m` e o áudio de
+ * `voz.wav`. Os arquivos são copiados para uma pasta temporária SEM acento (o Chrome pode
+ * errar caminho com "ô").
+ */
+export function fakeDeviceArgs(): string[] {
+  const dir = join(tmpdir(), 'tomada-fakes')
+  mkdirSync(dir, { recursive: true })
+  const wav = join(dir, 'voz.wav')
+  const y4m = join(dir, 'fake-camera.y4m')
+  if (!existsSync(wav)) copyFileSync(join(FIXTURES_DIR, 'voz.wav'), wav)
+  if (!existsSync(y4m)) copyFileSync(join(FIXTURES_DIR, 'fake-camera.y4m'), y4m)
+  return [
+    '--use-fake-device-for-media-stream',
+    '--use-fake-ui-for-media-stream',
+    `--use-file-for-fake-audio-capture=${wav}`,
+    `--use-file-for-fake-video-capture=${y4m}`
+  ]
 }
 
 export type Session = {
@@ -59,15 +83,25 @@ export async function launchTomada(opts: LaunchOptions = {}): Promise<Session> {
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== 'ELECTRON_RUN_AS_NODE') env[k] = v
   env.TOMADA_PROJECTS_DIR = projects
   env.TOMADA_USER_DATA_DIR = userData
+  env.TOMADA_TEST_SILENT = '1' // nada de bipe nos alto-falantes durante os testes
   Object.assign(env, opts.env)
 
-  const app = await electron.launch({ args: ['.'], cwd: ROOT, env })
+  const args = ['.', ...(opts.realDevices ? [] : fakeDeviceArgs()), ...(opts.args ?? [])]
+  const app = await electron.launch({ args, cwd: ROOT, env })
   const page = await app.firstWindow()
 
   const problems: string[] = []
   page.on('pageerror', (err) => problems.push(`pageerror: ${err.message}`))
   page.on('console', (msg) => {
     if (msg.type() === 'error') problems.push(`console.error: ${msg.text()}`)
+  })
+
+  // Janelas auxiliares (barra, contagem, bolha) também não podem registrar erros.
+  app.on('window', (win) => {
+    win.on('pageerror', (err) => problems.push(`pageerror (${win.url().split('#')[1] ?? 'janela'}): ${err.message}`))
+    win.on('console', (msg) => {
+      if (msg.type() === 'error') problems.push(`console.error (${win.url().split('#')[1] ?? 'janela'}): ${msg.text()}`)
+    })
   })
 
   await page.waitForLoadState('domcontentloaded')
@@ -114,4 +148,23 @@ export async function videoState(page: Page, testId: string): Promise<{ currentT
     const v = el as HTMLVideoElement
     return { currentTime: v.currentTime, readyState: v.readyState, paused: v.paused, duration: v.duration, error: v.error ? `${v.error.code}: ${v.error.message}` : null }
   })
+}
+
+/** A página de uma janela auxiliar (`bar`, `countdown`, `bubble`), se já estiver aberta. */
+export function auxPage(app: ElectronApplication, name: 'bar' | 'countdown' | 'bubble'): Page | undefined {
+  return app.windows().find((w) => w.url().endsWith(`#${name}`))
+}
+
+/** Espera uma janela auxiliar abrir e carregar. */
+export async function waitForAux(app: ElectronApplication, name: 'bar' | 'countdown' | 'bubble', timeout = 20_000): Promise<Page> {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const p = auxPage(app, name)
+    if (p && !p.isClosed()) {
+      await p.waitForLoadState('domcontentloaded').catch(() => undefined)
+      return p
+    }
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error(`A janela "${name}" não abriu em ${timeout} ms.`)
 }

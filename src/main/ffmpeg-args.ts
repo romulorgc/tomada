@@ -19,7 +19,16 @@ export type NormalizeVideoArgs = {
   gopSeconds?: number
   /** Mantém a trilha de áudio (AAC 192 kbps). Padrão: não. */
   keepAudio?: boolean
+  /**
+   * Duração (ms) que o vídeo precisa ter: se a gravação termina antes (captura de tela só entrega
+   * quadro quando algo muda, então o RABO ESTÁTICO some), repete o último quadro até lá; o que
+   * passar disso é cortado. Sem isto o vídeo sai com a duração do último quadro recebido.
+   */
+  padToMs?: number
 }
+
+/** Quanto de rabo estático se aceita repetir (s). Acima disso o passo avisa em vez de esconder. */
+export const MAX_TAIL_PAD_SECONDS = 30
 
 function gopFrames(fps: number, gopSeconds: number): number {
   return Math.max(1, Math.round(fps * gopSeconds))
@@ -63,7 +72,14 @@ export function encoderArgs(encoder: VideoEncoder, gop: number): string[] {
 export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
   if (!(o.fps > 0)) throw new RangeError(`fps inválido: ${o.fps}`)
   const gop = gopFrames(o.fps, o.gopSeconds ?? 1)
-  const vf = ['setpts=PTS-STARTPTS', `fps=${o.fps}`, 'scale=trunc(iw/2)*2:trunc(ih/2)*2', 'setsar=1'].join(',')
+  const pad = o.padToMs !== undefined && Number.isFinite(o.padToMs) && o.padToMs > 0
+  const vf = [
+    'setpts=PTS-STARTPTS',
+    `fps=${o.fps}`,
+    ...(pad ? [`tpad=stop_mode=clone:stop_duration=${MAX_TAIL_PAD_SECONDS}`] : []),
+    'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+    'setsar=1'
+  ].join(',')
   const audio = o.keepAudio
     ? ['-map', '0:a:0?', '-c:a', 'aac', '-b:a', '192k', '-af', 'aresample=async=1:first_pts=0']
     : ['-an']
@@ -73,6 +89,7 @@ export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
     ...audio,
     '-vf', vf,
     '-fps_mode', 'cfr',
+    ...(pad ? ['-t', (o.padToMs! / 1000).toFixed(3)] : []),
     ...encoderArgs(o.encoder, gop),
     '-movflags', '+faststart',
     '-f', 'mp4',

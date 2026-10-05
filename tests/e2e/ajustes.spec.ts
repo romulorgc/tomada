@@ -81,7 +81,7 @@ test('segurança: contextIsolation ligado, sem Node no renderer, API única em w
   expect(info.require).toBe('undefined')
   expect(info.process).toBe('undefined')
   expect(info.buffer).toBe('undefined')
-  expect(info.api).toEqual(['app', 'ffmpeg', 'log', 'mediaUrl', 'projects', 'settings'])
+  expect(info.api).toEqual(['app', 'bar', 'bubble', 'countdown', 'ffmpeg', 'log', 'mediaUrl', 'on', 'processing', 'projects', 'record', 'settings'])
   expect(info.csp).toContain("default-src 'self'")
   expect(info.csp).toContain("script-src 'self'")
   expect(info.lang).toBe('pt-BR')

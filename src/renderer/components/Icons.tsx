@@ -125,3 +125,23 @@ export function BrandMark({ size = 22 }: { size?: number }) {
     </svg>
   )
 }
+
+export const StopIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+export const RestartIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 12a7 7 0 1 0 2.3-5.2" />
+    <path d="M4.5 4.5v4h4" />
+  </Svg>
+)
+
+export const MicIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="9" y="3.5" width="6" height="10" rx="3" />
+    <path d="M6 11.5a6 6 0 0 0 12 0M12 17.5V21" />
+  </Svg>
+)

@@ -92,6 +92,29 @@ describe('normalizeVideo: tela VFR → MP4 de fps constante', () => {
     })
   }
 
+  it('rabo estático: padToMs repete o último quadro até a duração da gravação (e corta o que passar)', async () => {
+    const inputProbe = await ff.probe(FIX.telaVfr)
+    const longer = Math.round(inputProbe.durationMs + 2500)
+    const padded = join(tmp(), 'tela-pad.mp4')
+    await normalizeVideo(ff, { input: FIX.telaVfr, output: padded, fps: 30, encoder: 'libx264', padToMs: longer })
+    const probe = await ff.probe(padded)
+    expect(Math.abs(probe.durationMs - longer)).toBeLessThanOrEqual(1000 / 30 + 1)
+    const p = await packets(padded)
+    expect(Math.abs(p.length - (longer / 1000) * 30)).toBeLessThanOrEqual(1)
+    for (let i = 1; i < p.length; i++) expect(Math.abs(p[i]!.pts - p[i - 1]!.pts - 1 / 30)).toBeLessThan(0.0015) // continua CFR
+
+    // Mais curto que a entrada: corta (a gravação terminou ali).
+    const shorter = Math.round(inputProbe.durationMs - 1000)
+    const cut = join(tmp(), 'tela-corte.mp4')
+    await normalizeVideo(ff, { input: FIX.telaVfr, output: cut, fps: 30, encoder: 'libx264', padToMs: shorter })
+    expect(Math.abs((await ff.probe(cut)).durationMs - shorter)).toBeLessThanOrEqual(1000 / 30 + 1)
+
+    // Sem padToMs nada muda: a duração é a da entrada.
+    const plain = join(tmp(), 'tela-sem-pad.mp4')
+    await normalizeVideo(ff, { input: FIX.telaVfr, output: plain, fps: 30, encoder: 'libx264' })
+    expect(Math.abs((await ff.probe(plain)).durationMs - inputProbe.durationMs)).toBeLessThanOrEqual(1000 / 30 + 1)
+  })
+
   it('"auto" escolhe NVENC quando ele funciona aqui, senão libx264, e a saída é igualmente válida', async () => {
     const expected = (await encoderWorks(ff, 'h264_nvenc')) ? 'h264_nvenc' : 'libx264'
     expect(await pickVideoEncoder(ff, 'auto')).toBe(expected)

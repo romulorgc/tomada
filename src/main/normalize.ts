@@ -49,6 +49,8 @@ export type NormalizeOptions = {
   keepAudio?: boolean
   /** Duração esperada (ms), só para calcular a fração do progresso. */
   durationMs?: number
+  /** Completa o rabo estático repetindo o último quadro até esta duração (ver `NormalizeVideoArgs.padToMs`). */
+  padToMs?: number
   /** Progresso 0..1 (só chamado quando `durationMs` é informado). */
   onProgress?: (fraction: number, raw: FfmpegProgress) => void
   /** Aviso de bastidor (ex.: NVENC falhou e caiu para libx264). */
@@ -77,7 +79,8 @@ export async function normalizeVideo(ff: Ffmpeg, o: NormalizeOptions): Promise<N
       output: partial,
       fps: o.fps,
       encoder: enc,
-      ...(o.keepAudio ? { keepAudio: true } : {})
+      ...(o.keepAudio ? { keepAudio: true } : {}),
+      ...(o.padToMs ? { padToMs: o.padToMs } : {})
     })
     await ff.run(args, {
       ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),

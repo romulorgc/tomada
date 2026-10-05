@@ -6,7 +6,12 @@ import { create } from 'zustand'
 import type { ProjectSummary } from '@shared/types'
 import { t } from './i18n/pt-BR'
 
-export type View = { name: 'library' } | { name: 'project'; id: string } | { name: 'record' } | { name: 'settings' }
+export type View =
+  | { name: 'library' }
+  | { name: 'project'; id: string }
+  | { name: 'record' }
+  | { name: 'processing' }
+  | { name: 'settings' }
 
 export type Notice = {
   id: number

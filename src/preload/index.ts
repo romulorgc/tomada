@@ -4,7 +4,15 @@
  * contrato em `@shared/ipc`; erro do main chega como `Error` com a mensagem limpa.
  */
 import { contextBridge, ipcRenderer } from 'electron'
-import { LOG_CHANNEL, type IpcChannel, type IpcContract, type IpcEnvelope, type TomadaApi } from '@shared/ipc'
+import {
+  LEVEL_CHANNEL,
+  LOG_CHANNEL,
+  type IpcChannel,
+  type IpcContract,
+  type IpcEnvelope,
+  type IpcEvents,
+  type TomadaApi
+} from '@shared/ipc'
 import { mediaUrl } from '@shared/media-url'
 
 async function invoke<K extends IpcChannel>(channel: K, ...args: IpcContract[K]['args']): Promise<IpcContract[K]['result']> {
@@ -31,6 +39,34 @@ const api: TomadaApi = {
   ffmpeg: {
     status: () => invoke('ffmpeg:status'),
     test: () => invoke('ffmpeg:test')
+  },
+  record: {
+    sources: () => invoke('record:sources'),
+    getPrefs: () => invoke('record:prefs-get'),
+    setPrefs: (patch) => invoke('record:prefs-set', patch),
+    clock: () => invoke('record:clock'),
+    prepare: (request) => invoke('record:prepare', request),
+    runCountdown: () => invoke('record:countdown'),
+    go: () => invoke('record:go'),
+    started: (info) => invoke('record:started', info),
+    chunk: (kind, data) => invoke('record:chunk', kind, data),
+    pause: (at) => invoke('record:pause', at),
+    resume: (at) => invoke('record:resume', at),
+    stop: (info) => invoke('record:stop', info),
+    abort: (reason) => invoke('record:abort', reason),
+    status: () => invoke('record:status'),
+    level: (level) => ipcRenderer.send(LEVEL_CHANNEL, level)
+  },
+  processing: { retry: (sessionId) => invoke('process:retry', sessionId) },
+  bar: { state: () => invoke('bar:state'), action: (action) => invoke('bar:action', action) },
+  countdown: { begin: () => invoke('countdown:begin'), finish: (completed) => invoke('countdown:finish', completed) },
+  bubble: { config: () => invoke('bubble:config') },
+  on: <K extends keyof IpcEvents>(channel: K, listener: (payload: IpcEvents[K]) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: IpcEvents[K]): void => listener(payload)
+    ipcRenderer.on(channel, wrapped)
+    return () => {
+      ipcRenderer.removeListener(channel, wrapped)
+    }
   },
   mediaUrl: (projectId, relPath, version) => mediaUrl(projectId, relPath, version),
   log: (entry) => ipcRenderer.send(LOG_CHANNEL, entry)

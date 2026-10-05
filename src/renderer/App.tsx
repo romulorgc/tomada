@@ -1,9 +1,11 @@
-import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { Component, useEffect, type ErrorInfo, type ReactNode } from 'react'
 import { ErrorPanel, Toasts } from './components/Feedback'
 import { Sidebar } from './components/Sidebar'
 import { t } from './i18n/pt-BR'
+import { useRecorder } from './recording/controller'
 import { useApp } from './store'
 import { Library } from './views/Library'
+import { Processing } from './views/Processing'
 import { ProjectView } from './views/ProjectView'
 import { Record } from './views/Record'
 import { Settings } from './views/Settings'
@@ -37,6 +39,8 @@ function CurrentView() {
       return <ProjectView key={view.id} id={view.id} />
     case 'record':
       return <Record />
+    case 'processing':
+      return <Processing />
     case 'settings':
       return <Settings />
   }
@@ -44,6 +48,8 @@ function CurrentView() {
 
 export function App() {
   const viewName = useApp((s) => s.view.name)
+  // Comandos da barra/atalhos, avisos e progresso do processamento chegam do processo principal.
+  useEffect(() => useRecorder.getState().attach(), [])
   return (
     <div className="flex h-full">
       <Sidebar />

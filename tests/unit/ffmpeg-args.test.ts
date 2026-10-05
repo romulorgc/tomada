@@ -4,7 +4,8 @@ import {
   buildExtractAudioArgs,
   buildNormalizeVideoArgs,
   buildThumbnailArgs,
-  encoderArgs
+  encoderArgs,
+  MAX_TAIL_PAD_SECONDS
 } from '../../src/main/ffmpeg-args'
 
 /** Valor que vem logo depois de uma flag. */
@@ -62,6 +63,22 @@ describe('buildNormalizeVideoArgs', () => {
     expect(after(args, '-g')).toBe('30')
     expect(after(args, '-forced-idr')).toBe('1')
     expect(args).not.toContain('libx264')
+  })
+
+  it('padToMs: repete o último quadro (tpad) e corta na duração pedida; sem ele nada disso entra', () => {
+    const plain = buildNormalizeVideoArgs(base)
+    expect(after(plain, '-vf')).not.toContain('tpad')
+    expect(plain).not.toContain('-t')
+
+    const args = buildNormalizeVideoArgs({ ...base, padToMs: 12_345.6 })
+    const vf = after(args, '-vf')!.split(',')
+    expect(vf).toContain(`tpad=stop_mode=clone:stop_duration=${MAX_TAIL_PAD_SECONDS}`)
+    expect(vf.indexOf('fps=30')).toBeLessThan(vf.findIndex((x) => x.startsWith('tpad'))) // pad depois do fps constante
+    expect(after(args, '-t')).toBe('12.346')
+    expect(args.indexOf('-t')).toBeLessThan(args.length - 1) // opção de SAÍDA, antes do arquivo
+    expect(args[args.length - 1]).toBe('out.mp4')
+
+    for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) expect(buildNormalizeVideoArgs({ ...base, padToMs: bad })).not.toContain('-t')
   })
 
   it('fps inválido é erro, não argumento quebrado', () => {

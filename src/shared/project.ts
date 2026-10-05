@@ -156,7 +156,10 @@ const clipSchema = z.looseObject({
 const captureSchema = z.looseObject({
   kind: z.enum(['screen', 'window']),
   boundsPx: rectSchema,
-  scale: z.number()
+  scale: z.number(),
+  frameSize: z.looseObject({ w: z.number(), h: z.number() }).optional(),
+  cursorHidden: z.boolean().optional(),
+  sourceName: z.string().optional()
 })
 
 export const projectSchema = z.looseObject({

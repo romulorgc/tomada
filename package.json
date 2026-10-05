@@ -15,7 +15,11 @@
     "typecheck:e2e": "tsc --noEmit -p tsconfig.e2e.json",
     "test": "vitest run",
     "test:e2e": "npm run build && node scripts/limpo.mjs playwright test",
-    "fixtures": "node scripts/fixtures.mjs"
+    "fixtures": "node scripts/fixtures.mjs",
+    "test:real": "npm run build && node scripts/limpo.mjs playwright test -c playwright.real.config.ts",
+    "contact-sheet": "node scripts/contact-sheet.mjs",
+    "medir:codec": "node scripts/limpo.mjs electron scripts/medir-codec.cjs",
+    "medir:cursor": "node scripts/limpo.mjs electron scripts/cursor-viabilidade.cjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

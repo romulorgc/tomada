@@ -1,17 +1,23 @@
 /**
- * Processo principal do Tomada: janela, protocolo de mídia, IPC.
+ * Processo principal do Tomada: janela, protocolo de mídia, IPC, gravação.
  * A lógica mora nos módulos ao lado (testáveis sem Electron); aqui só se liga tudo.
  */
+import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, session, shell } from 'electron'
-import type { AppInfo } from '@shared/ipc'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
+import { LEVEL_CHANNEL, type AppInfo, type IpcEvents } from '@shared/ipc'
+import { createSourceProvider } from './capture-sources'
+import { createFfmpeg, locateFfmpeg } from './ffmpeg'
 import { createHandlers } from './handlers'
 import { registerIpc } from './ipc'
 import { createLogger } from './logger'
 import { handleMediaRequest, MEDIA_SCHEME } from './media-protocol'
-import { ENV_USER_DATA_DIR, logsDir, settingsFile } from './paths'
+import { ENV_PROJECTS_DIR, ENV_USER_DATA_DIR, logsDir, settingsFile } from './paths'
 import { createProjectStore } from './projects'
+import { createRecordingService } from './recording-service'
 import { createAppState } from './state'
+import { createTracker } from './tracker'
+import { createAuxWindows } from './windows'
 
 // Testes isolam ajustes e logs do app real. Precisa vir antes de qualquer uso de userData.
 if (process.env[ENV_USER_DATA_DIR]) app.setPath('userData', process.env[ENV_USER_DATA_DIR])
@@ -31,6 +37,9 @@ function isAppUrl(url: string): boolean {
   return url.startsWith('file://') || (rendererUrl !== undefined && url.startsWith(rendererUrl))
 }
 
+/** Em modo de teste (pasta de projetos definida por variável), apagar remove direto do disco. */
+const testMode = Boolean(process.env[ENV_PROJECTS_DIR])
+
 async function main(): Promise<void> {
   await app.whenReady()
   nativeTheme.themeSource = 'dark'
@@ -45,10 +54,15 @@ async function main(): Promise<void> {
   app.on('child-process-gone', (_e, details) => logger.error(`Processo filho caiu: ${details.type} (${details.reason})`, details))
 
   const state = await createAppState({ file: settingsFile(userData), logger })
+
+  // Lixeira do Windows para o usuário; em teste, direto do disco (os testes não podem encher a Lixeira real).
+  const trash = (path: string): Promise<void> =>
+    testMode ? rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) : shell.trashItem(path)
+
   const store = createProjectStore({
     root: () => state.projectsRoot(),
     logger,
-    trash: (path) => shell.trashItem(path),
+    trash,
     openFolder: async (path) => {
       const error = await shell.openPath(path)
       if (error) throw new Error(`Não consegui abrir a pasta: ${error}`)
@@ -58,9 +72,12 @@ async function main(): Promise<void> {
   // Protocolo de mídia (com Range), restrito à raiz dos projetos.
   protocol.handle(MEDIA_SCHEME, (request) => handleMediaRequest(request, state.projectsRoot()))
 
-  // Nada de câmera/microfone/etc. até a M1b pedir (e então só o que ela precisar).
-  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
-  session.defaultSession.setPermissionCheckHandler(() => false)
+  // Câmera, microfone e captura de tela: só para as páginas do próprio app.
+  const allowed = (permission: string): boolean => permission === 'media' || permission === 'display-capture'
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    callback(allowed(permission) && isAppUrl(details.requestingUrl || wc.getURL()))
+  })
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => allowed(permission) && isAppUrl(origin))
 
   app.on('web-contents-created', (_event, contents) => {
     contents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -79,12 +96,66 @@ async function main(): Promise<void> {
   }
 
   let mainWindow: BrowserWindow | null = null
+  const emit = <K extends keyof IpcEvents>(channel: K, payload: IpcEvents[K]): void => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
+  }
+
+  // --- Gravação -----------------------------------------------------------------
+  const windows = createAuxWindows({
+    preload: join(__dirname, '../preload/index.js'),
+    rendererUrl,
+    rendererFile: join(__dirname, '../renderer/index.html'),
+    getMain: () => mainWindow,
+    logger
+  })
+  const sources = createSourceProvider({ logger, ownHwnds: () => windows.ownHwnds(), env: process.env })
+  sources.installDisplayMediaHandler(session.defaultSession)
+
+  const clock = (): number => performance.timeOrigin + performance.now()
+  const recording = createRecordingService({
+    logger,
+    projectsRoot: () => state.projectsRoot(),
+    ffmpeg: () => {
+      const paths = locateFfmpeg(state.ffmpegLocateOptions())
+      return paths ? createFfmpeg(paths) : null
+    },
+    sources,
+    windows,
+    createTracker: (config) =>
+      createTracker(config, {
+        workerPath: join(__dirname, 'tracker-worker.js'),
+        logger,
+        onWindowGone: () => {
+          emit('record:notice', { kind: 'info', text: 'A janela que estava sendo gravada foi fechada. A gravação foi salva até esse ponto.' })
+          recording.command('stop', 'window')
+        }
+      }),
+    emit,
+    trash,
+    clock,
+    now: () => new Date(),
+    env: process.env
+  })
+  // Nível do microfone (só de ida) → mini medidor da barra.
+  ipcMain.on(LEVEL_CHANNEL, (_event, level: unknown) => {
+    if (typeof level === 'number' && Number.isFinite(level)) recording.level(level)
+  })
+  let quitting = false
+  app.on('before-quit', () => {
+    quitting = true
+    void recording.shutdown()
+    windows.closeAll()
+  })
+
   registerIpc(
     createHandlers({
       info,
       state,
       store,
       logger,
+      recording,
+      finishCountdown: (completed) => windows.finishCountdown(completed),
+      clock,
       pickFolder: async (defaultPath) => {
         const options = {
           title: 'Escolha a pasta dos projetos',
@@ -122,13 +193,24 @@ async function main(): Promise<void> {
         nodeIntegration: false,
         sandbox: true,
         spellcheck: false,
-        autoplayPolicy: 'no-user-gesture-required'
+        autoplayPolicy: 'no-user-gesture-required',
+        // A janela fica minimizada durante a gravação e é ELA que roda os MediaRecorder:
+        // sem isto o Chromium freia timers e rAF de página oculta.
+        backgroundThrottling: false
       }
     })
     win.once('ready-to-show', () => win.show())
     win.webContents.on('did-fail-load', (_e, code, description, url) =>
       logger.error(`A interface não carregou (${code}: ${description}) em ${url}`)
     )
+    // Fechar a janela no meio de uma gravação não pode perdê-la: vira "parar e salvar".
+    win.on('close', (event) => {
+      if (recording.recording && !quitting) {
+        event.preventDefault()
+        logger.warn('Janela fechada durante a gravação; parando e salvando.')
+        recording.command('stop', 'window')
+      }
+    })
     win.on('closed', () => {
       if (mainWindow === win) mainWindow = null
     })

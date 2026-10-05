@@ -301,15 +301,14 @@ test('pasta quebrada, pasta sem projeto e arquivo solto não derrubam a bibliote
   expect(log).toContain('Pasta ignorada na biblioteca (pasta-sem-projeto)')
 })
 
-test('a tela Gravar é provisória e avisa que a gravação chega na próxima etapa', async () => {
+test('a tela Gravar oferece fontes, câmera e microfone, e volta para a biblioteca', async () => {
   s = await launchTomada()
   const { page } = s
   await page.getByTestId('nav-record').click()
   const view = page.getByTestId('record-view')
   await expect(view).toBeVisible()
-  await expect(view).toContainText('A gravação chega na próxima etapa')
   await expect(page.getByTestId('nav-record')).toHaveAttribute('aria-current', 'page')
-  await shot(page, '08-gravar')
-  await page.getByTestId('record-to-library').click()
+  await expect(page.getByTestId('record-start')).toBeVisible()
+  await page.getByTestId('nav-library').click()
   await expect(page.getByTestId('project-card')).toHaveCount(1)
 })

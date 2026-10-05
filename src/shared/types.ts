@@ -126,10 +126,24 @@ export type Clip = {
 
 export type CaptureInfo = {
   kind: 'screen' | 'window'
-  /** Retângulo capturado em pixels FÍSICOS do Windows. */
+  /**
+   * Retângulo capturado em pixels FÍSICOS do Windows (origem na tela virtual). Para
+   * janela, é a área que o quadro realmente mostra (a área de cliente, ver
+   * `chooseCaptureRect`), não o retângulo da moldura.
+   */
   boundsPx: Rect
   /** Fator de escala do monitor (1, 1.25, 1.5…). */
   scale: number
+  /** Tamanho REAL do quadro capturado (o do MediaStream), em pixels. */
+  frameSize?: Size
+  /**
+   * true quando o cursor do sistema NÃO aparece no vídeo (captura de janela: o Chromium
+   * não o desenha). Então o editor precisa desenhar o cursor sintético a partir do
+   * `cursor.jsonl`. false: o cursor real está no vídeo (captura de tela).
+   */
+  cursorHidden?: boolean
+  /** Nome da fonte (título da janela ou "Tela 1"), só para exibir. */
+  sourceName?: string
 }
 
 export type ProjectMeta = {
@@ -147,6 +161,12 @@ export type Project = {
   title: string
   createdAt: string
   sources: { screen?: Src; camera?: Src; voice?: Src; system?: Src }
+  /**
+   * Em que instante do relógio da gravação (o `t` dos eventos, ms desde o `t0`) o tempo 0
+   * de cada arquivo de mídia acontece: `t = tempoNoArquivo + offset`. ≥ 0; o gravador que
+   * disparou primeiro tem 0. Vem da diferença entre os dois `start` do MediaRecorder.
+   * `voice` e `system` seguem o arquivo de onde foram extraídos (câmera e tela).
+   */
   sync: { screenOffsetMs: number; cameraOffsetMs: number }
   capture: CaptureInfo
   cuts: Cut[]
@@ -190,7 +210,12 @@ export type ClickEvent = {
   button: MouseButton
   /** Instante em que o botão subiu (ms). */
   upT?: number
+  /** true quando o clique foi FORA da área capturada (x/y já com clamp). */
+  out?: boolean
 }
+
+/** Retângulo da janela capturada num instante (`events/window.jsonl`, só quando muda). */
+export type WindowRectSample = { t: number; x: number; y: number; w: number; h: number }
 
 /** "Houve digitação". NUNCA a tecla (privacidade). */
 export type KeyEvent = { t: number }

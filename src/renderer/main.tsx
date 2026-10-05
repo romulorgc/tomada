@@ -1,6 +1,9 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { Bar } from './overlay/Bar'
+import { Bubble } from './overlay/Bubble'
+import { Countdown } from './overlay/Countdown'
 import './styles.css'
 
 // Nenhuma falha silenciosa: o que escapar da interface vai para o arquivo de log.
@@ -12,10 +15,12 @@ window.addEventListener('unhandledrejection', (e) => {
   window.tomada.log({ level: 'error', message: 'Promessa rejeitada sem tratamento', detail: reason })
 })
 
+// A mesma interface serve às janelas auxiliares da gravação (barra, contagem, bolha): o main as abre com #nome.
+const AUX = { bar: Bar, countdown: Countdown, bubble: Bubble } as const
+const hash = window.location.hash.replace(/^#/, '')
+const Aux = hash in AUX ? AUX[hash as keyof typeof AUX] : null
+if (Aux) document.documentElement.dataset.aux = hash
+
 const root = document.getElementById('root')
 if (!root) throw new Error('Elemento #root não encontrado em index.html')
-createRoot(root).render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-)
+createRoot(root).render(<StrictMode>{Aux ? <Aux /> : <App />}</StrictMode>)

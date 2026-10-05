@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Tomada-Alvo</title>
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; user-select: none; font-family: 'Segoe UI', sans-serif; }
+      body { background: #222222; }
+      #counter { position: absolute; top: 18px; left: 0; right: 0; text-align: center; font-size: 150px; font-weight: 800; color: #ffffff; line-height: 1; }
+      .btn { position: absolute; width: 220px; height: 130px; border: 0; margin: 0; padding: 0; cursor: default;
+             font-size: 28px; font-weight: 700; color: #000000; text-align: left; vertical-align: top; }
+      .btn span { position: absolute; left: 10px; top: 6px; }
+    </style>
+  </head>
+  <body>
+    <div id="counter">0</div>
+    <!-- Centros em px CSS da área de conteúdo (window.innerWidth × innerHeight): A(170,330) B(450,330) C(730,330) D(450,500) -->
+    <button class="btn" id="A" style="left: 60px; top: 265px; background: #ff00ff"><span>A</span></button>
+    <button class="btn" id="B" style="left: 340px; top: 265px; background: #00ffff"><span>B</span></button>
+    <button class="btn" id="C" style="left: 620px; top: 265px; background: #ffff00"><span>C</span></button>
+    <button class="btn" id="D" style="left: 340px; top: 435px; background: #80ff00"><span>D</span></button>
+    <script>
+      const PALETTE = ['#d32f2f', '#1976d2', '#388e3c', '#f57c00', '#7b1fa2', '#00796b', '#5d4037', '#c2185b']
+      window.__clicks = []
+      let n = 0
+      for (const btn of document.querySelectorAll('.btn')) {
+        btn.addEventListener('mousedown', () => {
+          n++
+          const color = PALETTE[(n - 1) % PALETTE.length]
+          document.body.style.background = color
+          document.getElementById('counter').textContent = String(n)
+          window.__clicks.push({ n, id: btn.id, color, at: performance.timeOrigin + performance.now() })
+        })
+      }
+      window.__layout = () => {
+        const out = {}
+        for (const btn of document.querySelectorAll('.btn')) {
+          const r = btn.getBoundingClientRect()
+          out[btn.id] = { cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: r.width, h: r.height }
+        }
+        return { dpr: window.devicePixelRatio, viewport: { w: window.innerWidth, h: window.innerHeight }, buttons: out, palette: PALETTE }
+      }
+    </script>
+  </body>
+</html>

@@ -15,8 +15,8 @@ export function Sidebar() {
   const view = useApp((s) => s.view)
   const go = useApp((s) => s.go)
 
-  // "Projeto aberto" ainda pertence à Biblioteca na navegação.
-  const section: View['name'] = view.name === 'project' ? 'library' : view.name
+  // "Projeto aberto" pertence à Biblioteca; "processando" pertence a Gravar.
+  const section: View['name'] = view.name === 'project' ? 'library' : view.name === 'processing' ? 'record' : view.name
 
   const item = (n: NavItem) => {
     const active = section === n.name

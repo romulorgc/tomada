@@ -18,5 +18,5 @@
     "baseUrl": ".",
     "paths": { "@shared/*": ["src/shared/*"] }
   },
-  "include": ["tests/e2e/**/*.ts", "tests/helpers/fs.ts", "tests/setup/fixtures-e2e.ts", "src/renderer/env.d.ts", "src/shared/**/*"]
+  "include": ["tests/e2e/**/*.ts", "tests/real/**/*.ts", "tests/helpers/fs.ts", "tests/setup/fixtures-e2e.ts", "src/renderer/env.d.ts", "src/shared/**/*"]
 }
