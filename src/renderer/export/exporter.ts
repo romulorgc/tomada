@@ -35,7 +35,9 @@ import {
   type RenderCache
 } from '@shared/render'
 import { deriveProject, evaluateScene, prepareEvents, type Derived, type FormatSpec } from '@shared/scene'
-import type { Project } from '@shared/types'
+import type { Project, Word } from '@shared/types'
+import { ensureVertical, projectForFormat } from '@shared/vertical'
+import { captionFontsLoaded, ensureCaptionFonts } from '../fonts'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -112,16 +114,23 @@ type Context = {
   close(): void
 }
 
-async function createContext(job: Pick<ExportJob, 'projectId' | 'project' | 'screenUrl' | 'cameraUrl' | 'eventUrls'>, format: FormatSpec): Promise<Context> {
-  const { project } = job
+async function createContext(job: Pick<ExportJob, 'projectId' | 'project' | 'screenUrl' | 'cameraUrl' | 'eventUrls'> & { words?: Word[] | null }, format: FormatSpec): Promise<Context> {
   const [cursor, clicks, keys] = await Promise.all([
     fetchText(job.eventUrls.cursor),
     fetchText(job.eventUrls.clicks),
     fetchText(job.eventUrls.keys)
   ])
   const events = eventsFromText({ cursor, clicks, keys })
-  const durationMs = Math.max(project.sources.screen?.durationMs ?? 0, project.sources.camera?.durationMs ?? 0, project.sources.voice?.durationMs ?? 0, project.sources.system?.durationMs ?? 0)
-  const derived = deriveProject(project, prepareEvents(events, durationMs), format)
+  const doc = job.project
+  const durationMs = Math.max(doc.sources.screen?.durationMs ?? 0, doc.sources.camera?.durationMs ?? 0, doc.sources.voice?.durationMs ?? 0, doc.sources.system?.durationMs ?? 0)
+  const data = prepareEvents(events, durationMs)
+  // As fontes das legendas ANTES do primeiro quadro: o canvas não espera fonte nem corrige depois (falha aqui = erro visível)
+  await ensureCaptionFonts()
+  // O vertical nunca editado ganha os zooms (Intenso) e os layouts por atividade, como o editor faria ao entrar no 9:16;
+  // depois, a visão do formato: é sobre ela que a cena é calculada (a mesma coisa que a prévia faz)
+  const edited = format.kind === 'vertical' ? ensureVertical(doc, data, { durationMs, words: job.words, hasCursorEvents: Boolean(job.eventUrls.cursor) }) : doc
+  const project = projectForFormat(edited, format.kind)
+  const derived = deriveProject(project, data, format, job.words)
 
   const canvas = new OffscreenCanvas(format.w, format.h)
   const raw = canvas.getContext('2d', { alpha: false })
@@ -188,7 +197,7 @@ async function pickAcceleration(codec: string, width: number, height: number, fr
  * qual encoder foi usado.
  */
 export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise<{ frames: number; encoder: string; timing: string }> {
-  const format: FormatSpec = { kind: 'horizontal', w: job.width, h: job.height }
+  const format: FormatSpec = { kind: job.format ?? 'horizontal', w: job.width, h: job.height }
   const c = await createContext(job, format)
   const fps = job.fps
   try {
@@ -310,6 +319,8 @@ export type StillRequest = {
   projectId: string
   project: Project
   format: FormatSpec
+  /** As palavras da transcrição (legendas), se a cena as usa. */
+  words?: Word[] | null
   /** Instantes de ORIGEM (ms). */
   times: number[]
   screenUrl: string | null
@@ -402,13 +413,13 @@ export function measureShadowCost(width = 1920, height = 1080, frames = 120): { 
 declare global {
   interface Window {
     /** Ganchos de teste: disponíveis nas janelas `#export:*` e `#export-lab`. */
-    tomadaExport?: { renderStills: typeof renderStills; measureShadowCost: typeof measureShadowCost }
+    tomadaExport?: { renderStills: typeof renderStills; measureShadowCost: typeof measureShadowCost; captionFontsLoaded: typeof captionFontsLoaded; ensureCaptionFonts: typeof ensureCaptionFonts }
   }
 }
 
 /** A janela `#export:<id>`: pede o job ao main, renderiza e avisa. Nunca deixa a falha calar. */
 export async function runExporterWindow(exportId: string): Promise<void> {
-  window.tomadaExport = { renderStills, measureShadowCost }
+  window.tomadaExport = { renderStills, measureShadowCost, captionFontsLoaded, ensureCaptionFonts }
   const api = window.tomada.exportWorker
   const controller = new AbortController()
   try {
@@ -427,5 +438,5 @@ export async function runExporterWindow(exportId: string): Promise<void> {
 
 /** A janela `#export-lab`: só expõe os ganchos de teste (nada é exportado). */
 export function runExportLab(): void {
-  window.tomadaExport = { renderStills, measureShadowCost }
+  window.tomadaExport = { renderStills, measureShadowCost, captionFontsLoaded, ensureCaptionFonts }
 }

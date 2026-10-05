@@ -19,6 +19,8 @@ export const TRUE_PEAK_DB = -1
 export const SYSTEM_GAIN_DB = -9
 export const OUTPUT_SAMPLE_RATE = 48_000
 export const OUTPUT_AUDIO_BITRATE = '384k'
+/** Vertical (TikTok, Reels, Shorts): AAC 192 kbps. */
+export const VERTICAL_AUDIO_BITRATE = '192k'
 
 /** Medição do primeiro passe do `loudnorm` (`print_format=json`). */
 export type LoudnormMeasure = {
@@ -262,8 +264,8 @@ export function buildMeasureArgs(opts: { inputs: string[]; graphFile: string }):
   return ['-loglevel', 'info', ...inputs.flatMap((f) => ['-i', f]), '-/filter_complex', graphFile, '-map', '[aout]', '-f', 'null', '-']
 }
 
-/** Argumentos do ffmpeg para o passe final: AAC 48 kHz 384 kbps. */
-export function buildAudioArgs(opts: { inputs: string[]; graphFile: string; output: string }): string[] {
+/** Argumentos do ffmpeg para o passe final: AAC 48 kHz, 384 kbps (YouTube) ou o `bitrate` pedido (vertical: 192k). */
+export function buildAudioArgs(opts: { inputs: string[]; graphFile: string; output: string; bitrate?: string }): string[] {
   const inputs = opts.inputs.map((f) => assertFfmpegPath(f, 'entrada de áudio'))
   const graphFile = assertFfmpegPath(opts.graphFile, 'grafo de filtros')
   const output = assertFfmpegPath(opts.output, 'saída de áudio')
@@ -276,7 +278,7 @@ export function buildAudioArgs(opts: { inputs: string[]; graphFile: string; outp
     '-c:a',
     'aac',
     '-b:a',
-    OUTPUT_AUDIO_BITRATE,
+    opts.bitrate ?? OUTPUT_AUDIO_BITRATE,
     '-ar',
     String(OUTPUT_SAMPLE_RATE),
     output
@@ -284,7 +286,7 @@ export function buildAudioArgs(opts: { inputs: string[]; graphFile: string; outp
 }
 
 /** Trilha muda (sem microfone nem som do sistema): `anullsrc` pela duração de saída. */
-export function buildSilentAudioArgs(opts: { durationMs: number; output: string }): string[] {
+export function buildSilentAudioArgs(opts: { durationMs: number; output: string; bitrate?: string }): string[] {
   const output = assertFfmpegPath(opts.output, 'saída de áudio')
   return [
     '-f',
@@ -296,7 +298,7 @@ export function buildSilentAudioArgs(opts: { durationMs: number; output: string 
     '-c:a',
     'aac',
     '-b:a',
-    OUTPUT_AUDIO_BITRATE,
+    opts.bitrate ?? OUTPUT_AUDIO_BITRATE,
     '-ar',
     String(OUTPUT_SAMPLE_RATE),
     output

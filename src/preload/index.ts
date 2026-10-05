@@ -66,6 +66,7 @@ const api: TomadaApi = {
     status: () => invoke('export:status'),
     pickDir: (defaultPath) => invoke('export:pick-dir', defaultPath)
   },
+  captions: { export: (projectId, kind) => invoke('captions:export', projectId, kind) },
   files: { open: (path) => invoke('files:open', path), reveal: (path) => invoke('files:reveal', path) },
   clipboard: { write: (text) => invoke('clipboard:write', text) },
   derived: {

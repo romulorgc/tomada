@@ -139,3 +139,42 @@ describe('plano da exportação', () => {
     expect(sampleSynthetic(shown, 4000).alpha).toBeGreaterThan(0.3)
   })
 })
+
+describe('exportação vertical (M4a): 1080×1920, 10/12 Mbps, nome próprio', () => {
+  it('o vertical é sempre 1080×1920, qualquer que seja a resolução pedida', () => {
+    for (const resolution of ['1080p', '1440p', '2160p'] as const) {
+      expect(exportFormat({ resolution, fps: 30, format: 'vertical' })).toEqual({ kind: 'vertical', w: 1080, h: 1920 })
+    }
+    expect(exportFormat({ resolution: '1440p', fps: 30, format: 'horizontal' })).toEqual({ kind: 'horizontal', w: 2560, h: 1440 })
+  })
+
+  it('taxa de bits do vertical: 10 Mbps a 30 qps e 12 a 60, em qualquer resolução', () => {
+    for (const resolution of ['1080p', '1440p', '2160p'] as const) {
+      expect(exportBitrate(resolution, 30, 'vertical')).toBe(10_000_000)
+      expect(exportBitrate(resolution, 60, 'vertical')).toBe(12_000_000)
+    }
+    expect(exportBitrate('1080p', 30, 'horizontal')).toBe(8_000_000) // o 16:9 não mudou
+    expect(exportBitrate('1080p', 30)).toBe(8_000_000)
+  })
+
+  it('o nível do H.264 do 1080×1920 a 30 e a 60 qps cabe no nível 4.0 e 4.2 (mesmo número de macroblocos do 16:9)', () => {
+    expect(avcLevelIdc(1080, 1920, 30)).toBe(0x28)
+    expect(avcLevelIdc(1080, 1920, 60)).toBe(0x2a)
+    expect(avcCodecString(1080, 1920, 30)).toMatch(/^avc1\.64/)
+  })
+
+  it('o nome padrão do vertical é "<título> - Vertical" (60 qps: " 60")', () => {
+    expect(defaultExportStem('Meu vídeo', { resolution: '1080p', fps: 30, format: 'vertical' })).toBe('Meu vídeo - Vertical')
+    expect(defaultExportStem('Meu vídeo', { resolution: '1080p', fps: 60, format: 'vertical' })).toBe('Meu vídeo - Vertical 60')
+    expect(exportFileName('Meu vídeo', { resolution: '1080p', fps: 30, format: 'vertical' })).toBe('Meu vídeo - Vertical.mp4')
+    expect(exportFileName('Meu vídeo', { resolution: '1080p', fps: 30 })).toBe('Meu vídeo - YouTube 1080p.mp4') // o 16:9 não mudou
+    expect(exportFileName('Meu vídeo', { resolution: '1080p', fps: 30, format: 'vertical', fileName: 'tiktok-01' })).toBe('tiktok-01.mp4')
+  })
+
+  it('o pedido que atravessa a IPC aceita o formato e recusa o que não existe', () => {
+    const ok = { projectId: 'p1', resolution: '1080p' as const, fps: 30 as const }
+    expect(exportRequestSchema.parse({ ...ok, format: 'vertical' }).format).toBe('vertical')
+    expect(exportRequestSchema.parse(ok).format).toBeUndefined()
+    expect(() => exportRequestSchema.parse({ ...ok, format: 'quadrado' })).toThrow()
+  })
+})

@@ -97,7 +97,10 @@ export const ptBR = {
       ratio: 'Proporção do vídeo',
       ratioHorizontal: '16:9',
       ratioVertical: '9:16',
-      ratioSoon: 'Vertical: chega na próxima etapa',
+      ratioTip: { horizontal: 'Editar o vídeo 16:9 (YouTube)', vertical: 'Editar o vídeo vertical 9:16 (TikTok, Reels, Shorts)' },
+      safeGuide: 'Zonas',
+      safeGuideTip: 'Mostrar a área segura e as zonas da interface do TikTok, Reels e Shorts (só na prévia: nunca vai para o vídeo)',
+      safeGuideLabels: { box: 'Área segura', tiktok: 'TikTok', reels: 'Reels', shorts: 'Shorts' },
       save: { saved: 'Salvo', saving: 'Salvando…', error: 'Erro ao salvar', retry: 'Tentar de novo' },
       saveTip: (reason: string): string => `Não consegui gravar o project.json: ${reason}`,
       export: 'Exportar',
@@ -118,7 +121,7 @@ export const ptBR = {
       shortcuts: 'Atalhos do teclado'
     },
 
-    tabs: { label: 'Painel do editor', style: 'Estilo', camera: 'Câmera', zoom: 'Zoom', layout: 'Layout', text: 'Texto', ai: 'IA', soon: 'Em breve' },
+    tabs: { label: 'Painel do editor', style: 'Estilo', camera: 'Câmera', zoom: 'Zoom', layout: 'Layout', text: 'Texto', captions: 'Legendas', ai: 'IA', soon: 'Em breve' },
 
     style: {
       title: 'Aparência',
@@ -157,6 +160,7 @@ export const ptBR = {
       position: 'Posição',
       positionHelp: 'Ou arraste a câmera na prévia.',
       positionOnlyBubble: 'A posição vale para o layout "Tela e câmera".',
+      positionVertical: 'No vertical a câmera fica dentro da área segura, longe da interface das plataformas.',
       positions: {
         'top-left': 'No alto, à esquerda',
         'top-center': 'No alto, no centro',
@@ -186,6 +190,12 @@ export const ptBR = {
         moderate: 'O equilíbrio para a maioria dos vídeos (1,7×).',
         intense: 'Aproxima muito (2×) e rápido, bom para telas pequenas.'
       },
+      presetHelpVertical: {
+        off: 'Sem zoom nos cliques: só o recorte que segue o cursor.',
+        subtle: 'Reforça pouco (1,2×) sobre o recorte que segue o cursor.',
+        moderate: 'Reforça (1,3×) sobre o recorte que segue o cursor.',
+        intense: 'Reforça bem (1,4×) e rápido: o texto da tela fica legível no celular.'
+      },
       count: (n: number): string => (n === 0 ? 'Nenhum zoom' : n === 1 ? '1 zoom' : `${n} zooms`),
       countDetail: (auto: number, manual: number): string => `${auto} automático${auto === 1 ? '' : 's'}, ${manual} manual${manual === 1 ? '' : 'is'}`,
       regenerate: 'Gerar de novo a partir dos cliques',
@@ -214,7 +224,35 @@ export const ptBR = {
       title: 'Layout',
       video: 'Layout do vídeo',
       videoHelp: 'Vale para todo o vídeo, menos nos trechos que você trocar na trilha Layout.',
-      options: { bubble: 'Tela e câmera', 'side-by-side': 'Lado a lado', screen: 'Só a tela', camera: 'Só a câmera' },
+      options: {
+        bubble: 'Tela e câmera',
+        'side-by-side': 'Lado a lado',
+        screen: 'Só a tela',
+        camera: 'Só a câmera',
+        'screen-focus': 'Cursor',
+        stack: 'Câmera + tela',
+        'screen-wide': 'Tela na largura'
+      },
+      optionHints: {
+        'screen-focus': 'A tela recortada em tela cheia, seguindo o cursor, com a câmera numa bolha.',
+        stack: 'A câmera em cima e o recorte da tela embaixo, seguindo o cursor.',
+        'screen-wide': 'A tela inteira na largura, com o mesmo vídeo desfocado ao fundo. Para telas de letra grande.',
+        camera: 'Só a câmera, em tela cheia.'
+      },
+      vertical: {
+        video: 'Layout do vídeo vertical',
+        videoHelp: 'Vale para todo o vídeo, menos nos trechos da trilha Layout.',
+        auto: 'Escolher pelo que acontece',
+        autoHelp: 'Fala sem nada acontecendo na tela por 2 s ou mais vira "Câmera + tela". O resto fica no recorte do cursor.',
+        autoWarn: (n: number): string => (n === 1 ? 'Isto substitui o trecho de layout do vertical.' : `Isto substitui os ${n} trechos de layout do vertical.`),
+        autoConfirm: 'Substituir',
+        autoCancel: 'Cancelar',
+        autoDone: (n: number): string => (n === 0 ? 'Nada pediu a câmera: o vídeo todo ficou no recorte do cursor.' : n === 1 ? '1 trecho com câmera + tela.' : `${n} trechos com câmera + tela.`),
+        hook: 'Título de gancho',
+        hookHelp: 'Aparece nos 2 primeiros segundos, no alto do vídeo vertical. Diga o resultado em poucas palavras.',
+        hookPlaceholder: 'Ex.: Grave sua tela em 1 clique',
+        hookCount: (n: number, max: number): string => `${n} de ${max}`
+      },
       needsCamera: 'Precisa de câmera',
       needsScreen: 'Precisa de tela',
       segment: 'Trecho selecionado',
@@ -223,6 +261,46 @@ export const ptBR = {
       noneHelp: 'Arraste na trilha Layout para criar um trecho com outro layout, ou tecle S para dividir no ponto da reprodução.',
       remove: 'Apagar trecho',
       range: 'Trecho'
+    },
+
+    captions: {
+      title: 'Legendas',
+      show: 'Mostrar as legendas',
+      seek: 'Ver numa fala',
+      showHint: 'Usa as palavras da transcrição, no tempo do vídeo final. Cortes, silêncios e correções de texto valem.',
+      forFormat: { horizontal: 'Estas escolhas valem para o vídeo 16:9.', vertical: 'Estas escolhas valem para o vídeo vertical 9:16.' },
+      noTranscript: { title: 'Sem texto para legendar', body: 'A legenda usa as palavras da transcrição. Transcreva a voz na aba Texto e ela aparece aqui.' },
+      style: 'Estilo',
+      styles: {
+        highlight: { name: 'Destaque', hint: 'Letra pesada, caixa-alta, a palavra falada acesa' },
+        natural: { name: 'Natural', hint: 'Frase discreta numa caixa, embaixo' },
+        clean: { name: 'Limpa', hint: 'Caixa branca, texto escuro' },
+        karaoke: { name: 'Karaokê', hint: 'A frase inteira, a palavra acesa avança' }
+      },
+      sample: ['Veja', 'como', 'fica'],
+      adjust: 'Ajustes',
+      size: 'Tamanho',
+      position: 'Posição vertical',
+      positionTop: 'No alto',
+      positionBottom: 'Embaixo',
+      wordsPerLine: 'Palavras por linha',
+      uppercase: 'Maiúsculas',
+      box: 'Caixa atrás do texto',
+      colors: 'Cores',
+      textColor: 'Texto',
+      highlightColor: 'Palavra falada',
+      resetColors: 'Cores do estilo',
+      reset: 'Restaurar padrão do estilo',
+      files: 'Arquivos de legenda',
+      filesHelp: 'SRT e VTT no tempo do vídeo final (com os cortes). Vão para a pasta "exports" do projeto.',
+      exportSrt: 'Exportar SRT',
+      exportVtt: 'Exportar VTT',
+      exporting: 'Salvando…',
+      saved: (name: string): string => `Legenda salva: ${name}`,
+      exportFailed: 'Não consegui salvar a legenda',
+      reveal: 'Mostrar na pasta',
+      fontsFailed: 'Não consegui carregar as fontes das legendas',
+      safeNote: 'No vertical a legenda fica sempre dentro da área segura.'
     },
 
     soon: {
@@ -392,6 +470,11 @@ export const ptBR = {
     export: {
       title: 'Exportar vídeo',
       subtitle: 'MP4 para o YouTube, feito neste computador.',
+      subtitleVertical: 'MP4 vertical para TikTok, Reels e Shorts, feito neste computador.',
+      formatLabel: 'Formato',
+      formats: { horizontal: 'YouTube 16:9', vertical: 'Vertical 9:16' },
+      verticalCard: { name: 'Vertical 1080×1920', detail: '10 Mbps · áudio 192 kbps' },
+      captionsNoText: 'A legenda está ligada, mas este projeto não tem transcrição: o vídeo sai sem legenda.',
       presets: 'Qualidade',
       preset: { '1080p': 'YouTube 1080p', '1440p': 'YouTube 1440p', '2160p': 'YouTube 4K' },
       presetSize: (w: number, h: number): string => `${w}×${h}`,

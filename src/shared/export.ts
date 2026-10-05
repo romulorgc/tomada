@@ -11,10 +11,14 @@ import type { Range } from './types'
 
 export type ExportResolution = '1080p' | '1440p' | '2160p'
 export type ExportFps = 30 | 60
+/** 16:9 para o YouTube ou vertical 9:16 (TikTok, Reels, Shorts). */
+export type ExportFormatKind = 'horizontal' | 'vertical'
 
 export type ExportOptions = {
   resolution: ExportResolution
   fps: ExportFps
+  /** Formato do vídeo (padrão: 16:9). O vertical é sempre 1080×1920 e ignora `resolution`. */
+  format?: ExportFormatKind
   /** Nome do arquivo SEM extensão. Ausente ou vazio = o padrão "<título> - YouTube 1080p". */
   fileName?: string
   /** Pasta de destino (caminho absoluto). Ausente = `exports/` dentro da pasta do projeto. */
@@ -26,6 +30,7 @@ export const exportRequestSchema = z.object({
   projectId: z.string().min(1).max(300),
   resolution: z.enum(['1080p', '1440p', '2160p']),
   fps: z.union([z.literal(30), z.literal(60)]),
+  format: z.enum(['horizontal', 'vertical']).optional(),
   fileName: z.string().max(200).optional(),
   dir: z.string().min(1).max(1000).optional()
 })
@@ -36,6 +41,9 @@ export const EXPORT_SIZES: Record<ExportResolution, { w: number; h: number }> = 
   '2160p': { w: 3840, h: 2160 }
 }
 
+/** O vertical: 1080×1920. */
+export const EXPORT_VERTICAL_SIZE = { w: 1080, h: 1920 } as const
+
 export const EXPORT_RESOLUTION_LABEL: Record<ExportResolution, string> = { '1080p': '1080p', '1440p': '1440p', '2160p': '4K' }
 
 /** Taxa de bits do YouTube: 1080p 8 Mbps (12 a 60 qps), 1440p 16 (24), 4K 40 (60). */
@@ -45,11 +53,15 @@ const BITRATE_MBPS: Record<ExportResolution, Record<ExportFps, number>> = {
   '2160p': { 30: 40, 60: 60 }
 }
 
-export function exportBitrate(resolution: ExportResolution, fps: ExportFps): number {
-  return BITRATE_MBPS[resolution][fps] * 1_000_000
+/** Vertical: 10 Mbps a 30 qps e 12 a 60 (recomprimir estraga o texto da tela, então mais que o mínimo das plataformas). */
+const VERTICAL_MBPS: Record<ExportFps, number> = { 30: 10, 60: 12 }
+
+export function exportBitrate(resolution: ExportResolution, fps: ExportFps, format: ExportFormatKind = 'horizontal'): number {
+  return (format === 'vertical' ? VERTICAL_MBPS[fps] : BITRATE_MBPS[resolution][fps]) * 1_000_000
 }
 
-export function exportFormat(opts: ExportOptions): FormatSpec {
+export function exportFormat(opts: Pick<ExportOptions, 'resolution'> & Partial<ExportOptions>): FormatSpec {
+  if (opts.format === 'vertical') return { kind: 'vertical', ...EXPORT_VERTICAL_SIZE }
   const { w, h } = EXPORT_SIZES[opts.resolution]
   return { kind: 'horizontal', w, h }
 }
@@ -125,7 +137,8 @@ export function sanitizeFileName(title: string, fallback = 'Gravação'): string
 }
 
 /** O nome padrão sem extensão: `<título> - YouTube 1080p` (60 qps vira `1080p60`). */
-export function defaultExportStem(title: string, opts: Pick<ExportOptions, 'resolution' | 'fps'>): string {
+export function defaultExportStem(title: string, opts: Pick<ExportOptions, 'resolution' | 'fps' | 'format'>): string {
+  if (opts.format === 'vertical') return `${sanitizeFileName(title)} - Vertical${opts.fps === 60 ? ' 60' : ''}`
   const label = EXPORT_RESOLUTION_LABEL[opts.resolution]
   return `${sanitizeFileName(title)} - YouTube ${label}${opts.fps === 60 ? '60' : ''}`
 }

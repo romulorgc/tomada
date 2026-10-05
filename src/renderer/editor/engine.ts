@@ -28,6 +28,7 @@ import {
 } from '@shared/playback'
 import { outputToSource, rangesLength, sourceToOutput } from '@shared/timeline'
 import type { Project } from '@shared/types'
+import { captionFontsLoaded, ensureCaptionFonts } from '../fonts'
 import type { PlaybackStore } from './playback-store'
 
 const canvasFactory: CanvasFactory = (w, h) => {
@@ -122,6 +123,8 @@ export type EngineOptions = {
   /** Falha de mídia (arquivo que não abre, play recusado): o motivo vai para a tela. */
   onError(message: string): void
   onAudioError(message: string | null): void
+  /** As fontes das legendas não carregaram: a legenda não aparece, e a pessoa precisa saber por quê. */
+  onFontsError?(message: string): void
 }
 
 export class PreviewEngine {
@@ -160,6 +163,17 @@ export class PreviewEngine {
     if (!ctx) throw new Error('Não consegui criar o canvas da prévia.')
     this.ctx = ctx as unknown as Ctx2D
     this.cache = createRenderCache(canvasFactory)
+    // a legenda só é desenhada com as fontes carregadas (nunca com a fonte errada)
+    this.cache.fontsReady = captionFontsLoaded()
+    if (!this.cache.fontsReady) {
+      void ensureCaptionFonts().then(
+        () => {
+          this.cache.fontsReady = true
+          this.dirty = true
+        },
+        (err: unknown) => options.onFontsError?.(err instanceof Error ? err.message : String(err))
+      )
+    }
     const mark = (): void => {
       this.dirty = true
     }
@@ -604,7 +618,7 @@ export class PreviewEngine {
     const project = this.project
     if (!d || !project) return
     const canvas = this.o.canvas
-    const format: FormatSpec = { kind: 'horizontal', w: canvas.width, h: canvas.height }
+    const format: FormatSpec = { kind: d.format.kind, w: canvas.width, h: canvas.height }
     const scene = evaluateScene(project, d, this.sourceMs, format)
     const screen = this.tracks.find((t) => t.kind === 'screen')?.active
     const camera = this.tracks.find((t) => t.kind === 'camera')?.active

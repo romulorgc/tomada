@@ -3,7 +3,7 @@
  * salvamento e Exportar (que vira um indicador de progresso enquanto exporta).
  */
 import { useEffect, useRef, useState } from 'react'
-import { AlertIcon, BackIcon, CheckIcon, ExportIcon, PencilIcon, RedoIcon, UndoIcon } from '../components/Icons'
+import { AlertIcon, BackIcon, CheckIcon, ExportIcon, GuideIcon, PencilIcon, RedoIcon, UndoIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
 import { Tip, IconButton } from './controls'
 import { useDoc, useEditor } from './context'
@@ -107,6 +107,8 @@ export function TopBar({ onBack }: { onBack: () => void }) {
   const { store, exporter } = useEditor()
   const undoCount = useDoc((s) => s.undoCount)
   const redoCount = useDoc((s) => s.redoCount)
+  const format = useDoc((s) => s.format)
+  const safeGuide = useDoc((s) => s.safeGuide)
   const p = exporter.progress
   const pct = p ? Math.round(p.fraction * 100) : 0
 
@@ -129,12 +131,17 @@ export function TopBar({ onBack }: { onBack: () => void }) {
       </div>
 
       <div className="top-right">
+        {format === 'vertical' ? (
+          <IconButton icon={<GuideIcon size={16} />} text={T.safeGuide} label={T.safeGuideTip} pressed={safeGuide} side="bottom" testId="safe-guide" onClick={() => store.getState().setSafeGuide(!safeGuide)} />
+        ) : null}
         <div className="ratio" role="group" aria-label={T.ratio} data-testid="ratio">
-          <button type="button" aria-pressed="true" data-testid="ratio-16-9">
-            {T.ratioHorizontal}
-          </button>
-          <Tip label={T.ratioSoon} side="bottom">
-            <button type="button" aria-pressed="false" disabled data-testid="ratio-9-16">
+          <Tip label={T.ratioTip.horizontal} side="bottom">
+            <button type="button" aria-pressed={format === 'horizontal'} data-testid="ratio-16-9" onClick={() => store.getState().setFormat('horizontal')}>
+              {T.ratioHorizontal}
+            </button>
+          </Tip>
+          <Tip label={T.ratioTip.vertical} side="bottom">
+            <button type="button" aria-pressed={format === 'vertical'} data-testid="ratio-9-16" onClick={() => store.getState().setFormat('vertical')}>
               {T.ratioVertical}
             </button>
           </Tip>

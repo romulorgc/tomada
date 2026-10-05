@@ -4,7 +4,8 @@
  * pasta e copiar o caminho. A exportação roda fora da tela do editor: fechar o diálogo não a interrompe.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { EXPORT_RESOLUTION_LABEL, EXPORT_SIZES, defaultExportStem, exportBitrate, type ExportFps, type ExportResolution } from '@shared/export'
+import { EXPORT_RESOLUTION_LABEL, EXPORT_SIZES, defaultExportStem, exportBitrate, type ExportFormatKind, type ExportFps, type ExportResolution } from '@shared/export'
+import { projectForFormat } from '@shared/vertical'
 import { formatBytes, formatSpan } from '@shared/format'
 import { AlertIcon, CheckIcon, CopyIcon, CrossIcon, FolderIcon, PlayFolderIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
@@ -25,23 +26,30 @@ function formatEta(ms: number): string {
 const baseName = (path: string): string => path.split(/[\\/]/).pop() ?? path
 
 export function ExportDialog() {
-  const { exporter, detail, derived } = useEditor()
+  const { exporter, detail, derived, transcript } = useEditor()
   const notify = useApp((s) => s.notify)
   const title = useDoc((s) => s.project.title)
+  const doc = useDoc((s) => s.doc)
+  const openFormat = useDoc((s) => s.format)
   const progress = exporter.progress
   const busy = exporter.busy
 
+  // o formato que está aberto no editor é o que se oferece primeiro
+  const [format, setFormat] = useState<ExportFormatKind>(openFormat)
+  const vertical = format === 'vertical'
   const [resolution, setResolution] = useState<ExportResolution>('1080p')
   const [fps, setFps] = useState<ExportFps>(30)
   const [name, setName] = useState<string | null>(null) // null = o nome padrão
   const [dir, setDir] = useState<string | null>(null) // null = exports/ do projeto
   const dialogRef = useRef<HTMLDivElement>(null)
 
-  const stem = name ?? defaultExportStem(title, { resolution, fps })
+  const stem = name ?? defaultExportStem(title, { resolution, fps, format })
   const outMs = derived?.outputDurationMs ?? 0
   const sep = detail.dir.includes('\\') ? '\\' : '/'
   const shownDir = dir ?? `${detail.dir}${sep}exports`
-  const estimate = useMemo(() => formatBytes(((exportBitrate(resolution, fps) + 384_000) * (outMs / 1000)) / 8), [resolution, fps, outMs])
+  const estimate = useMemo(() => formatBytes(((exportBitrate(resolution, fps, format) + (vertical ? 192_000 : 384_000)) * (outMs / 1000)) / 8), [resolution, fps, format, vertical, outMs])
+  // legenda ligada neste formato e nenhuma palavra para legendar: o vídeo sai sem legenda, e a pessoa precisa saber
+  const captionsWithoutText = projectForFormat(doc, format).captions.enabled && (transcript.data?.words.length ?? 0) === 0
 
   // Esc fecha (a exportação segue rodando); o foco entra no diálogo ao abrir
   useEffect(() => {
@@ -68,7 +76,7 @@ export function ExportDialog() {
   }
 
   const start = (): void => {
-    void exporter.start({ resolution, fps, ...(name !== null && name.trim() ? { fileName: name.trim() } : {}), ...(dir ? { dir } : {}) })
+    void exporter.start({ resolution, fps, format, ...(name !== null && name.trim() ? { fileName: name.trim() } : {}), ...(dir ? { dir } : {}) })
   }
 
   const run = async (what: 'open' | 'reveal' | 'copy', path: string): Promise<void> => {
@@ -93,7 +101,7 @@ export function ExportDialog() {
         <header className="export-head">
           <div>
             <h2 id="export-title">{T.title}</h2>
-            <p>{T.subtitle}</p>
+            <p>{vertical ? T.subtitleVertical : T.subtitle}</p>
           </div>
           <button type="button" className="btn btn-ghost icon-only" aria-label={T.close} data-testid="export-close" onClick={() => exporter.setOpen(false)}>
             <CrossIcon size={16} />
@@ -103,11 +111,33 @@ export function ExportDialog() {
         {form ? (
           <>
             <div className="field-block">
+              <span className="field-label">{T.formatLabel}</span>
+              <Segmented<ExportFormatKind>
+                label={T.formatLabel}
+                value={format}
+                onChange={(f) => {
+                  setFormat(f)
+                  setName(null)
+                }}
+                options={[
+                  { value: 'horizontal', label: T.formats.horizontal, testId: 'export-format-horizontal' },
+                  { value: 'vertical', label: T.formats.vertical, testId: 'export-format-vertical' }
+                ]}
+              />
+            </div>
+
+            <div className="field-block">
               <span className="field-label" id="export-quality">
                 {T.presets}
               </span>
               <div className="preset-cards" role="radiogroup" aria-labelledby="export-quality">
-                {RESOLUTIONS.map((r) => (
+                {vertical ? (
+                  <button type="button" role="radio" aria-checked="true" className="preset-card" data-testid="export-preset-vertical" data-autofocus="true">
+                    <b>{T.verticalCard.name}</b>
+                    <span className="tnum">{T.verticalCard.detail}</span>
+                  </button>
+                ) : null}
+                {(vertical ? [] : RESOLUTIONS).map((r) => (
                   <button
                     key={r}
                     type="button"
@@ -169,13 +199,18 @@ export function ExportDialog() {
             <p className="export-summary tnum" data-testid="export-summary">
               {outMs > 0 ? T.summary(formatSpan(outMs), estimate) : T.nothing}
             </p>
+            {captionsWithoutText ? (
+              <p className="ctl-note" data-testid="export-captions-warning" role="status">
+                {T.captionsNoText}
+              </p>
+            ) : null}
 
             <footer className="dialog-actions">
               <button type="button" className="btn btn-ghost" onClick={() => exporter.setOpen(false)}>
                 {t.common.cancel}
               </button>
               <button type="button" className="btn btn-primary" disabled={outMs <= 0 || stem.trim() === ''} data-testid="export-start" onClick={start}>
-                {T.button(EXPORT_RESOLUTION_LABEL[resolution])}
+                {T.button(vertical ? T.formats.vertical : EXPORT_RESOLUTION_LABEL[resolution])}
               </button>
             </footer>
           </>

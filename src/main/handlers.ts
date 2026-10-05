@@ -3,6 +3,7 @@
  * dele (diálogos de escolher pasta/arquivo) entra por parâmetro.
  */
 import { exportRequestSchema } from '@shared/export'
+import { createCaptionsExporter } from './captions-export'
 import type { AppInfo, BarAction, ChunkKind, IpcHandlers } from '@shared/ipc'
 import { migrate } from '@shared/project'
 import { recordRequestSchema } from '@shared/recording'
@@ -66,6 +67,7 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
   const { state, store, logger, recording, exporter, derived, transcription, llm } = deps
   /** O que o usuário escolheu nesta sessão pelos diálogos nativos: só isso entra em ajustes que viram caminho. */
   const pickedSettings = { projectsDir: new Set<string>(), ffmpegPath: new Set<string>() }
+  const captionsExporter = createCaptionsExporter({ read: (id) => store.read(id), words: async (id) => (await transcription.getTranscript(id))?.words ?? null })
   const guard = () => ({
     root: state.projectsRoot(),
     isExportOutput: (real: string) => exporter.isOutput(real),
@@ -150,6 +152,7 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
       if (picked) await deps.outputDirs.approve(picked)
       return picked
     },
+    'captions:export': (projectId, kind) => captionsExporter.export(projectId, kind),
     'files:open': async (path) => deps.openPath(await checkOpenable(path, guard())),
     'files:reveal': async (path) => deps.revealPath(await checkRevealable(path, guard())),
     'clipboard:write': async (text) => {

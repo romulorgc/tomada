@@ -224,6 +224,7 @@ async function main(): Promise<void> {
     logger,
     outputDirs,
     read: (id) => store.read(id),
+    words: async (id) => (await transcription.getTranscript(id))?.words ?? null,
     ffmpeg: () => {
       const paths = locateFfmpeg(state.ffmpegLocateOptions())
       return paths ? createFfmpeg(paths) : null

@@ -106,7 +106,8 @@ const SCENES: Scene[] = [
     t: 8600,
     format: { kind: 'vertical', w: 1080, h: 1920 },
     edit: (p) => {
-      p.zooms = [{ id: 'z1', start: 7300, end: 9200, scale: 1.4, focus: 'auto', origin: 'auto' }]
+      // o vertical tem a edição PRÓPRIA (M4a): zooms de vertical (1,4×) sobre o recorte que segue o cursor
+      p.vertical = { layout: 'screen-focus', layouts: [], zooms: [{ id: 'z1', start: 7300, end: 9200, scale: 1.4, focus: 'auto', origin: 'auto' }], zoomPreset: 'intense' }
     }
   }
 ]

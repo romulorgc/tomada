@@ -5,7 +5,7 @@
 import { useState } from 'react'
 import { formatSpan, formatTimecode } from '@shared/format'
 import { regenerateZooms, setZoomFocus, setZoomScale, zoomCounts, ZOOM_SCALE_MAX, ZOOM_SCALE_MIN } from '@shared/edits'
-import { generateAutoZooms } from '@shared/zoom'
+import { generateAutoZooms, zoomPresetFor } from '@shared/zoom'
 import type { Project, ZoomPresetId } from '@shared/types'
 import { ZoomInIcon } from '../../components/Icons'
 import { t } from '../../i18n/pt-BR'
@@ -23,6 +23,7 @@ export function ZoomPanel() {
   const zooms = useDoc((s) => s.project.zooms)
   const preset = useDoc((s) => s.project.zoomPreset)
   const selection = useDoc((s) => s.selection)
+  const format = useDoc((s) => s.format)
   const [confirming, setConfirming] = useState(false)
 
   const counts = zoomCounts({ zooms })
@@ -32,14 +33,16 @@ export function ZoomPanel() {
 
   const generate = (p: Choice): void => {
     if (!cursorData) return
-    const auto = p === 'off' ? [] : generateAutoZooms({ clicks: cursorData.clicks, keys: cursorData.keys, cursor: cursorData.grid, duration: durationMs, preset: p })
+    // no vertical os tempos são os do preset e a escala é a de vertical (1,2-1,4×): o recorte já parte de ~1,78×
+    const auto = p === 'off' ? [] : generateAutoZooms({ clicks: cursorData.clicks, keys: cursorData.keys, cursor: cursorData.grid, duration: durationMs, preset: zoomPresetFor(format, p) })
     store.getState().change((doc) => regenerateZooms(doc, p, auto))
     setConfirming(false)
   }
 
+  const fallback: ZoomPresetId = format === 'vertical' ? 'intense' : 'moderate'
   const regenerate = (): void => {
     if (counts.auto > 0) setConfirming(true)
-    else generate(preset && preset !== 'off' ? preset : 'moderate')
+    else generate(preset && preset !== 'off' ? preset : fallback)
   }
 
   const edit = (fn: (p: Project) => Project, coalesce?: string): void => {
@@ -56,7 +59,7 @@ export function ZoomPanel() {
           columns={2}
           options={CHOICES.map((c) => ({ value: c, label: T.presets[c], disabled: noEvents && c !== 'off', testId: `zoom-${c}` }))}
         />
-        {choice ? <p className="ctl-note">{T.presetHelp[choice]}</p> : null}
+        {choice ? <p className="ctl-note">{(format === 'vertical' ? T.presetHelpVertical : T.presetHelp)[choice]}</p> : null}
         {noEvents ? <Hint tone="warn">{t.editor.noEvents}</Hint> : null}
 
         <div className="zoom-count" data-testid="zoom-count-line">
@@ -70,7 +73,7 @@ export function ZoomPanel() {
           <div className="confirm" role="alertdialog" aria-label={T.regenerate} data-testid="zoom-regenerate-confirm">
             <p>{T.regenerateWarn(counts.auto, counts.manual)}</p>
             <div className="confirm-actions">
-              <button type="button" className="btn" data-testid="zoom-regenerate-yes" onClick={() => generate(preset && preset !== 'off' ? preset : 'moderate')}>
+              <button type="button" className="btn" data-testid="zoom-regenerate-yes" onClick={() => generate(preset && preset !== 'off' ? preset : fallback)}>
                 {T.regenerateConfirm}
               </button>
               <button type="button" className="btn btn-ghost" onClick={() => setConfirming(false)}>

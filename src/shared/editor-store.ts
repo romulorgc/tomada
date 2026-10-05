@@ -11,11 +11,20 @@
  *  - Seleção e intervalo marcado na linha do tempo moram aqui para valer em toda a interface, mas NÃO
  *    entram no histórico.
  *
+ * FORMATO (M4a): o documento guarda duas edições, a do 16:9 e a do vertical 9:16 (`project.vertical`). `doc` é o
+ * documento INTEIRO (é ele que vai para o disco e para o histórico); `project` é a VISÃO do formato aberto
+ * (`projectForFormat`): no 16:9 é o próprio documento (mesmo objeto), no 9:16 traz os zooms, layouts, câmera e legenda
+ * do vertical no lugar dos do 16:9. Toda a interface lê e muda `project` e não sabe de que formato é: `change(fn)`
+ * aplica `fn` à visão e devolve o resultado ao documento (`mergeFormatView`).
+ *
  * Zustand "vanilla" (sem React) e sem DOM/Node: roda igual nos testes. A interface usa
  * `useStore(store, seletor)`.
  */
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import type { Project } from './types'
+import { mergeFormatView, projectForFormat } from './vertical'
+
+export type FormatKind = 'horizontal' | 'vertical'
 
 export const HISTORY_LIMIT = 100
 export const AUTOSAVE_MS = 500
@@ -49,7 +58,13 @@ export type ChangeOptions = {
 }
 
 export type EditorState = {
+  /** O documento como o formato aberto o enxerga (no 16:9, o próprio documento). */
   project: Project
+  /** O documento inteiro: é o que se grava e o que o desfazer guarda. */
+  doc: Project
+  format: FormatKind
+  /** Mostra na prévia as zonas da interface das plataformas (só o vertical; nunca vai para a exportação). */
+  safeGuide: boolean
   undoCount: number
   redoCount: number
   saveStatus: SaveStatus
@@ -57,8 +72,13 @@ export type EditorState = {
   selection: Selection
   range: TimeRange | null
 
-  /** Aplica uma mudança ao documento. Devolve `false` se `fn` devolveu o mesmo objeto (nada mudou). */
+  /** Aplica uma mudança à visão do formato aberto. Devolve `false` se `fn` devolveu o mesmo objeto (nada mudou). */
   change(fn: (project: Project) => Project, options?: ChangeOptions): boolean
+  /** Aplica uma mudança ao documento INTEIRO (as duas edições), como a que cria a edição vertical na primeira vez. */
+  changeDoc(fn: (doc: Project) => Project, options?: ChangeOptions): boolean
+  /** Troca o formato aberto (16:9 ou 9:16). Não é um passo de desfazer. */
+  setFormat(format: FormatKind): void
+  setSafeGuide(on: boolean): void
   /** Começa um gesto contínuo (arraste): tudo até `end()` vira UM passo de desfazer. */
   begin(): void
   end(): void
@@ -77,7 +97,7 @@ export type EditorStore = StoreApi<EditorState>
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /** A seleção ainda aponta para algo que existe no documento? */
-export function selectionExists(project: Project, selection: Selection): boolean {
+export function selectionExists(project: Pick<Project, 'zooms' | 'layouts' | 'cuts'>, selection: Selection): boolean {
   if (!selection) return true
   switch (selection.kind) {
     case 'zoom':
@@ -103,6 +123,16 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
   let inflight: Promise<void> = Promise.resolve()
   let dirty = false
 
+  let viewCache: { doc: Project; format: FormatKind; view: Project } | null = null
+  /** A visão do formato (a mesma de antes enquanto o documento é o mesmo objeto: a identidade importa para quem compara). */
+  const viewOf = (doc: Project, format: FormatKind): Project => {
+    if (format === 'horizontal') return doc
+    if (viewCache && viewCache.doc === doc && viewCache.format === format) return viewCache.view
+    const view = projectForFormat(doc, format)
+    viewCache = { doc, format, view }
+    return view
+  }
+
   const store = createStore<EditorState>()((set, get) => {
     const counts = (): Pick<EditorState, 'undoCount' | 'redoCount'> => ({ undoCount: past.length, redoCount: future.length })
 
@@ -119,11 +149,38 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
       timer = setTimeout(() => void get().flush(), debounceMs)
     }
 
-    const fixSelection = (project: Project): Pick<EditorState, 'selection'> | Record<string, never> =>
-      selectionExists(project, get().selection) ? {} : { selection: null }
+    const fixSelection = (doc: Project): Pick<EditorState, 'selection'> | Record<string, never> =>
+      selectionExists(viewOf(doc, get().format), get().selection) ? {} : { selection: null }
+
+    /** O documento e a visão dele andam juntos. */
+    const docPatch = (doc: Project): Pick<EditorState, 'doc' | 'project'> => ({ doc, project: viewOf(doc, get().format) })
+
+    const apply = (next: Project, prev: Project, options: ChangeOptions): boolean => {
+      if (next === prev) return false
+      if (group) {
+        group.changed = true
+        set(docPatch(next))
+      } else {
+        if (options.history !== false) {
+          const t = now()
+          if (options.coalesce && last && last.key === options.coalesce && t - last.at <= COALESCE_MS) {
+            last.at = t
+          } else {
+            push(prev)
+            last = options.coalesce ? { key: options.coalesce, at: t } : null
+          }
+        }
+        set({ ...docPatch(next), ...counts() })
+      }
+      scheduleSave()
+      return true
+    }
 
     return {
-      project: deps.project,
+      project: viewOf(deps.project, 'horizontal'),
+      doc: deps.project,
+      format: 'horizontal',
+      safeGuide: false,
       undoCount: 0,
       redoCount: 0,
       saveStatus: 'saved',
@@ -132,31 +189,29 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
       range: null,
 
       change(fn, options = {}) {
-        const prev = get().project
-        const next = fn(prev)
-        if (next === prev) return false
-        if (group) {
-          group.changed = true
-          set({ project: next })
-        } else {
-          if (options.history !== false) {
-            const t = now()
-            if (options.coalesce && last && last.key === options.coalesce && t - last.at <= COALESCE_MS) {
-              last.at = t
-            } else {
-              push(prev)
-              last = options.coalesce ? { key: options.coalesce, at: t } : null
-            }
-          }
-          set({ project: next, ...counts() })
-        }
-        scheduleSave()
-        return true
+        const { doc: prevDoc, project: prevView, format } = get()
+        const nextView = fn(prevView)
+        if (nextView === prevView) return false
+        return apply(mergeFormatView(prevDoc, nextView, format), prevDoc, options)
       },
+
+      changeDoc(fn, options = {}) {
+        const prevDoc = get().doc
+        return apply(fn(prevDoc), prevDoc, options)
+      },
+
+      setFormat(format) {
+        if (get().format === format) return
+        const doc = get().doc
+        const view = viewOf(doc, format)
+        set({ format, project: view, selection: selectionExists(view, get().selection) ? get().selection : null })
+      },
+
+      setSafeGuide: (on) => set({ safeGuide: on }),
 
       begin() {
         if (group) return
-        group = { base: get().project, changed: false }
+        group = { base: get().doc, changed: false }
       },
 
       end() {
@@ -172,24 +227,24 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
 
       undo() {
         if (group || past.length === 0) return false
-        const current = get().project
+        const current = get().doc
         const prev = past[past.length - 1]!
         past = past.slice(0, -1)
         future.push(current)
         last = null
-        set({ project: prev, ...counts(), ...fixSelection(prev) })
+        set({ ...docPatch(prev), ...counts(), ...fixSelection(prev) })
         scheduleSave()
         return true
       },
 
       redo() {
         if (group || future.length === 0) return false
-        const current = get().project
+        const current = get().doc
         const next = future[future.length - 1]!
         future = future.slice(0, -1)
         past.push(current)
         last = null
-        set({ project: next, ...counts(), ...fixSelection(next) })
+        set({ ...docPatch(next), ...counts(), ...fixSelection(next) })
         scheduleSave()
         return true
       },
@@ -202,7 +257,7 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
         timer = undefined
         if (!dirty) return inflight
         dirty = false
-        const doc = get().project
+        const doc = get().doc
         set({ saveStatus: 'saving' })
         inflight = inflight.then(async () => {
           try {

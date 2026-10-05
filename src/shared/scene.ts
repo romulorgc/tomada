@@ -15,10 +15,14 @@ import {
   type CursorLookup,
   type SyntheticTrack
 } from './cursor'
+import { buildCaptionTrack, captionAt, pageAlpha, popScale, PAGE_FADE_MS, type CaptionTrack } from './captions'
+import { resolveCaptionStyle, resolveHookStyle, type CaptionRenderStyle, type HookRenderStyle } from './caption-style'
 import { projectDurationMs } from './project'
 import { coverCrop, cameraBoxAspect, cameraRadius, cornerFractions, styleUnit } from './styles'
-import { keptRanges, outputDuration } from './timeline'
-import type { Background, ClickEvent, CursorSample, KeyEvent, LayoutKind, Project, Range, Rect, Size, Style } from './types'
+import { keptRanges, outputDuration, sourceToOutput } from './timeline'
+import type { Background, ClickEvent, CursorSample, KeyEvent, LayoutKind, Project, Range, Rect, Size, Style, Word } from './types'
+import { GRID_HZ } from './cursor'
+import { HOOK_BAND, HOOK_MS, STACK_CAMERA, STACK_SCREEN, VERTICAL_W, WIDE_BOX, cropView, layoutFollow, safeBoxFor, type View } from './vertical'
 import { computeCameraPath, sampleCameraPath, visibleRect, type CameraPath } from './zoom'
 import { fitRect } from './geometry'
 
@@ -33,6 +37,7 @@ export type FormatSpec = {
 }
 
 export const HORIZONTAL_1080: FormatSpec = { kind: 'horizontal', w: 1920, h: 1080 }
+export const VERTICAL_1080: FormatSpec = { kind: 'vertical', w: 1080, h: 1920 }
 
 /** Constantes do projeto / especificação (tempos em ms, tamanhos em px na altura de 1080). */
 export const LAYOUT_TRANSITION_MS = 400
@@ -83,10 +88,15 @@ export type Derived = {
   /** Duração do vídeo de saída (ms). */
   outputDurationMs: number
   data: CursorData
+  /** O caminho da câmera do layout padrão (no 16:9 é o único; no vertical há um por layout, em `paths`). */
   cameraPath: CameraPath
+  /** Um caminho de câmera por recorte: no 16:9 só `main`; no vertical, um por layout usado (V-A, V-B, V-C). */
+  paths: Record<string, { view: View; path: CameraPath }>
   synthetic: SyntheticTrack
-  /** Fração da fonte visível com escala 1 (proporção do recorte). */
+  /** Fração da fonte visível com escala 1 (proporção do recorte do layout padrão). */
   view: { w: number; h: number }
+  /** As legendas (M4a): páginas no tempo de SAÍDA, ou `null` (desligadas ou sem transcrição). */
+  captions: CaptionTrack | null
   screenSize: Size | null
   cameraSize: Size | null
   layoutPoints: LayoutPoint[]
@@ -94,9 +104,8 @@ export type Derived = {
 
 /** Fração da fonte que um recorte do formato enxerga com escala 1. Horizontal: tudo. Vertical: faixa 9:16. */
 export function baseView(format: FormatSpec, screen: Size | null): { w: number; h: number } {
-  if (format.kind === 'horizontal' || !screen || !(screen.w > 0) || !(screen.h > 0)) return { w: 1, h: 1 }
-  const visW = format.w / format.h / (screen.w / screen.h)
-  return visW <= 1 ? { w: visW, h: 1 } : { w: 1, h: 1 / visW }
+  if (format.kind === 'horizontal') return { w: 1, h: 1 }
+  return cropView(format.w / format.h, screen, 1)
 }
 
 const sizeOf = (src: { w: number; h: number } | undefined): Size | null => (src && src.w > 0 && src.h > 0 ? { w: src.w, h: src.h } : null)
@@ -135,18 +144,45 @@ export function layoutAt(points: readonly LayoutPoint[], t: number): { layout: L
   return { layout: cur.layout, prev, since: cur.t }
 }
 
-/** Tudo que depende do documento (zooms, cortes, layouts, estilo do cursor) e do formato. */
-export function deriveProject(project: Project, data: CursorData, format: FormatSpec): Derived {
+const TRIVIAL_PATH: CameraPath = { hz: GRID_HZ, t: [0], scale: [1], cx: [0.5], cy: [0.5], maxScale: 1 }
+
+/**
+ * Tudo que depende do documento (zooms, cortes, layouts, estilo do cursor) e do formato. No vertical, `project` é a VISÃO do
+ * vertical (`projectForFormat`): os zooms e layouts dele. `words` são as palavras da transcrição (legendas).
+ */
+export function deriveProject(project: Project, data: CursorData, format: FormatSpec, words?: readonly Word[] | null): Derived {
   const durationMs = projectDurationMs(project)
   const kept = keptRanges(durationMs, project.cuts)
   const screenSize = sizeOf(project.sources.screen)
   const cameraSize = project.style.camera.hidden ? null : sizeOf(project.sources.camera)
-  const view = baseView(format, screenSize)
-  const cameraPath = computeCameraPath(project, data.grid, {
-    durationMs,
-    view,
-    sourceAspect: screenSize ? screenSize.w / screenSize.h : 16 / 9
-  })
+  const sourceAspect = screenSize ? screenSize.w / screenSize.h : 16 / 9
+  const layoutPoints = buildLayoutPoints(project)
+
+  // Um caminho de câmera por RECORTE: no 16:9 o recorte é sempre a fonte toda (um caminho só); no vertical cada layout
+  // (V-A, V-B, V-C) enxerga uma fatia diferente da tela e dá aos zooms uma força diferente.
+  const paths: Derived['paths'] = {}
+  const hasScreen = screenSize !== null
+  const hasCamera = cameraSize !== null
+  const mainKey = resolveLayout(project.style.defaultLayout, hasScreen, hasCamera, format.kind)
+  if (format.kind === 'horizontal') {
+    const view = { w: 1, h: 1 }
+    paths.main = { view, path: computeCameraPath(project, data.grid, { durationMs, view, sourceAspect }) }
+  } else {
+    const keys = new Set<string>([mainKey])
+    for (const pt of layoutPoints) keys.add(resolveLayout(pt.layout, hasScreen, hasCamera, format.kind))
+    for (const key of keys) {
+      const f = layoutFollow(key as LayoutKind, format, screenSize)
+      if (key === 'camera' || !hasScreen || f.gain === 0) {
+        paths[key] = { view: f.view, path: TRIVIAL_PATH }
+        continue
+      }
+      const zooms = project.zooms.map((z) => ({ ...z, scale: 1 + (z.scale - 1) * f.gain }))
+      paths[key] = { view: f.view, path: computeCameraPath({ zooms }, data.grid, { durationMs, view: f.view, sourceAspect }) }
+    }
+  }
+  const main = paths.main ?? paths[mainKey] ?? Object.values(paths)[0] ?? { view: { w: 1, h: 1 }, path: TRIVIAL_PATH }
+  const view = main.view
+  const cameraPath = main.path
   const synthetic = computeSyntheticCursor(data.lookup, {
     durationMs,
     hideAfterIdleMs: project.style.cursor.hideAfterIdleMs,
@@ -159,11 +195,13 @@ export function deriveProject(project: Project, data: CursorData, format: Format
     outputDurationMs: outputDuration(durationMs, project.cuts),
     data,
     cameraPath,
+    paths,
     synthetic,
     view,
+    captions: buildCaptionTrack(words, project, durationMs),
     screenSize,
     cameraSize,
-    layoutPoints: buildLayoutPoints(project)
+    layoutPoints
   }
 }
 
@@ -175,9 +213,8 @@ export type LayoutGeometry = { screen: Rect | null; camera: CameraBox | null }
 
 /**
  * Layout efetivo: o que o documento pede, ajustado ao que existe (sem câmera não há bolha;
- * sem tela só há câmera) e ao formato (os layouts verticais são da M4: no vertical, tudo que
- * mostra a tela vira "tela em foco", e no horizontal "pilha" e "tela em foco" caem nos
- * equivalentes horizontais).
+ * sem tela só há câmera) e ao formato. No vertical valem V-A `screen-focus`, V-B `stack`, V-C `screen-wide` e só câmera;
+ * o que é do 16:9 vira V-A. No horizontal, os verticais caem nos equivalentes horizontais.
  */
 export function resolveLayout(layout: LayoutKind, hasScreen: boolean, hasCamera: boolean, kind: FormatSpec['kind']): LayoutKind {
   if (!hasScreen && hasCamera) return 'camera'
@@ -185,12 +222,14 @@ export function resolveLayout(layout: LayoutKind, hasScreen: boolean, hasCamera:
   let l = layout
   if (kind === 'horizontal') {
     if (l === 'stack') l = 'side-by-side'
-    if (l === 'screen-focus') l = 'bubble'
-  } else if (l !== 'camera') {
+    if (l === 'screen-focus' || l === 'screen-wide') l = 'bubble'
+  } else if (l !== 'camera' && l !== 'stack' && l !== 'screen-wide') {
     l = 'screen-focus'
   }
-  if (!hasCamera && (l === 'bubble' || l === 'side-by-side' || l === 'camera' || l === 'screen-focus')) {
-    return kind === 'vertical' ? 'screen-focus' : 'screen'
+  if (!hasCamera) {
+    // sem câmera: no vertical sobram o recorte que segue o cursor e a tela na largura; no 16:9, só a tela
+    if (kind === 'vertical') return l === 'screen-wide' ? 'screen-wide' : 'screen-focus'
+    if (l === 'bubble' || l === 'side-by-side' || l === 'camera') return 'screen'
   }
   return l
 }
@@ -225,9 +264,22 @@ export function layoutGeometry(
   }
 
   if (L === 'screen-focus') {
-    // vertical: o recorte da tela ocupa o quadro todo; a câmera é uma bolha no canto de cima
-    const screen = snap(full)
-    return { screen, camera: sources.camera ? bubble(style, format, screen, zoomProgress) : null }
+    // vertical V-A: o recorte da tela ocupa o quadro todo; a câmera é uma bolha no canto da caixa segura
+    return { screen: snap(full), camera: sources.camera ? bubbleVertical(style, format, zoomProgress) : null }
+  }
+
+  if (L === 'stack') {
+    // vertical V-B: câmera em y 270-850, recorte da tela em y 850-1440 (as duas de borda a borda, sem cantos)
+    const k = format.w / VERTICAL_W
+    const sc = (r: { x: number; y: number; w: number; h: number }): Rect => snap({ x: r.x * k, y: r.y * k, w: r.w * k, h: r.h * k })
+    return { screen: sources.screen ? sc(STACK_SCREEN) : null, camera: sources.camera ? { rect: sc(STACK_CAMERA), radius: 0 } : null }
+  }
+
+  if (L === 'screen-wide') {
+    // vertical V-C: a tela inteira na largura (1080×608, centro em y 660); o fundo é o mesmo vídeo desfocado
+    const k = format.w / VERTICAL_W
+    const box: Rect = { x: WIDE_BOX.x * k, y: WIDE_BOX.y * k, w: WIDE_BOX.w * k, h: WIDE_BOX.h * k }
+    return { screen: sources.screen ? snap(fitRect(sources.screen, box)) : null, camera: sources.camera ? bubbleVertical(style, format, zoomProgress) : null }
   }
 
   if (!sources.screen) return { screen: null, camera: null }
@@ -254,6 +306,22 @@ export function layoutGeometry(
   // 'bubble': tela grande + bolha no canto
   const screen = snap(fitRect(sources.screen, inner))
   return { screen, camera: sources.camera ? bubble(style, format, screen, zoomProgress) : null }
+}
+
+/** Bolha da câmera do vertical: na posição 3×3 do estilo, mas dentro da CAIXA SEGURA (nunca sob a interface da plataforma). */
+function bubbleVertical(style: Style, format: FormatSpec, zoomProgress: number): CameraBox {
+  const side = Math.min(format.w, format.h)
+  const factor = 1 - CAMERA_ZOOM_SHRINK * clamp01(zoomProgress)
+  const d = style.camera.size * side * factor
+  const aspect = cameraBoxAspect(style.camera.shape)
+  const w = d * aspect
+  const h = d
+  const box = safeBoxFor(format)
+  const { fx, fy } = cornerFractions(style.camera.corner)
+  const x = fx === 0 ? box.x : fx === 1 ? box.x + box.w - w : box.x + (box.w - w) / 2
+  const y = fy === 0 ? box.y : fy === 1 ? box.y + box.h - h : box.y + (box.h - h) / 2
+  const rect = snap({ x, y, w, h })
+  return { rect, radius: cameraRadius(style.camera.shape, rect.w, rect.h) }
 }
 
 /** Bolha da câmera dentro de `ref` (a tela), na posição 3×3 do estilo. */
@@ -297,6 +365,25 @@ export type SceneCamera = {
   shadow: ShadowSpec | null
 }
 
+export type SceneBackdrop = { src: Rect; darken: number; alpha: number }
+
+export type SceneCaptions = {
+  /** Identifica a página (cache do layout do texto): trilha + página. */
+  key: string
+  style: CaptionRenderStyle
+  /** As palavras da página como se mostram (a caixa-alta, se o estilo pede, o desenho aplica). */
+  words: string[]
+  /** Palavra acesa (índice na página) ou −1. */
+  active: number
+  /** Escala da palavra acesa (o "pop"). */
+  pop: number
+  /** Opacidade da página (entrada e saída) e quanto ela ainda sobe ao entrar (px). */
+  alpha: number
+  dy: number
+}
+
+export type SceneHook = { text: string; alpha: number; style: HookRenderStyle }
+
 export type SceneRipple = { x: number; y: number; radius: number; alpha: number }
 export type SceneHalo = { x: number; y: number; radius: number; alpha: number }
 export type SceneCursor = { x: number; y: number; scale: number; alpha: number }
@@ -313,8 +400,12 @@ export type Scene = {
   halo: SceneHalo | null
   /** Cursor sintético (só no modo `synthetic`). */
   cursor: SceneCursor | null
-  /** Gancho das legendas (M4). */
-  captions: null
+  /** Fundo do V-C: a própria tela, desfocada e escurecida (substitui o fundo do estilo, com `alpha`). */
+  backdrop: SceneBackdrop | null
+  /** A legenda na tela agora (M4a). */
+  captions: SceneCaptions | null
+  /** O título de gancho dos 2 primeiros segundos do vertical. */
+  hook: SceneHook | null
   debug: { layout: LayoutKind; previous: LayoutKind; transition: number; zoom: { scale: number; cx: number; cy: number } }
 }
 
@@ -349,6 +440,19 @@ function blendElement<T extends { rect: Rect; radius: number }>(
   return null
 }
 
+/** O raio dos cantos do cartão da tela: no 16:9, o do estilo; no vertical, só a tela na largura (V-C) é um cartão. */
+function screenRadius(layout: LayoutKind, style: Style, unit: number, kind: FormatSpec['kind'], hasScreen: boolean, hasCamera: boolean): number {
+  if (kind === 'horizontal') return style.radius * unit
+  return resolveLayout(layout, hasScreen, hasCamera, kind) === 'screen-wide' ? style.radius * unit : 0
+}
+
+/** O recorte da tela (normalizado na fonte) num instante, para o layout `key`. */
+function sourceRectOf(derived: Derived, key: string, t: number): { src: Rect; scale: number } {
+  const entry = derived.paths[key] ?? derived.paths.main ?? { view: derived.view, path: derived.cameraPath }
+  const sample = sampleCameraPath(entry.path, t)
+  return { src: visibleRect(sample, entry.view), scale: sample.scale }
+}
+
 /**
  * A cena do quadro em `sourceT` (ms, tempo de origem). Pura e determinística: mesma entrada,
  * mesma saída; sem estado entre quadros (o caminho do zoom foi pré-calculado em `deriveProject`).
@@ -356,35 +460,53 @@ function blendElement<T extends { rect: Rect; radius: number }>(
 export function evaluateScene(project: Project, derived: Derived, sourceT: number, format: FormatSpec): Scene {
   const style = project.style
   const unit = styleUnit(format)
+  const kind = format.kind
+  const vertical = kind === 'vertical'
   const sources = { screen: derived.screenSize, camera: derived.cameraSize }
-  const sample = sampleCameraPath(derived.cameraPath, sourceT)
-  // "encolher no zoom" desligado: a bolha mantém o tamanho com o zoom aberto
-  const zoomProgress = style.camera.shrinkOnZoom ? smoothstep(clamp01((sample.scale - 1) / 0.5)) : 0
+  const hasScreen = sources.screen !== null
+  const hasCamera = sources.camera !== null
 
   const { layout, prev, since } = layoutAt(derived.layoutPoints, sourceT)
-  const p = layout === prev ? 1 : clamp01((sourceT - since) / LAYOUT_TRANSITION_MS)
+  // um trecho que começa no instante 0 não "chega": o vídeo já abre nele (senão o primeiro meio segundo seria uma transição)
+  const p = layout === prev || since <= 0 ? 1 : clamp01((sourceT - since) / LAYOUT_TRANSITION_MS)
   const e = p >= 1 ? 1 : easeInOutCubic(p)
+  const curKey = resolveLayout(layout, hasScreen, hasCamera, kind)
+  const prevKey = resolveLayout(prev, hasScreen, hasCamera, kind)
+
+  const cur = sourceRectOf(derived, curKey, sourceT)
+  // "encolher no zoom" desligado: a bolha mantém o tamanho com o zoom aberto
+  const zoomProgress = style.camera.shrinkOnZoom ? smoothstep(clamp01((cur.scale - 1) / 0.5)) : 0
+  const sample = sampleCameraPath((derived.paths[curKey] ?? derived.paths.main ?? { path: derived.cameraPath }).path, sourceT)
 
   const gCur = layoutGeometry(layout, style, format, sources, zoomProgress)
   const gPrev = p < 1 ? layoutGeometry(prev, style, format, sources, zoomProgress) : null
 
+  const rCur = screenRadius(layout, style, unit, kind, hasScreen, hasCamera)
+  const rPrev = screenRadius(prev, style, unit, kind, hasScreen, hasCamera)
   const screenBox = gPrev
-    ? blendElement(gPrev.screen ? { rect: gPrev.screen, radius: style.radius * unit } : null, gCur.screen ? { rect: gCur.screen, radius: style.radius * unit } : null, e)
+    ? blendElement(gPrev.screen ? { rect: gPrev.screen, radius: rPrev } : null, gCur.screen ? { rect: gCur.screen, radius: rCur } : null, e)
     : gCur.screen
-      ? { rect: gCur.screen, radius: style.radius * unit, opacity: 1 }
+      ? { rect: gCur.screen, radius: rCur, opacity: 1 }
       : null
   const cameraBox = gPrev ? blendElement(gPrev.camera, gCur.camera, e) : gCur.camera ? { ...gCur.camera, opacity: 1 } : null
 
-  const view = derived.view
-  const srcRect = visibleRect(sample, view)
+  // o recorte da fonte: durante a troca de layout (V-A ↔ V-B…) a janela passa de um enquadramento ao outro
+  let srcRect = cur.src
+  if (p < 1 && prevKey !== curKey) {
+    const before = sourceRectOf(derived, prevKey, sourceT)
+    srcRect = lerpRect(before.src, cur.src, e)
+  }
 
+  // a tela flutua (com sombra) no 16:9 e na tela na largura do vertical; nos outros verticais ela é de borda a borda
+  const wide = curKey === 'screen-wide' || (p < 1 && prevKey === 'screen-wide')
+  const shadowOn = !vertical || wide
   const shadowOf = (scaleBlur: number, scaleOffset: number): ShadowSpec | null =>
     style.shadow.opacity > 0 && style.shadow.blur > 0
       ? { blur: style.shadow.blur * unit * scaleBlur, opacity: style.shadow.opacity, offsetY: style.shadow.offsetY * unit * scaleOffset }
       : null
 
   const screen: SceneScreen | null = screenBox
-    ? { dest: screenBox.rect, src: srcRect, radius: screenBox.radius, opacity: screenBox.opacity, shadow: format.kind === 'vertical' ? null : shadowOf(1, 1) }
+    ? { dest: screenBox.rect, src: srcRect, radius: screenBox.radius, opacity: screenBox.opacity, shadow: shadowOn ? shadowOf(1, 1) : null }
     : null
 
   const camera: SceneCamera | null =
@@ -395,10 +517,17 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
           radius: cameraBox.radius,
           opacity: cameraBox.opacity,
           mirror: style.camera.mirror,
-          border: style.camera.borderWidth > 0 ? { width: style.camera.borderWidth * unit, color: style.camera.borderColor } : null,
-          shadow: shadowOf(0.6, 0.5)
+          border: style.camera.borderWidth > 0 && !(vertical && curKey === 'stack') ? { width: style.camera.borderWidth * unit, color: style.camera.borderColor } : null,
+          shadow: vertical && curKey === 'stack' ? null : shadowOf(0.6, 0.5)
         }
       : null
+
+  // fundo da tela na largura: o próprio vídeo, desfocado e escurecido
+  let backdrop: SceneBackdrop | null = null
+  const wideWeight = (curKey === 'screen-wide' ? e : 0) + (p < 1 && prevKey === 'screen-wide' && prevKey !== curKey ? 1 - e : 0)
+  if (vertical && derived.screenSize && wideWeight > 0.002) {
+    backdrop = { src: coverCrop(derived.screenSize, format.w / format.h), darken: 0.58, alpha: Math.min(1, wideWeight) }
+  }
 
   // posição normalizada na fonte → px do quadro de saída (pelo recorte do zoom)
   const toDest = (nx: number, ny: number): { x: number; y: number } | null => {
@@ -408,6 +537,11 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
       y: screen.dest.y + ((ny - srcRect.y) / srcRect.h) * screen.dest.h
     }
   }
+
+  // no vertical o ripple, o halo e o cursor ficam maiores: o vídeo passa num celular
+  const rippleK = vertical ? 1.7 : 1
+  const haloK = vertical ? 1.5 : 1
+  const cursorK = vertical ? 1.4 : 1
 
   const ripples: SceneRipple[] = []
   if (screen && style.cursor.ripple) {
@@ -429,7 +563,7 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
       const eased = easeOutCubic(u)
       const pos = toDest(c.x, c.y)
       if (!pos) continue
-      ripples.push({ x: pos.x, y: pos.y, radius: RIPPLE_RADIUS * unit * eased, alpha: RIPPLE_ALPHA * (1 - eased) * screen.opacity })
+      ripples.push({ x: pos.x, y: pos.y, radius: RIPPLE_RADIUS * unit * rippleK * eased, alpha: RIPPLE_ALPHA * (1 - eased) * screen.opacity })
     }
   }
 
@@ -440,14 +574,41 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
       if (style.cursor.halo) {
         const c = derived.data.lookup.at(sourceT)
         const pos = c.out ? null : toDest(c.x, c.y)
-        if (pos) halo = { x: pos.x, y: pos.y, radius: HALO_RADIUS * unit, alpha: screen.opacity }
+        if (pos) halo = { x: pos.x, y: pos.y, radius: HALO_RADIUS * unit * haloK, alpha: screen.opacity }
       }
     } else {
       const s = sampleSynthetic(derived.synthetic, sourceT)
       const pos = toDest(s.x, s.y)
       if (pos && s.alpha > 0.003) {
-        cursor = { x: pos.x, y: pos.y, scale: style.cursor.scale * unit * pressScale(derived.data.clicks, sourceT), alpha: s.alpha * screen.opacity }
+        cursor = { x: pos.x, y: pos.y, scale: style.cursor.scale * unit * cursorK * pressScale(derived.data.clicks, sourceT), alpha: s.alpha * screen.opacity }
       }
+    }
+  }
+
+  // --- legenda e título de gancho (tempo de SAÍDA) ------------------------------------------------------------------
+  let captions: SceneCaptions | null = null
+  let hook: SceneHook | null = null
+  const hookText = vertical ? (project.vertical?.hook ?? '').trim() : ''
+  if (derived.captions || hookText !== '') {
+    const outT = sourceToOutput(sourceT, derived.kept)
+    if (derived.captions) {
+      const m = captionAt(derived.captions, outT)
+      if (m) {
+        const rs = resolveCaptionStyle(project.captions, format)
+        captions = {
+          key: `${derived.captions.id}:${m.page.id}`,
+          style: rs,
+          words: m.page.words.map((w) => w.shown),
+          active: m.active,
+          pop: rs.active.pop > 0 && m.active >= 0 ? popScale(m.sinceActive, rs.active.pop) : 1,
+          alpha: pageAlpha(m),
+          dy: (1 - clamp01(m.sinceStart / PAGE_FADE_MS)) * 8 * unit
+        }
+      }
+    }
+    if (hookText !== '' && outT < HOOK_MS) {
+      const alpha = Math.min(clamp01(outT / 150), clamp01((HOOK_MS - outT) / 300))
+      hook = { text: hookText, alpha, style: resolveHookStyle(format, HOOK_BAND) }
     }
   }
 
@@ -461,7 +622,9 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
     ripples,
     halo,
     cursor,
-    captions: null,
+    backdrop,
+    captions,
+    hook,
     debug: { layout, previous: prev, transition: p, zoom: sample }
   }
 }

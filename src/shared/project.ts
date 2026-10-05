@@ -8,7 +8,7 @@
  * não existe (a v1 era outro formato, em `legado/`).
  */
 import { z } from 'zod'
-import type { CaptionStyle, CaptureInfo, Project, Src, Style } from './types'
+import type { CaptionStyle, CaptionStyleId, CaptureInfo, Project, Src, Style } from './types'
 
 export const CURRENT_PROJECT_VERSION = 2
 
@@ -43,10 +43,10 @@ export function defaultStyle(): Style {
 export function defaultCaptions(): CaptionStyle {
   return {
     enabled: false,
-    style: 'karaoke',
-    wordsPerLine: 5,
+    style: 'natural',
+    wordsPerLine: 4,
     position: 'bottom',
-    box: false,
+    box: true,
     highlightColor: '#FFD93D'
   }
 }
@@ -64,7 +64,7 @@ const C = defaultCaptions()
 const rectSchema = z.looseObject({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
 const rangeSchema = z.looseObject({ start: z.number(), end: z.number() })
 
-const layoutKind = z.enum(['bubble', 'side-by-side', 'screen', 'camera', 'stack', 'screen-focus'])
+const layoutKind = z.enum(['bubble', 'side-by-side', 'screen', 'camera', 'stack', 'screen-focus', 'screen-wide'])
 
 const srcSchema = z.looseObject({
   path: z.string().min(1),
@@ -159,13 +159,41 @@ const styleSchema = z.looseObject({
   cursor: cursorStyleSchema.prefault({})
 })
 
+/** O estilo de legenda; o "plain" das versões antigas do documento vira "natural". */
+const captionStyleId = z.enum(['natural', 'highlight', 'clean', 'karaoke', 'plain']).transform((v): CaptionStyleId => (v === 'plain' ? 'natural' : v))
+
 const captionStyleSchema = z.looseObject({
   enabled: z.boolean().default(C.enabled),
-  style: z.enum(['plain', 'karaoke']).default(C.style),
+  style: captionStyleId.default(C.style),
   wordsPerLine: z.number().default(C.wordsPerLine),
   position: z.enum(['bottom', 'center', 'top']).default(C.position),
   box: z.boolean().default(C.box),
-  highlightColor: z.string().default(C.highlightColor)
+  highlightColor: z.string().default(C.highlightColor),
+  textColor: z.string().optional(),
+  size: z.number().optional(),
+  positionY: z.number().optional(),
+  uppercase: z.boolean().optional()
+})
+
+const verticalSchema = z.looseObject({
+  layout: layoutKind.default('screen-focus'),
+  layouts: z.array(layoutSegSchema).default([]),
+  zooms: z.array(zoomSchema).default([]),
+  zoomPreset: z.enum(['subtle', 'moderate', 'intense', 'off']).optional(),
+  camera: z.looseObject({ corner: cornerSchema.optional(), size: z.number().optional() }).optional(),
+  hook: z.string().optional(),
+  captions: z
+    .looseObject({
+      enabled: z.boolean().optional(),
+      style: captionStyleId.optional(),
+      wordsPerLine: z.number().optional(),
+      position: z.enum(['bottom', 'center', 'top']).optional(),
+      box: z.boolean().optional(),
+      size: z.number().optional(),
+      positionY: z.number().optional(),
+      uppercase: z.boolean().optional()
+    })
+    .optional()
 })
 
 const clipSchema = z.looseObject({
@@ -176,7 +204,7 @@ const clipSchema = z.looseObject({
   score: z.number().default(0),
   reason: z.string().default(''),
   format: z.enum(['vertical', 'horizontal']).default('vertical'),
-  layoutV: z.enum(['stack', 'screen-focus', 'camera']).default('stack')
+  layoutV: z.enum(['stack', 'screen-focus', 'screen-wide', 'camera']).default('stack')
 })
 
 const captureSchema = z.looseObject({
@@ -216,6 +244,7 @@ export const projectSchema = z.looseObject({
   captions: captionStyleSchema.prefault({}),
   clips: z.array(clipSchema).default([]),
   zoomPreset: z.enum(['subtle', 'moderate', 'intense', 'off']).optional(),
+  vertical: verticalSchema.optional(),
   wordFixes: z.record(z.string(), z.string()).optional(),
   autoCleaned: z.boolean().optional(),
   meta: z.looseObject({}).optional()

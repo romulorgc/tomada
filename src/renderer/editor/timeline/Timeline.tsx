@@ -23,9 +23,9 @@ const LAYOUT_NAMES = t.editor.layout.options as Record<LayoutKind, string>
 const ZOOM_SLIDER_STEPS = 1000
 
 /** Ao criar um trecho de layout arrastando: o primeiro layout diferente do padrão que o projeto comporta. */
-function pickNewLayout(base: LayoutKind, hasScreen: boolean, hasCamera: boolean): LayoutKind {
-  const order: LayoutKind[] = ['screen', 'camera', 'side-by-side', 'bubble']
-  const ok = (l: LayoutKind): boolean => (l === 'camera' ? hasCamera : l === 'screen' ? hasScreen : hasCamera && hasScreen)
+function pickNewLayout(base: LayoutKind, hasScreen: boolean, hasCamera: boolean, vertical = false): LayoutKind {
+  const order: LayoutKind[] = vertical ? ['stack', 'screen-wide', 'screen-focus', 'camera'] : ['screen', 'camera', 'side-by-side', 'bubble']
+  const ok = (l: LayoutKind): boolean => (l === 'camera' ? hasCamera : l === 'screen' || l === 'screen-focus' || l === 'screen-wide' ? hasScreen : hasCamera && hasScreen)
   return order.find((l) => l !== base && ok(l)) ?? base
 }
 
@@ -100,6 +100,7 @@ export function Timeline() {
   const layouts = useDoc((s) => s.project.layouts)
   const cuts = useDoc((s) => s.project.cuts)
   const defaultLayout = useDoc((s) => s.project.style.defaultLayout)
+  const isVertical = useDoc((s) => s.format === 'vertical')
   const range = useDoc((s) => s.range)
   const selection = useDoc((s) => s.selection)
 
@@ -271,9 +272,9 @@ export function Timeline() {
       })),
       move: (base, id, delta) => moveLayoutSeg(base, id, delta, durationMs),
       resize: (base, id, edge, to) => resizeLayoutSeg(base, id, edge, to, durationMs),
-      create: (a, b) => ops.createLayout(a, b, pickNewLayout(defaultLayout, hasScreen, hasCamera))
+      create: (a, b) => ops.createLayout(a, b, pickNewLayout(defaultLayout, hasScreen, hasCamera, isVertical))
     }),
-    [layouts, defaultLayout, durationMs, ops, hasScreen, hasCamera]
+    [layouts, defaultLayout, durationMs, ops, hasScreen, hasCamera, isVertical]
   )
 
   const counts = zoomCounts({ zooms })

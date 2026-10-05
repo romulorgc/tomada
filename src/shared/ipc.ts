@@ -8,7 +8,7 @@ import type { Levels } from './clean'
 import type { ExportOptions } from './export'
 import type { RecordPrefs, RecordRequest } from './recording'
 import type { LlmStatus, PrepareSnapshot, RetakesResult, TranscriptionJob, TranscriptionPrefs, TranscriptionView } from './transcription'
-import type { Project, ProjectSummary, Size, Transcript } from './types'
+import type { Project, ProjectSummary, Size, Transcript, Word } from './types'
 
 // --- Tipos que atravessam a ponte ---------------------------------------------
 
@@ -248,16 +248,23 @@ export type ExportProgress = {
   report?: ExportReport
 }
 
+/** A legenda gravada em disco (`captions:export`). */
+export type CaptionsFile = { path: string; cues: number }
+
 /** O que a janela escondida de exportação recebe do processo principal. */
 export type ExportJob = {
   exportId: string
   projectId: string
   /** O documento a exportar (com as edições ainda não salvas, se for o caso). */
   project: Project
+  /** 16:9 ou vertical (o vertical é 1080×1920). */
+  format: 'horizontal' | 'vertical'
   width: number
   height: number
   fps: number
   bitrate: number
+  /** As palavras da transcrição (legendas); `null` = o projeto não tem transcrição. Só texto e tempos. */
+  words: Word[] | null
   /** URLs `tomada-media://` das mídias (null = sem essa fonte). */
   screenUrl: string | null
   cameraUrl: string | null
@@ -324,6 +331,8 @@ export type IpcContract = {
   'export:cancel': { args: [exportId: string]; result: void }
   'export:status': { args: []; result: ExportProgress | null }
   'export:pick-dir': { args: [defaultPath?: string]; result: string | null }
+  /** Salva a legenda (SRT ou VTT, no tempo do vídeo final) em `exports/` do projeto. O destino nunca vem da interface. */
+  'captions:export': { args: [projectId: string, kind: 'srt' | 'vtt']; result: CaptionsFile }
   /** Abre o arquivo no programa padrão (tocar o vídeo exportado). */
   'files:open': { args: [path: string]; result: void }
   /** Mostra o arquivo no Explorer. */
@@ -455,6 +464,7 @@ export type TomadaApi = {
     status(): Promise<ExportProgress | null>
     pickDir(defaultPath?: string): Promise<string | null>
   }
+  captions: { export(projectId: string, kind: 'srt' | 'vtt'): Promise<CaptionsFile> }
   files: {
     open(path: string): Promise<void>
     reveal(path: string): Promise<void>

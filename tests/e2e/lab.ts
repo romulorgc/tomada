@@ -12,7 +12,7 @@ import { EVENT_FILES } from '../../src/shared/events'
 import { mediaUrl } from '../../src/shared/media-url'
 import { parseProject } from '../../src/shared/project'
 import type { FormatSpec } from '../../src/shared/scene'
-import type { Project } from '../../src/shared/types'
+import type { Project, Word } from '../../src/shared/types'
 import { EXAMPLE_FOLDER, ROOT, SCREENS_DIR, type Session } from './helpers'
 
 export const GOLDENS_DIR = join(ROOT, 'tests', 'goldens')
@@ -53,6 +53,8 @@ export type StillOptions = {
   times: number[]
   format?: FormatSpec
   folder?: string
+  /** As palavras da transcrição (legendas). */
+  words?: Word[] | null
 }
 
 /** Renderiza os instantes pedidos e devolve os PNGs. */
@@ -63,6 +65,7 @@ export async function renderStills(lab: Page, o: StillOptions): Promise<Buffer[]
     projectId: folder,
     project,
     format: o.format ?? { kind: 'horizontal', w: 1920, h: 1080 },
+    words: o.words ?? null,
     times: o.times,
     screenUrl: project.sources.screen ? mediaUrl(folder, project.sources.screen.path) : null,
     cameraUrl: project.sources.camera ? mediaUrl(folder, project.sources.camera.path) : null,

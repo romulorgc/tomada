@@ -15,6 +15,7 @@ export function CameraPanel() {
   const { store, hasCamera } = useEditor()
   const cam = useDoc((s) => s.project.style.camera)
   const layout = useDoc((s) => s.project.style.defaultLayout)
+  const vertical = useDoc((s) => s.format === 'vertical')
 
   if (!hasCamera) {
     return (
@@ -70,7 +71,7 @@ export function CameraPanel() {
                 />
               ))}
             </div>
-            <p className="pos-help">{layout === 'bubble' ? T.positionHelp : T.positionOnlyBubble}</p>
+            <p className="pos-help">{vertical ? T.positionVertical : layout === 'bubble' ? T.positionHelp : T.positionOnlyBubble}</p>
           </div>
         </Section>
 

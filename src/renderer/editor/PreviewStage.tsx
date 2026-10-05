@@ -2,12 +2,14 @@
  * A PRÉVIA: o canvas onde o motor desenha (mesma cena da exportação), mais o que dá para fazer em cima dele:
  *  - arrastar a bolha da câmera (gruda numa das 9 posições da grade);
  *  - com um zoom selecionado, clicar na prévia fixa o foco daquele zoom naquele ponto;
- *  - estado de erro desenhado (vídeo que não abre).
+ *  - estado de erro desenhado (vídeo que não abre);
+ *  - no vertical, o guia das ZONAS SEGURAS (área segura e a interface do TikTok, Reels e Shorts): só aqui, nunca no vídeo.
  */
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import { setZoomFocus } from '@shared/edits'
 import type { Scene } from '@shared/scene'
 import type { Corner } from '@shared/types'
+import { PLATFORM_ZONES, SAFE_BOX, VERTICAL_H, VERTICAL_W, safeBoxFor } from '@shared/vertical'
 import { AlertIcon, FolderIcon, TargetIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
@@ -22,13 +24,45 @@ function nearestCorner(fx: number, fy: number): Corner {
   return `${row}-${col}` as Corner
 }
 
+/** Layouts em que a câmera é uma bolha que se arrasta (no 16:9 e no vertical). */
+const BUBBLE_LAYOUTS = new Set(['bubble', 'screen-focus', 'screen-wide'])
+
 const inside = (p: { x: number; y: number }, r: { x: number; y: number; w: number; h: number }, pad = 0): boolean =>
   p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad
+
+/** As zonas da interface das plataformas e a caixa segura única, em porcentagem do quadro 1080×1920. Só na prévia. */
+function SafeGuide() {
+  const L = t.editor.top.safeGuideLabels
+  const pct = (v: number, of: number): string => `${((v / of) * 100).toFixed(3)}%`
+  return (
+    <div className="safe-guide" data-testid="safe-guide-overlay" aria-hidden="true">
+      {PLATFORM_ZONES.map((z, k) => (
+        <div key={z.id} className="sg-platform" data-platform={z.id}>
+          <i className="sg-band" style={{ left: 0, top: 0, width: '100%', height: pct(z.top, VERTICAL_H) }} />
+          <i className="sg-band" style={{ left: 0, bottom: 0, width: '100%', height: pct(z.bottom, VERTICAL_H) }} />
+          {z.left > 0 ? <i className="sg-band" style={{ left: 0, top: 0, height: '100%', width: pct(z.left, VERTICAL_W) }} /> : null}
+          <i className="sg-band" style={{ right: 0, top: 0, height: '100%', width: pct(z.right, VERTICAL_W) }} />
+          <b className="sg-label" style={{ bottom: pct(8 + k * 56, VERTICAL_H), right: pct(z.right + 10, VERTICAL_W) }}>
+            {L[z.id]}
+          </b>
+        </div>
+      ))}
+      <div
+        className="sg-box"
+        style={{ left: pct(SAFE_BOX.x, VERTICAL_W), top: pct(SAFE_BOX.y, VERTICAL_H), width: pct(SAFE_BOX.w, VERTICAL_W), height: pct(SAFE_BOX.h, VERTICAL_H) }}
+      >
+        <b>{L.box}</b>
+      </div>
+    </div>
+  )
+}
 
 export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefObject<HTMLCanvasElement | null>; hostRef: RefObject<HTMLDivElement | null>; frameRef: RefObject<HTMLDivElement | null> }) {
   const { store, engineRef, detail } = useEditor()
   const revealProject = useApp((s) => s.revealProject)
   const selection = useDoc((s) => s.selection)
+  const format = useDoc((s) => s.format)
+  const safeGuide = useDoc((s) => s.safeGuide)
   const zooms = useDoc((s) => s.project.zooms)
   const error = usePlayback((s) => s.error)
   const [cursor, setCursor] = useState<'default' | 'grab' | 'grabbing' | 'crosshair'>('default')
@@ -48,7 +82,7 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
   }
 
   const cameraHit = (scene: Scene | null, p: { x: number; y: number }): boolean =>
-    Boolean(scene && scene.screen && scene.camera && scene.debug.layout === 'bubble' && scene.debug.previous === scene.debug.layout && inside(p, scene.camera.dest, 4))
+    Boolean(scene && scene.screen && scene.camera && BUBBLE_LAYOUTS.has(scene.debug.layout) && scene.debug.previous === scene.debug.layout && inside(p, scene.camera.dest, 4))
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
     if (e.button !== 0) return
@@ -75,7 +109,8 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
     const p = toCanvas(e)
     if (!scene || !p) return
     if (drag.current?.mode === 'camera' && scene.screen) {
-      const { dest } = scene.screen
+      // no 16:9 a grade 3×3 é a da tela; no vertical é a da área segura (a câmera nunca sai dela)
+      const dest = scene.format.kind === 'vertical' ? safeBoxFor(scene.format) : scene.screen.dest
       const corner = nearestCorner((p.x - dest.x) / dest.w, (p.y - dest.y) / dest.h)
       store.getState().change((doc) => (doc.style.camera.corner === corner ? doc : { ...doc, style: { ...doc.style, camera: { ...doc.style.camera, corner } } }))
       return
@@ -109,6 +144,7 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
         className="preview-frame"
         data-testid="preview-frame"
         data-cursor={cursor}
+        data-format={format}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -117,6 +153,7 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
         <canvas ref={canvasRef} width={1280} height={720} aria-label={t.editor.preview} data-testid="preview-canvas" data-ready="false" />
         {/* As fontes de imagem e de som da prévia: ficam na página (precisam decodificar) mas não aparecem. */}
         <div ref={hostRef} className="preview-sources" aria-hidden="true" />
+        {format === 'vertical' && safeGuide ? <SafeGuide /> : null}
         {marker ? (
           <span className="focus-marker" data-testid="focus-marker" style={{ left: `${marker.left}%`, top: `${marker.top}%` }}>
             <TargetIcon size={22} />

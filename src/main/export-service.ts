@@ -32,8 +32,10 @@ import { mediaUrl } from '@shared/media-url'
 import { projectDurationMs } from '@shared/project'
 import { uniqueName } from '@shared/recording'
 import { keptRanges, outputDuration } from '@shared/timeline'
-import type { Project } from '@shared/types'
+import { projectForFormat } from '@shared/vertical'
+import type { Project, Word } from '@shared/types'
 import {
+  VERTICAL_AUDIO_BITRATE,
   buildAudioArgs,
   buildAudioGraph,
   buildMeasureArgs,
@@ -65,6 +67,8 @@ export type ExportServiceDeps = {
   logger: Logger
   /** Lê o projeto (documento + pasta). */
   read(id: string): Promise<{ project: Project; dir: string }>
+  /** As palavras da transcrição do projeto (legendas), ou `null` se ele não tem. Só texto e tempos. */
+  words?(id: string): Promise<Word[] | null>
   ffmpeg(): Ffmpeg | null
   /**
    * Pastas de destino que o usuário escolheu nesta sessão (diálogo nativo do processo principal). O destino da
@@ -214,6 +218,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     const kept = keptRanges(durationMs, project.cuts)
     const outMs = outputDuration(durationMs, project.cuts)
     const signal = run.abort.signal
+    const bitrate = run.req.format === 'vertical' ? VERTICAL_AUDIO_BITRATE : undefined
 
     const voicePath = run.files.voice
     const systemPath = run.files.system
@@ -222,7 +227,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     if (project.sources.voice && !hasVoice) logger.warn(`Exportação: o arquivo de voz do projeto não existe (${voicePath}); a trilha sai sem voz.`)
 
     if (!hasVoice && !hasSystem) {
-      await ff.run(buildSilentAudioArgs({ durationMs: outMs, output: run.audioPath }), { signal })
+      await ff.run(buildSilentAudioArgs({ durationMs: outMs, output: run.audioPath, ...(bitrate ? { bitrate } : {}) }), { signal })
       run.audioFraction = 1
       emit(run)
       return
@@ -251,7 +256,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     const graph2 = buildAudioGraph({ kept, voice, system, mode: 'final', measured, ...(voiceMutes?.length ? { voiceMutes } : {}) })
     const graphFile2 = join(run.tmpDir, 'audio-final.txt')
     await writeFile(graphFile2, graph2.graph, 'utf8')
-    await ff.run(buildAudioArgs({ inputs, graphFile: graphFile2, output: run.audioPath }), {
+    await ff.run(buildAudioArgs({ inputs, graphFile: graphFile2, output: run.audioPath, ...(bitrate ? { bitrate } : {}) }), {
       signal,
       onProgress: (p) => {
         run.audioFraction = Math.min(0.99, 0.5 + (p.timeMs / Math.max(1, outMs)) * 0.5)
@@ -292,7 +297,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       await mkdir(run.tmpDir, { recursive: true })
       run.handle = await open(run.videoPath, 'w+')
 
-      const label = `${EXPORT_RESOLUTION_LABEL[run.req.resolution]}${run.req.fps}`
+      const label = run.req.format === 'vertical' ? `vertical 1080×1920 ${run.req.fps}` : `${EXPORT_RESOLUTION_LABEL[run.req.resolution]}${run.req.fps}`
       logger.info(`Exportação ${run.id} (${label}) do projeto ${run.req.projectId}: ${run.progress.totalFrames} quadros.`)
       setPhase(run, 'rendering')
 
@@ -465,6 +470,15 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       const totalFrames = outputFrameCount(outMs, request.fps)
       if (totalFrames === 0) throw new ExportError('Não há nada para exportar: todos os trechos foram cortados.')
 
+      // As palavras da transcrição (legendas). Ler falhou e a legenda está ligada neste formato: erro visível, nunca legenda sumida.
+      let words: Word[] | null = null
+      try {
+        words = (await deps.words?.(request.projectId)) ?? null
+      } catch (err) {
+        if (projectForFormat(project, format.kind).captions.enabled) throw new ExportError(`Não consegui ler a transcrição para as legendas: ${messageOf(err)}`)
+        logger.warn(`Exportação: não consegui ler a transcrição de ${request.projectId} (${messageOf(err)}); a legenda está desligada, segue sem ela.`)
+      }
+
       const id = randomUUID()
       const exportsDir = await chooseOutputDir(dir, request.dir)
       const base = exportFileName(project.title, request)
@@ -476,10 +490,12 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         exportId: id,
         projectId: request.projectId,
         project,
+        format: format.kind,
         width: format.w,
         height: format.h,
         fps: request.fps,
-        bitrate: exportBitrate(request.resolution, request.fps),
+        bitrate: exportBitrate(request.resolution, request.fps, request.format),
+        words,
         screenUrl: project.sources.screen ? mediaUrl(request.projectId, project.sources.screen.path) : null,
         cameraUrl: project.sources.camera ? mediaUrl(request.projectId, project.sources.camera.path) : null,
         eventUrls: {

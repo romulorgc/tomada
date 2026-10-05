@@ -14,6 +14,7 @@ import {
   visibleRect,
   type CameraPath
 } from '@shared/zoom'
+import { cropView } from '@shared/vertical'
 import type { ClickEvent, CursorSample, KeyEvent, Zoom } from '@shared/types'
 
 const click = (t: number, x = 0.5, y = 0.5, out = false): ClickEvent => ({ t, x, y, button: 'left', ...(out ? { out: true } : {}) })
@@ -366,5 +367,108 @@ describe('computeCameraPath', () => {
     expect(sampleCameraPath(path, -50).scale).toBe(1)
     expect(sampleCameraPath(path, 99_999).cx).toBe(0.7)
     expect(sampleCameraPath({ ...path, t: [], scale: [], cx: [], cy: [] }, 5)).toEqual({ scale: 1, cx: 0.5, cy: 0.5 })
+  })
+})
+
+describe('caminho da câmera com proporção genérica (M4a: 9:16, 1:1, 4:5 sobre uma tela qualquer)', () => {
+  const SRC = { w: 1920, h: 1080 }
+  const RATIOS: [string, number][] = [['9:16', 9 / 16], ['1:1', 1], ['4:5', 4 / 5], ['3:4', 3 / 4]]
+  const aspectOf = (r: { w: number; h: number }): number => (r.w * SRC.w) / (r.h * SRC.h)
+
+  it('em qualquer proporção o retângulo visível tem a proporção do destino e cabe dentro da fonte, em todo quadro', () => {
+    const D = 12_000
+    const g = wander(D)
+    for (const [name, dest] of RATIOS) {
+      const view = cropView(dest, SRC)
+      const path = computeCameraPath({ zooms: [zoom(2000, 6000, 1.4), zoom(8000, 11_000, 1.3, { x: 0.97, y: 0.04 })] }, g, { durationMs: D, view })
+      for (let i = 0; i < path.t.length; i++) {
+        const r = visibleRect({ scale: path.scale[i]!, cx: path.cx[i]!, cy: path.cy[i]! }, view)
+        expect(aspectOf(r), `${name} quadro ${i}`).toBeCloseTo(dest, 6)
+        expect(r.x, name).toBeGreaterThanOrEqual(-1e-9)
+        expect(r.y, name).toBeGreaterThanOrEqual(-1e-9)
+        expect(r.x + r.w, name).toBeLessThanOrEqual(1 + 1e-9)
+        expect(r.y + r.h, name).toBeLessThanOrEqual(1 + 1e-9)
+      }
+    }
+  })
+
+  it('recorte menor que a fonte SEGUE o cursor mesmo sem zoom, e o vídeo já começa enquadrado nele', () => {
+    const view = cropView(9 / 16, SRC)
+    const D = 8000
+    const g = cur([[0, 0.8, 0.5], [3000, 0.8, 0.5], [4000, 0.2, 0.5], [8000, 0.2, 0.5]], D)
+    const path = computeCameraPath({ zooms: [] }, g, { durationMs: D, view })
+    expect(path.maxScale).toBe(1)
+    // começa no cursor (limitado para o recorte caber), não no centro
+    const start = visibleRect(sampleCameraPath(path, 0), view)
+    expect(start.x + start.w / 2).toBeGreaterThan(0.7)
+    // o cursor fica sempre dentro do que se vê (depois de a mola assentar)
+    for (const t of [1500, 2800, 6000, 7900]) {
+      const r = visibleRect(sampleCameraPath(path, t), view)
+      const i = Math.round((t * 60) / 1000)
+      expect(g.x[i]!).toBeGreaterThanOrEqual(r.x - 1e-6)
+      expect(g.x[i]!).toBeLessThanOrEqual(r.x + r.w + 1e-6)
+    }
+    // e a câmera foi mesmo para a esquerda quando o cursor foi
+    expect(sampleCameraPath(path, 7900).cx).toBeLessThan(0.3)
+  })
+
+  it('zona morta no recorte que segue: o cursor inquieto dentro de 50% × 70% do que se vê NÃO mexe a câmera (sem tremer)', () => {
+    const view = cropView(9 / 16, SRC) // w = 0,316 → zona morta de 0,158 de largura
+    const samples: CursorSample[] = []
+    for (let t = 0; t <= 8000; t += 8) samples.push({ t, x: 0.5 + 0.03 * Math.sin(t / 300), y: 0.5 + 0.06 * Math.sin(t / 410) })
+    const g = processCursor(samples, [], { durationMs: 8000, antiTremor: false })
+    const path = computeCameraPath({ zooms: [] }, g, { durationMs: 8000, view })
+    const a = sampleCameraPath(path, 1000)
+    const b = sampleCameraPath(path, 7500)
+    expect(Math.abs(b.cx - a.cx)).toBeLessThan(0.02)
+    expect(maxAbsDiff(path.cx)).toBeLessThan(0.01)
+    expect(maxAbs2nd(path.cx)).toBeLessThan(0.01)
+  })
+
+  it('o cursor que sai da zona morta arrasta a câmera, com movimento suave (sem degrau de velocidade)', () => {
+    const view = cropView(9 / 16, SRC)
+    const D = 9000
+    const g = cur([[0, 0.3, 0.5], [2000, 0.3, 0.5], [5000, 0.7, 0.5], [9000, 0.7, 0.5]], D)
+    const path = computeCameraPath({ zooms: [] }, g, { durationMs: D, view })
+    expect(sampleCameraPath(path, 8500).cx).toBeGreaterThan(0.55)
+    expect(maxAbsDiff(path.cx)).toBeLessThan(0.02)
+    expect(maxAbs2nd(path.cx)).toBeLessThan(0.01)
+  })
+
+  it('segmento de zoom sobre o recorte que segue: a escala sobe a partir do recorte base e volta a 1 sem a câmera pular de lugar', () => {
+    const view = cropView(9 / 16, SRC)
+    const D = 10_000
+    const g = still(0.6, 0.5, D)
+    const path = computeCameraPath({ zooms: [zoom(2000, 6000, 1.4)] }, g, { durationMs: D, view })
+    expect(sampleCameraPath(path, 4500).scale).toBeCloseTo(1.4, 1)
+    expect(sampleCameraPath(path, 9500).scale).toBeCloseTo(1, 2)
+    // o centro não anda quando o cursor está parado, com zoom ou sem
+    const c0 = sampleCameraPath(path, 1000).cx
+    expect(Math.abs(sampleCameraPath(path, 4500).cx - c0)).toBeLessThan(0.02)
+    expect(Math.abs(sampleCameraPath(path, 9500).cx - c0)).toBeLessThan(0.02)
+  })
+
+  it('o recorte 1×1 (16:9 sobre 16:9) NÃO mudou: segue o comportamento de sempre (centro parado sem zoom)', () => {
+    const g = wander(6000)
+    const plain = computeCameraPath({ zooms: [zoom(1000, 4000, 1.7)] }, g, { durationMs: 6000 })
+    const explicit = computeCameraPath({ zooms: [zoom(1000, 4000, 1.7)] }, g, { durationMs: 6000, view: { w: 1, h: 1 } })
+    expect(explicit).toEqual(plain)
+    const flat = computeCameraPath({ zooms: [] }, g, { durationMs: 6000, view: cropView(16 / 9, SRC) })
+    expect(flat.cx.every((v) => v === 0.5) && flat.cy.every((v) => v === 0.5)).toBe(true)
+  })
+
+  it('o recorte do V-B (2× sobre a tela, 1080×590) também segue o cursor dentro da fonte', () => {
+    const view = cropView(1080 / 590, SRC, 590 / 2 / 1080)
+    expect(view.h).toBeCloseTo(0.2731, 3) // 295 px de uma tela de 1080: a base já é um zoom de ~2×
+    expect(aspectOf(view)).toBeCloseTo(1080 / 590, 4)
+    const D = 6000
+    const g = cur([[0, 0.5, 0.2], [2000, 0.5, 0.2], [3000, 0.5, 0.8], [6000, 0.5, 0.8]], D)
+    const path = computeCameraPath({ zooms: [] }, g, { durationMs: D, view })
+    expect(sampleCameraPath(path, 5800).cy).toBeGreaterThan(0.6)
+    for (let i = 0; i < path.t.length; i++) {
+      const r = visibleRect({ scale: path.scale[i]!, cx: path.cx[i]!, cy: path.cy[i]! }, view)
+      expect(r.y).toBeGreaterThanOrEqual(-1e-9)
+      expect(r.y + r.h).toBeLessThanOrEqual(1 + 1e-9)
+    }
   })
 })

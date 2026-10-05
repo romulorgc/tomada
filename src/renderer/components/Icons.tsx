@@ -384,3 +384,47 @@ export const ChevronUpIcon = (p: IconProps) => (
     <path d="m6.5 14.5 5.5-5.5 5.5 5.5" />
   </Svg>
 )
+
+// --- M4a: vertical e legendas -------------------------------------------------------------------
+
+/** V-A "Cursor": quadro em pé, recorte da tela em tela cheia e a bolha da câmera no canto. */
+export const LayoutFocusIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="7" y="2.8" width="10" height="18.4" rx="2" />
+    <circle cx="10.2" cy="7.2" r="1.5" fill="currentColor" stroke="none" />
+    <path d="M10 14.5l3.6 1.4-1.5.6 1.1 2.1-1 .5-1.1-2.1-1.1 1z" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+/** V-B "Câmera + tela": quadro em pé dividido, rosto em cima e tela embaixo. */
+export const LayoutStackIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="7" y="2.8" width="10" height="18.4" rx="2" />
+    <path d="M7 12.2h10" />
+    <circle cx="12" cy="7.3" r="1.5" fill="currentColor" stroke="none" />
+    <rect x="9" y="14.2" width="6" height="4" rx="0.8" fill="currentColor" fillOpacity="0.35" stroke="none" />
+  </Svg>
+)
+
+/** V-C "Tela na largura": quadro em pé com a tela inteira ao centro. */
+export const LayoutWideIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="7" y="2.8" width="10" height="18.4" rx="2" />
+    <rect x="7" y="8.4" width="10" height="6" fill="currentColor" fillOpacity="0.35" stroke="none" />
+    <path d="M7 8.4h10M7 14.4h10" />
+  </Svg>
+)
+
+export const CaptionsIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5.5" width="18" height="13" rx="2.4" />
+    <path d="M7 10.5h4M7 14h2M13 14h4M13 10.5h4" />
+  </Svg>
+)
+
+export const GuideIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="6.5" y="3" width="11" height="18" rx="2" />
+    <rect x="8.6" y="6" width="6.8" height="10.5" rx="0.6" strokeDasharray="1.8 1.8" />
+  </Svg>
+)

@@ -12,7 +12,7 @@ import type { Project } from '../../src/shared/types'
 import { FIXTURES_DIR } from '../helpers/fs'
 import { EXAMPLE_FOLDER, type Session } from './helpers'
 
-export type ExportOpts = { resolution: '1080p' | '1440p' | '2160p'; fps: 30 | 60 }
+export type ExportOpts = { resolution: '1080p' | '1440p' | '2160p'; fps: 30 | 60; format?: 'horizontal' | 'vertical' }
 
 /** Pede a exportação pelo IPC e espera ela terminar (feita, falha ou cancelada). */
 export async function exportProject(page: Page, projectId: string, opts: ExportOpts = { resolution: '1080p', fps: 30 }): Promise<ExportProgress> {

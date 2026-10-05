@@ -13,8 +13,9 @@
  * Este arquivo vive em `shared` (compilado também sem DOM), então fala com o canvas por
  * interfaces ESTRUTURAIS mínimas: os contextos do navegador as satisfazem.
  */
+import { drawCaptions, drawHook, type TextLayout } from './caption-render'
 import { backgroundKey, coverCrop, gradientEndpoints } from './styles'
-import type { Scene, SceneCamera, SceneScreen, ShadowSpec } from './scene'
+import type { Scene, SceneBackdrop, SceneCamera, SceneScreen, ShadowSpec } from './scene'
 import type { Background, Rect } from './types'
 
 // ---------------------------------------------------------------------------
@@ -64,6 +65,14 @@ export interface Ctx2D {
   shadowColor: string
   shadowOffsetX: number
   shadowOffsetY: number
+  // texto (legendas e título de gancho, M4a)
+  font: string
+  textAlign: string
+  textBaseline: string
+  miterLimit: number
+  fillText(text: string, x: number, y: number): void
+  strokeText(text: string, x: number, y: number): void
+  measureText(text: string): { width: number }
 }
 
 export interface CanvasLike {
@@ -101,6 +110,13 @@ export type RenderCache = {
   sized: Map<string, Sprite>
   /** Camadas de trabalho (uma por elemento) para o recorte arredondado com antialiasing. */
   layers: Map<string, CanvasLike>
+  /** O layout do texto de cada página de legenda (quebra de linhas, tamanho), calculado uma vez. */
+  captionLayouts: Map<string, TextLayout>
+  /**
+   * As fontes das legendas já estão carregadas? Enquanto não, a legenda NÃO é desenhada (melhor sem ela por um instante do
+   * que com a fonte errada). A exportação espera as fontes antes do primeiro quadro; a prévia liga isto quando carregam.
+   */
+  fontsReady: boolean
   stats: RenderStats
 }
 
@@ -114,6 +130,8 @@ export function createRenderCache(factory: CanvasFactory): RenderCache {
     nine: new Map(),
     sized: new Map(),
     layers: new Map(),
+    captionLayouts: new Map(),
+    fontsReady: true,
     stats: { backgroundBuilds: 0, shadowBuilds: 0, frames: 0 }
   }
 }
@@ -547,9 +565,32 @@ function drawCamera(ctx: Ctx2D, cache: RenderCache, c: SceneCamera, frame: Frame
   }
 }
 
-/** Gancho das legendas (M4): hoje não desenha nada. */
-export function drawCaptionsHook(_ctx: Ctx2D, _scene: Scene): void {
-  // M4
+/**
+ * Fundo do V-C (tela na largura): o PRÓPRIO vídeo da tela, desfocado e escurecido. O desfoque é barato e igual na prévia e
+ * na exportação: a imagem desce para um canvas minúsculo (filtro de média na descida) e volta esticada com suavização
+ * (nada de `filter: blur()` por quadro).
+ */
+function drawBackdrop(ctx: Ctx2D, cache: RenderCache, b: SceneBackdrop, frame: FrameSource | null | undefined, w: number, h: number): void {
+  if (!frame || !(frame.w > 0) || !(frame.h > 0)) return
+  const tw = Math.max(8, Math.round(w / 14))
+  const th = Math.max(8, Math.round(h / 14))
+  const small = layerFor(cache, 'backdrop', tw, th)
+  const sc = ctxOf(small)
+  sc.save()
+  sc.setTransform(1, 0, 0, 1, 0, 0)
+  sc.globalAlpha = 1
+  sc.globalCompositeOperation = 'source-over'
+  sc.imageSmoothingEnabled = true
+  sc.imageSmoothingQuality = 'high'
+  sc.clearRect(0, 0, small.width, small.height)
+  sc.drawImage(frame.image, b.src.x * frame.w, b.src.y * frame.h, b.src.w * frame.w, b.src.h * frame.h, 0, 0, tw, th)
+  sc.restore()
+  const prev = ctx.globalAlpha
+  ctx.globalAlpha = prev * b.alpha
+  ctx.drawImage(small, 0, 0, tw, th, 0, 0, w, h)
+  ctx.fillStyle = `rgba(0,0,0,${b.darken})`
+  ctx.fillRect(0, 0, w, h)
+  ctx.globalAlpha = prev
 }
 
 // ---------------------------------------------------------------------------
@@ -568,9 +609,11 @@ export function renderFrame(ctx: Ctx2D, scene: Scene, frames: FrameSet, cache: R
   ctx.imageSmoothingQuality = 'high'
 
   ctx.drawImage(backgroundBitmap(cache, scene.background, w, h), 0, 0)
+  if (scene.backdrop) drawBackdrop(ctx, cache, scene.backdrop, frames.screen, w, h)
 
   if (scene.screen) drawScreen(ctx, cache, scene, scene.screen, frames.screen)
   if (scene.camera) drawCamera(ctx, cache, scene.camera, frames.camera)
-  drawCaptionsHook(ctx, scene)
+  if (scene.hook) drawHook(ctx, cache, scene.hook)
+  if (scene.captions) drawCaptions(ctx, cache, scene.captions)
   cache.stats.frames++
 }

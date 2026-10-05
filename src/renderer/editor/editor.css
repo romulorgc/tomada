@@ -8,7 +8,7 @@
  * Casca: barra · prévia + painel · linha do tempo
  */
 .ed {
-  --panel-w: clamp(19.5rem, 17vw, 27rem);
+  --panel-w: clamp(20.5rem, 17vw, 27rem);
   --ruler-h: 1.625rem;
   --lane-h: 2.25rem;
   --scrollbar-h: 10px;
@@ -416,6 +416,11 @@
     0 0 0 1px var(--color-line),
     0 20px 56px rgb(0 0 0 / 0.5);
 }
+/* O vertical 9:16: o quadro fica em pé e cabe na altura disponível. */
+.preview-frame[data-format='vertical'] {
+  width: min(100cqw, calc(100cqh * 9 / 16));
+  aspect-ratio: 9 / 16;
+}
 .preview-frame[data-cursor='grab'] {
   cursor: grab;
 }
@@ -655,9 +660,9 @@
 }
 .ed-tabs {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 1px;
-  padding: 0.5rem 0.5rem 0;
+  padding: 0.5rem 0.25rem 0;
   border-bottom: 1px solid var(--color-line);
 }
 .ed-tabs > button {
@@ -670,7 +675,7 @@
   border-radius: 0.4rem 0.4rem 0 0;
   background: transparent;
   color: var(--color-faint);
-  font-size: 0.6875rem;
+  font-size: 0.65625rem;
   font-weight: 600;
   cursor: pointer;
   transition:
@@ -2123,4 +2128,129 @@
   flex-wrap: wrap;
   gap: 0.25rem;
   margin-top: 0.2rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Guia das zonas seguras do vertical (só na prévia, nunca exportado)
+ */
+.safe-guide {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.sg-platform {
+  position: absolute;
+  inset: 0;
+  --sg: 255 80 60;
+}
+.sg-platform[data-platform='reels'] {
+  --sg: 190 90 255;
+}
+.sg-platform[data-platform='shorts'] {
+  --sg: 255 170 40;
+}
+.sg-band {
+  position: absolute;
+  background: rgb(var(--sg) / 0.1);
+  box-shadow: 0 0 0 0.5px rgb(var(--sg) / 0.35);
+}
+.sg-label {
+  position: absolute;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgb(var(--sg) / 0.78);
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.sg-box {
+  position: absolute;
+  border: 1.5px dashed rgb(255 255 255 / 0.85);
+  box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.5);
+}
+.sg-box > b {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.55);
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 650;
+}
+
+/* ---------------------------------------------------------------------------
+ * Aba Legendas
+ */
+.cap-styles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.cap-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.4rem;
+  border: 1px solid var(--color-line);
+  border-radius: 0.5rem;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.cap-card:hover:not(:disabled) {
+  border-color: var(--color-line-strong);
+}
+.cap-card[aria-pressed='true'] {
+  border-color: var(--color-rec);
+  background: var(--color-raised);
+  box-shadow: 0 0 0 1px var(--color-rec);
+}
+.cap-card:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.cap-card:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cap-card canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.375rem;
+  background: #111;
+}
+.cap-card b {
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.cap-card small {
+  color: var(--color-muted);
+  font-size: 0.6875rem;
+  line-height: 1.3;
+}
+.cap-files {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.cap-hook {
+  width: 100%;
+  min-height: 3.2rem;
+  padding: 0.5rem 0.6rem;
+  resize: vertical;
+}
+.cap-count {
+  color: var(--color-faint);
+  font-size: 0.6875rem;
+  text-align: right;
+}
+.format-tabs {
+  display: inline-flex;
 }

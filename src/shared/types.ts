@@ -52,8 +52,9 @@ export type LayoutKind =
   | 'side-by-side' // tela e câmera lado a lado (horizontal)
   | 'screen' // só tela
   | 'camera' // só câmera
-  | 'stack' // vertical: câmera em cima, recorte da tela embaixo
-  | 'screen-focus' // vertical: recorte da tela ocupa tudo, câmera em bolha
+  | 'stack' // vertical V-B: câmera em cima, recorte da tela embaixo
+  | 'screen-focus' // vertical V-A: recorte da tela ocupa tudo (segue o cursor), câmera em bolha
+  | 'screen-wide' // vertical V-C: a tela inteira na largura, fundo = o mesmo vídeo desfocado e escurecido
 
 export type LayoutSeg = {
   id: string
@@ -122,17 +123,56 @@ export type Style = {
 /** Intensidade do zoom automático. */
 export type ZoomPresetId = 'subtle' | 'moderate' | 'intense'
 
+/**
+ * Estilos de legenda (M4a): `natural` (frase discreta numa caixa, o do 16:9), `highlight` ("Destaque": caixa-alta pesada
+ * com contorno e a palavra falada acesa, o do vertical), `clean` ("Limpa": caixa branca, texto escuro) e `karaoke`
+ * (frase inteira, a palavra acesa avança). O `plain` das versões antigas do documento vira `natural` ao ler.
+ */
+export type CaptionStyleId = 'natural' | 'highlight' | 'clean' | 'karaoke'
+
 export type CaptionStyle = {
   enabled: boolean
-  style: 'plain' | 'karaoke'
+  style: CaptionStyleId
+  /** Palavras por linha (a legenda tem até 2 linhas). */
   wordsPerLine: number
+  /** Onde fica quando `positionY` não foi escolhido. */
   position: 'bottom' | 'center' | 'top'
+  /** Caixa atrás do texto (Natural e Karaokê; a Limpa sempre tem). */
   box: boolean
+  /** Cor da palavra falada. */
   highlightColor: string
+  /** Cor do texto (padrão do estilo). */
+  textColor?: string
+  /** Multiplicador do tamanho padrão do estilo (1 = o padrão). */
+  size?: number
+  /** Posição vertical do CENTRO do bloco, fração 0..1 da altura do quadro (ausente = a do estilo). */
+  positionY?: number
+  /** Maiúsculas; ausente = o padrão do estilo (só o Destaque usa). */
+  uppercase?: boolean
 }
 
 export type ClipFormat = 'vertical' | 'horizontal'
-export type VerticalLayout = 'stack' | 'screen-focus' | 'camera'
+export type VerticalLayout = 'stack' | 'screen-focus' | 'screen-wide' | 'camera'
+
+/**
+ * Edição PRÓPRIA do vertical 9:16 (M4a). Zooms, trechos de layout, câmera e legenda do vertical são independentes
+ * dos do 16:9: o mesmo `project.json` carrega os dois formatos. Tempos em ms de ORIGEM, como em todo o documento.
+ * Ausente = o vertical ainda não foi editado (os padrões valem e o editor gera zooms e layouts ao entrar no 9:16).
+ */
+export type VerticalEdit = {
+  /** Layout padrão do vertical (V-A `screen-focus`). */
+  layout: LayoutKind
+  /** Trechos de layout próprios (a escolha automática por atividade os gera). */
+  layouts: LayoutSeg[]
+  zooms: Zoom[]
+  zoomPreset?: ZoomPresetId | 'off'
+  /** Bolha da câmera no vertical: posição na CAIXA SEGURA e tamanho (fração do lado menor, 250 px = 0,2315). */
+  camera?: { corner?: Corner; size?: number }
+  /** Título de gancho (aparece nos 2 primeiros segundos de saída). Vazio = nenhum. */
+  hook?: string
+  /** Legenda só do vertical (o resto, como as cores, vale para os dois formatos). */
+  captions?: Partial<Pick<CaptionStyle, 'enabled' | 'style' | 'wordsPerLine' | 'position' | 'box' | 'size' | 'positionY' | 'uppercase'>>
+}
 
 export type Clip = {
   id: string
@@ -205,6 +245,8 @@ export type Project = {
    * desligou o zoom automático (não regenerar).
    */
   zoomPreset?: ZoomPresetId | 'off'
+  /** O vertical 9:16 (M4a): zooms, layouts, câmera e legenda próprios. */
+  vertical?: VerticalEdit
   /**
    * Correções de texto da transcrição, por índice de palavra (`Word.i`): valem para a legenda, nunca para o áudio.
    * Ficam no documento (e não em `transcript.json`) para entrar no desfazer.

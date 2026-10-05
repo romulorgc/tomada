@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   FADE_MS,
+  VERTICAL_AUDIO_BITRATE,
   buildAudioArgs,
   buildAudioGraph,
   buildMeasureArgs,
@@ -118,6 +119,11 @@ describe('grafo de áudio', () => {
     const audio = buildAudioArgs({ inputs: ['C:/t/v.wav'], graphFile: 'C:/t/g.txt', output: 'C:/t/a.m4a' })
     expect(audio).toEqual(expect.arrayContaining(['-c:a', 'aac', '-b:a', '384k', '-ar', '48000']))
     expect(audio[audio.length - 1]).toBe('C:/t/a.m4a')
+    const vertical = buildAudioArgs({ inputs: ['C:/t/v.wav'], graphFile: 'C:/t/g.txt', output: 'C:/t/a.m4a', bitrate: VERTICAL_AUDIO_BITRATE })
+    expect(VERTICAL_AUDIO_BITRATE).toBe('192k') // o vertical (TikTok, Reels, Shorts) leva AAC a 192 kbps
+    expect(vertical).toEqual(expect.arrayContaining(['-b:a', '192k', '-ar', '48000']))
+    expect(vertical).not.toContain('384k')
+    expect(buildSilentAudioArgs({ durationMs: 1000, output: 'C:/t/s.m4a', bitrate: VERTICAL_AUDIO_BITRATE })).toContain('192k')
     const silent = buildSilentAudioArgs({ durationMs: 12_345, output: 'C:/t/s.m4a' })
     expect(silent).toEqual(expect.arrayContaining(['anullsrc=r=48000:cl=stereo', '12.345000']))
     const mux = buildMuxArgs({ video: 'C:/t/v.mp4', audio: 'C:/t/a.m4a', output: 'C:/t/f.mp4' })

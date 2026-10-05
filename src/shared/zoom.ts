@@ -31,8 +31,23 @@ export const ZOOM_PRESETS: Record<ZoomPresetId, ZoomPreset> = {
   intense: { lead: 400, hold: 900, mergeGap: 1200, scale: 2.0, minGap: 1200 }
 }
 
-/** Padrão do horizontal 16:9 (o vertical usa `intense`, na M4). */
+/** Padrão do horizontal 16:9. */
 export const DEFAULT_ZOOM_PRESET: ZoomPresetId = 'moderate'
+
+/** Padrão do vertical 9:16: o Intenso, com escala de vertical (ver `zoomPresetFor`). */
+export const DEFAULT_VERTICAL_ZOOM_PRESET: ZoomPresetId = 'intense'
+
+/**
+ * Escala do zoom por preset NO VERTICAL. O recorte 9:16 já parte de ~1,78× (a altura inteira da tela), então os zooms de
+ * clique são só um reforço: 1,3-1,5×, em vez dos 1,4-2× do 16:9. Os tempos (lead, hold, fusão) são os mesmos.
+ */
+export const VERTICAL_ZOOM_SCALE: Record<ZoomPresetId, number> = { subtle: 1.2, moderate: 1.3, intense: 1.4 }
+
+/** O preset de um formato: no vertical, os tempos do preset com a escala de vertical. */
+export function zoomPresetFor(kind: 'horizontal' | 'vertical', id: ZoomPresetId): ZoomPreset {
+  const base = ZOOM_PRESETS[id]
+  return kind === 'vertical' ? { ...base, scale: VERTICAL_ZOOM_SCALE[id] } : base
+}
 
 /** Rajada de digitação: pelo menos 3 teclas com intervalos menores que isto. */
 export const TYPING_BURST_GAP_MS = 800
@@ -270,6 +285,10 @@ export function computeCameraPath(
   const cxOut: number[] = new Array<number>(n)
   const cyOut: number[] = new Array<number>(n)
 
+  // Recorte MENOR que a fonte já na escala 1 (o 9:16 sobre uma tela 16:9, uma faixa de uma tela larga): o enquadramento base
+  // NÃO é a fonte inteira, então a câmera precisa seguir o cursor o tempo todo, com ou sem segmento de zoom aberto.
+  const follows = view.w < 0.999 || view.h < 0.999
+
   let sScale = { x: 1, v: 0 }
   let sCx = { x: 0.5, v: 0 }
   let sCy = { x: 0.5, v: 0 }
@@ -290,25 +309,30 @@ export function computeCameraPath(
       if (tMs < z.end) active = z
     }
 
+    // Sem segmento, o recorte base que segue o cursor faz de conta que há um (escala 1, foco no cursor).
+    const base = active === null && follows
+    const eff = base ? BASE_FOLLOW : active
+
     let targetScale = 1
     let sweeping = false
-    if (active) {
-      targetScale = active.scale
-      if (active.focus === 'auto' && isSweeping(cursor, tMs, aspect)) {
+    if (eff) {
+      targetScale = eff.scale
+      if (eff.focus === 'auto' && active && isSweeping(cursor, tMs, aspect)) {
         sweeping = true
         targetScale = 1
       }
     }
 
-    if (active && !sweeping) {
-      const viewW = view.w / active.scale
-      const viewH = view.h / active.scale
-      if (active.focus !== 'auto') {
-        tcx = active.focus.x
-        tcy = active.focus.y
+    if (eff && !sweeping) {
+      const viewW = view.w / eff.scale
+      const viewH = view.h / eff.scale
+      if (eff.focus !== 'auto') {
+        tcx = eff.focus.x
+        tcy = eff.focus.y
       } else {
         const fp = focusPoint(cursor, tMs, lookahead)
-        if (active.id !== activeId || wasSweeping) {
+        // Num recorte que segue sempre, começar um segmento NÃO reposiciona o alvo (a câmera já está no cursor).
+        if ((eff.id !== activeId && !follows) || wasSweeping || i === 0) {
           tcx = fp.x
           tcy = fp.y
         } else {
@@ -324,15 +348,19 @@ export function computeCameraPath(
       }
       tcx = clamp(tcx, viewW / 2, 1 - viewW / 2)
       tcy = clamp(tcy, viewH / 2, 1 - viewH / 2)
-    } else if (!active) {
+    } else if (!eff) {
       // fora de segmento: volta para o centro enquanto a escala volta a 1
       tcx = 0.5
       tcy = 0.5
     }
-    activeId = active ? active.id : null
+    activeId = eff ? eff.id : null
     wasSweeping = sweeping
 
-    if (i > 0) {
+    if (i === 0 && follows) {
+      // o vídeo começa JÁ enquadrado no cursor (senão a câmera sairia do centro varrendo a tela no primeiro segundo)
+      sCx = { x: tcx, v: 0 }
+      sCy = { x: tcy, v: 0 }
+    } else if (i > 0) {
       sScale = springStep(sScale.x, sScale.v, targetScale, spring, dt)
       sCx = springStep(sCx.x, sCx.v, tcx, spring, dt)
       sCy = springStep(sCy.x, sCy.v, tcy, spring, dt)
@@ -348,6 +376,9 @@ export function computeCameraPath(
 
   return { hz: GRID_HZ, t, scale: scaleOut, cx: cxOut, cy: cyOut, maxScale }
 }
+
+/** O "segmento" implícito do recorte que segue sempre: escala 1, foco no cursor. */
+const BASE_FOLLOW = { id: '__base__', scale: 1, focus: 'auto' as const }
 
 /** Cursor + antecipação pela velocidade (diferença central de ±40 ms). */
 function focusPoint(cursor: CursorGrid, tMs: number, lookaheadMs: number): { x: number; y: number } {

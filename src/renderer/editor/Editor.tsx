@@ -12,8 +12,9 @@ import { regenerateZooms } from '@shared/edits'
 import { formatSpan } from '@shared/format'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
-import { HORIZONTAL_1080, deriveProject, prepareEvents, type CursorData } from '@shared/scene'
+import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, prepareEvents, type CursorData } from '@shared/scene'
 import type { Transcript } from '@shared/types'
+import { ensureVertical } from '@shared/vertical'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
@@ -167,12 +168,14 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
   const durationMs = Math.max(project.sources.screen?.durationMs ?? 0, project.sources.camera?.durationMs ?? 0, project.sources.voice?.durationMs ?? 0)
   const hasScreen = Boolean(project.sources.screen)
   const hasCamera = Boolean(project.sources.camera)
+  const voicePath = project.sources.voice?.path
 
   const canvas = useRef<HTMLCanvasElement>(null)
   const host = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLDivElement>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<PreviewEngine | null>(null)
+  const fitRef = useRef<(() => void) | null>(null)
   const [engineGen, setEngineGen] = useState(0)
 
   // --- eventos (cursor, cliques, teclas) ------------------------------------------------------------------
@@ -199,17 +202,61 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail.id])
 
+  // --- transcrição (aba Texto) ------------------------------------------------------------------------------------
+  const [transcript, setTranscript] = useState<AssetState<Transcript>>({ status: voicePath ? 'loading' : 'none', data: null, error: null })
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const loadTranscript = useCallback(() => {
+    setTranscript((s) => ({ status: 'loading', data: s.data, error: null }))
+    void window.tomada.transcription
+      .get(detail.id)
+      .then((data) => {
+        if (mounted.current) setTranscript(data ? { status: 'ready', data, error: null } : { status: 'none', data: null, error: null })
+      })
+      .catch((err: unknown) => {
+        window.tomada.log({ level: 'error', message: 'Falha ao ler a transcrição do projeto', detail: messageOf(err) })
+        if (mounted.current) setTranscript({ status: 'error', data: null, error: messageOf(err) })
+      })
+  }, [detail.id])
+  useEffect(() => {
+    loadTranscript()
+  }, [loadTranscript])
+  // o trabalho deste projeto terminou (aqui ou em segundo plano): lê o texto novo
+  const jobState = useTranscription((s) => s.jobs[detail.id]?.state)
+  useEffect(() => {
+    if (jobState === 'done') loadTranscript()
+  }, [jobState, loadTranscript])
+
   // --- cena -----------------------------------------------------------------------------------------------
-  const derived = useMemo(() => (cursorData ? deriveProject(project, cursorData, HORIZONTAL_1080) : null), [project, cursorData])
+  const format = useStore(store, (s) => s.format)
+  const formatRef = useRef(format)
+  formatRef.current = format
+  const words = transcript.data?.words ?? null
+  const derived = useMemo(
+    () => (cursorData ? deriveProject(project, cursorData, format === 'vertical' ? VERTICAL_1080 : HORIZONTAL_1080, words) : null),
+    [project, cursorData, format, words]
+  )
   const sceneRef = useRef({ project, derived })
   sceneRef.current = { project, derived }
+
+  // Entrar no 9:16 pela primeira vez: zooms do preset Intenso e layouts escolhidos pela atividade (uma vez; não entra no "desfazer").
+  // Espera a transcrição chegar (a escolha de layout usa onde há fala).
+  useEffect(() => {
+    if (format !== 'vertical' || !cursorData || transcript.status === 'loading') return
+    store.getState().changeDoc((doc) => ensureVertical(doc, cursorData, { durationMs, words, hasCursorEvents: Boolean(detail.events.cursor) }), { history: false })
+  }, [format, cursorData, transcript.status, words, durationMs, store, detail.events.cursor])
 
   // Ao abrir um projeto que nunca teve zoom automático, gera os do preset padrão (uma vez; não entra no "desfazer").
   const generated = useRef(false)
   useEffect(() => {
     if (!cursorData || generated.current) return
     generated.current = true
-    const p = store.getState().project
+    const p = store.getState().doc
     if (p.zoomPreset === undefined && p.zooms.length === 0 && detail.events.cursor) {
       const auto = generateAutoZooms({ clicks: cursorData.clicks, keys: cursorData.keys, cursor: cursorData.grid, duration: durationMs, preset: DEFAULT_ZOOM_PRESET })
       store.getState().change((doc) => regenerateZooms(doc, DEFAULT_ZOOM_PRESET, auto), { history: false })
@@ -234,15 +281,27 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       onAudioError: (message) => {
         playback.setState({ audioError: message })
         if (message) window.tomada.log({ level: 'warn', message: 'Áudio da prévia', detail: message })
+      },
+      onFontsError: (message) => {
+        window.tomada.log({ level: 'error', message: 'Falha ao carregar as fontes das legendas', detail: message })
+        notify({ kind: 'error', text: t.editor.captions.fontsFailed, detail: message })
       }
     })
     engineRef.current = engine
+    // o canvas tem a proporção do formato: 16:9 (até 1920 px de largura) ou 9:16 (até 1080)
     const fit = (): void => {
       if (!frameEl) return
       const dpr = window.devicePixelRatio || 1
-      const w = Math.min(1920, Math.max(320, Math.round(frameEl.clientWidth * dpr)))
-      engine.setSize(w, Math.round((w * 9) / 16))
+      const px = Math.round(frameEl.clientWidth * dpr)
+      if (formatRef.current === 'vertical') {
+        const w = Math.min(1080, Math.max(270, px))
+        engine.setSize(w, Math.round((w * 16) / 9))
+      } else {
+        const w = Math.min(1920, Math.max(320, px))
+        engine.setSize(w, Math.round((w * 9) / 16))
+      }
     }
+    fitRef.current = fit
     fit()
     const ro = new ResizeObserver(fit)
     if (frameEl) ro.observe(frameEl)
@@ -253,8 +312,15 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       ro.disconnect()
       engine.destroy()
       if (engineRef.current === engine) engineRef.current = null
+      fitRef.current = null
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenUrl, cameraUrl, playback])
+
+  // trocar de formato muda a proporção da prévia
+  useEffect(() => {
+    fitRef.current?.()
+  }, [format])
 
   useEffect(() => {
     if (derived) engineRef.current?.setScene(project, derived)
@@ -288,7 +354,6 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
   }, [bg, detail.id, notify, engineGen])
 
   // --- áudio da prévia: voz crua já; a tratada assume quando o ffmpeg termina ------------------------------
-  const voicePath = project.sources.voice?.path
   const cameraOffset = project.sync.cameraOffsetMs
   useEffect(() => {
     const engine = engineRef.current
@@ -347,36 +412,6 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
   const retryAssets = useCallback(() => {
     loadAssets(peaks.status === 'error' && thumbs.status !== 'error' ? 'peaks' : thumbs.status === 'error' && peaks.status !== 'error' ? 'thumbs' : undefined)
   }, [loadAssets, peaks.status, thumbs.status])
-
-  // --- transcrição (aba Texto) ------------------------------------------------------------------------------------
-  const [transcript, setTranscript] = useState<AssetState<Transcript>>({ status: voicePath ? 'loading' : 'none', data: null, error: null })
-  const mounted = useRef(true)
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-    }
-  }, [])
-  const loadTranscript = useCallback(() => {
-    setTranscript((s) => ({ status: 'loading', data: s.data, error: null }))
-    void window.tomada.transcription
-      .get(detail.id)
-      .then((data) => {
-        if (mounted.current) setTranscript(data ? { status: 'ready', data, error: null } : { status: 'none', data: null, error: null })
-      })
-      .catch((err: unknown) => {
-        window.tomada.log({ level: 'error', message: 'Falha ao ler a transcrição do projeto', detail: messageOf(err) })
-        if (mounted.current) setTranscript({ status: 'error', data: null, error: messageOf(err) })
-      })
-  }, [detail.id])
-  useEffect(() => {
-    loadTranscript()
-  }, [loadTranscript])
-  // o trabalho deste projeto terminou (aqui ou em segundo plano): lê o texto novo
-  const jobState = useTranscription((s) => s.jobs[detail.id]?.state)
-  useEffect(() => {
-    if (jobState === 'done') loadTranscript()
-  }, [jobState, loadTranscript])
 
   // Nível do áudio (para achar silêncio): só depois que há texto. Depois dele, a limpeza automática, uma vez por projeto.
   const [levels, setLevels] = useState<AssetState<Levels>>({ status: 'none', data: null, error: null })
