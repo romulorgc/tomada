@@ -15,7 +15,9 @@ import { createHandlers } from './handlers'
 import { registerIpc } from './ipc'
 import { createLogger } from './logger'
 import { handleMediaRequest, MEDIA_SCHEME } from './media-protocol'
+import { isAppOrigin, isAppUrl, isExternalRequest, type AppUrlContext } from './navigation'
 import { ENV_PROJECTS_DIR, ENV_USER_DATA_DIR, logsDir, settingsFile } from './paths'
+import { createOutputDirs } from './path-guard'
 import { createProjectStore } from './projects'
 import { createRecordingService } from './recording-service'
 import { createAppState } from './state'
@@ -36,9 +38,8 @@ protocol.registerSchemesAsPrivileged([
 const BACKGROUND = '#0e0f12'
 const rendererUrl = process.env.ELECTRON_RENDERER_URL // só existe no `npm run dev`
 
-function isAppUrl(url: string): boolean {
-  return url.startsWith('file://') || (rendererUrl !== undefined && url.startsWith(rendererUrl))
-}
+/** Páginas do app: SÓ o `index.html` empacotado (ou o servidor de desenvolvimento), comparado exatamente. */
+const appUrls: AppUrlContext = { rendererUrl, rendererFile: join(__dirname, '../renderer/index.html') }
 
 /** Em modo de teste (pasta de projetos definida por variável), apagar remove direto do disco. */
 const testMode = Boolean(process.env[ENV_PROJECTS_DIR])
@@ -86,15 +87,30 @@ async function main(): Promise<void> {
   // Câmera, microfone e captura de tela: só para as páginas do próprio app.
   const allowed = (permission: string): boolean => permission === 'media' || permission === 'display-capture'
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
-    callback(allowed(permission) && isAppUrl(details.requestingUrl || wc.getURL()))
+    callback(allowed(permission) && isAppUrl(details.requestingUrl || wc.getURL(), appUrls))
   })
-  session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => allowed(permission) && isAppUrl(origin))
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => allowed(permission) && isAppOrigin(origin, appUrls))
 
+  // Nada do app usa a rede: o que sairia da máquina é cortado na camada de rede (além da CSP, que só existe no build).
+  session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*', 'ftp://*/*'] }, (details, callback) => {
+    const external = isExternalRequest(details.url, appUrls)
+    if (external) logger.warn(`Requisição para fora barrada: ${details.url}`)
+    callback({ cancel: external })
+  })
+
+  // Nenhuma janela navega para fora do app nem abre outra (nem por redirecionamento, nem por quadro interno).
   app.on('web-contents-created', (_event, contents) => {
     contents.setWindowOpenHandler(() => ({ action: 'deny' }))
-    contents.on('will-navigate', (event, url) => {
-      if (!isAppUrl(url)) event.preventDefault()
-    })
+    const keepInside = (event: { preventDefault(): void }, url: string): void => {
+      if (!isAppUrl(url, appUrls)) {
+        event.preventDefault()
+        logger.warn(`Navegação barrada: ${url}`)
+      }
+    }
+    contents.on('will-navigate', keepInside)
+    contents.on('will-redirect', keepInside)
+    contents.on('will-frame-navigate', (details) => keepInside(details, details.url))
+    contents.on('will-attach-webview', (event) => event.preventDefault())
   })
 
   const info: AppInfo = {
@@ -148,8 +164,11 @@ async function main(): Promise<void> {
     env: process.env
   })
   // --- Exportação: áudio no ffmpeg, vídeo numa janela escondida, mux e conferência ------------------
+  /** Pastas de destino que o usuário escolheu NESTA sessão (diálogo nativo): fora delas e de `exports/`, ninguém grava. */
+  const outputDirs = createOutputDirs()
   const exporter = createExportService({
     logger,
+    outputDirs,
     read: (id) => store.read(id),
     ffmpeg: () => {
       const paths = locateFfmpeg(state.ffmpegLocateOptions())
@@ -182,7 +201,8 @@ async function main(): Promise<void> {
   }
 
   // Nível do microfone (só de ida) → mini medidor da barra.
-  ipcMain.on(LEVEL_CHANNEL, (_event, level: unknown) => {
+  ipcMain.on(LEVEL_CHANNEL, (event, level: unknown) => {
+    if (!isAppUrl(event.senderFrame?.url, appUrls)) return
     if (typeof level === 'number' && Number.isFinite(level)) recording.level(level)
   })
   let quitting = false
@@ -203,6 +223,7 @@ async function main(): Promise<void> {
       recording,
       exporter,
       derived,
+      outputDirs,
       pickExportDir: async (defaultPath) => {
         // TOMADA_TEST_PICK_DIR: nos testes o diálogo do Windows não aparece; vazio = "cancelou"
         const forced = process.env.TOMADA_TEST_PICK_DIR
@@ -262,7 +283,8 @@ async function main(): Promise<void> {
         return result.canceled ? null : (result.filePaths[0] ?? null)
       }
     }),
-    logger
+    logger,
+    (url) => isAppUrl(url, appUrls)
   )
 
   const createWindow = (): BrowserWindow => {

@@ -5,6 +5,7 @@
  */
 import { z } from 'zod'
 import type { FormatSpec } from './scene'
+import { isReservedWindowsName } from './safe-path'
 import { outputToSource } from './timeline'
 import type { Range } from './types'
 
@@ -104,17 +105,22 @@ export function fileTimeSeconds(sourceMs: number, offsetMs: number): number {
 // ---------------------------------------------------------------------------
 // Nome do arquivo
 
-/** Título → nome de arquivo válido no Windows (sem caracteres proibidos, sem ponto/espaço no fim). */
+/**
+ * Título → nome de arquivo válido no Windows: sem separador de caminho, sem `..`, sem caracteres proibidos, sem
+ * ponto/espaço no fim, sem nome reservado (`CON`, `NUL`, `COM1`… também com extensão: `con.x` é o dispositivo) e
+ * com no máximo 120 caracteres. O texto vem da interface (ou do título do projeto): nunca vale como caminho.
+ */
 export function sanitizeFileName(title: string, fallback = 'Gravação'): string {
-  const clean = title
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+  const clean = String(title)
+    .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\.{2,}/g, '.')
     .replace(/\s+/g, ' ')
     .trim()
+    .replace(/^[. ]+/g, '')
     .replace(/[. ]+$/g, '')
   const base = clean.length > 0 ? clean : fallback
-  // nomes reservados do Windows
-  const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
-  const safe = reserved.test(base) ? `${base}_` : base
+  // nomes reservados do Windows: o que vale é a parte antes do primeiro ponto, então o `_` entra ali
+  const safe = isReservedWindowsName(base) ? base.replace(/^[^.]*/, (stem) => `${stem.trimEnd()}_`) : base
   return safe.slice(0, 120).replace(/[. ]+$/g, '')
 }
 

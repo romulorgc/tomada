@@ -4,6 +4,7 @@
  */
 import { rm } from 'node:fs/promises'
 import { createExportService, type ExportService } from '../../src/main/export-service'
+import { createOutputDirs } from '../../src/main/path-guard'
 import type { IpcEvents } from '../../src/shared/ipc'
 import type { RawEvents } from '../../src/shared/recording'
 import type { Ffmpeg } from '../../src/main/ffmpeg'
@@ -189,6 +190,7 @@ export function createFakeWorld(args: {
 export function createIdleExportService(): ExportService {
   return createExportService({
     logger: createMemoryLogger(),
+    outputDirs: createOutputDirs(),
     read: async () => {
       throw new Error('sem projetos neste teste')
     },

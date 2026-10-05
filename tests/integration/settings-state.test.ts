@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { createHandlers } from '../../src/main/handlers'
 import { createLogger, createMemoryLogger } from '../../src/main/logger'
 import { ENV_PROJECTS_DIR, defaultProjectsDir } from '../../src/main/paths'
+import { createOutputDirs } from '../../src/main/path-guard'
 import { createProjectStore } from '../../src/main/projects'
 import { loadSettings, saveSettings } from '../../src/main/settings'
 import { createAppState } from '../../src/main/state'
@@ -190,6 +191,7 @@ function editorDeps(over: { image?: string | null } = {}) {
     calls,
     derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, idle: async () => undefined, shutdown: () => undefined },
     pickExportDir: async () => null,
+    outputDirs: createOutputDirs(),
     pickImage: async () => over.image ?? null,
     openPath: async (path: string) => void calls.push(`open ${path}`),
     revealPath: async (path: string) => void calls.push(`reveal ${path}`),
@@ -268,8 +270,8 @@ describe('handlers de IPC (contrato completo, sem Electron)', () => {
   })
 
   it('files:open, files:reveal e clipboard:write só aceitam o que é seguro', async () => {
-    const { handlers, calls } = await build()
-    const abs = join(tmp(), 'video.mp4')
+    const { handlers, calls, root } = await build()
+    const abs = join(root, 'exemplo', 'media', 'screen.mp4') // mídia dentro da pasta dos projetos
     await handlers['files:open'](abs)
     await handlers['files:reveal'](abs)
     await handlers['clipboard:write'](abs)

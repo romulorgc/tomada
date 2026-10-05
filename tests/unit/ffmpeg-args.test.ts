@@ -15,7 +15,7 @@ const after = (args: string[], flag: string): string | undefined => {
 }
 
 describe('buildNormalizeVideoArgs', () => {
-  const base = { input: 'in.webm', output: 'out.mp4', fps: 30, encoder: 'libx264' as const }
+  const base = { input: 'C:/t/in.webm', output: 'C:/t/out.mp4', fps: 30, encoder: 'libx264' as const }
 
   it('zera o PTS inicial, fixa o fps e força dimensões pares', () => {
     const args = buildNormalizeVideoArgs(base)
@@ -29,7 +29,7 @@ describe('buildNormalizeVideoArgs', () => {
     const args = buildNormalizeVideoArgs(base)
     expect(after(args, '-f')).toBe('mp4')
     expect(after(args, '-movflags')).toBe('+faststart')
-    expect(args[args.length - 1]).toBe('out.mp4')
+    expect(args[args.length - 1]).toBe('C:/t/out.mp4')
   })
 
   it('GOP de 1 s (= fps quadros) e sem corte de cena, em libx264', () => {
@@ -76,7 +76,7 @@ describe('buildNormalizeVideoArgs', () => {
     expect(vf.indexOf('fps=30')).toBeLessThan(vf.findIndex((x) => x.startsWith('tpad'))) // pad depois do fps constante
     expect(after(args, '-t')).toBe('12.346')
     expect(args.indexOf('-t')).toBeLessThan(args.length - 1) // opção de SAÍDA, antes do arquivo
-    expect(args[args.length - 1]).toBe('out.mp4')
+    expect(args[args.length - 1]).toBe('C:/t/out.mp4')
 
     for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) expect(buildNormalizeVideoArgs({ ...base, padToMs: bad })).not.toContain('-t')
   })
@@ -104,7 +104,7 @@ describe('encoderArgs', () => {
 
 describe('buildExtractAudioArgs', () => {
   it('voice.wav: 48 kHz mono PCM 16 bits, sem vídeo', () => {
-    const args = buildExtractAudioArgs({ input: 'camera.webm', output: 'voice.wav', channels: 1 })
+    const args = buildExtractAudioArgs({ input: 'C:/t/camera.webm', output: 'C:/t/voice.wav', channels: 1 })
     expect(after(args, '-ac')).toBe('1')
     expect(after(args, '-ar')).toBe('48000')
     expect(after(args, '-c:a')).toBe('pcm_s16le')
@@ -113,7 +113,7 @@ describe('buildExtractAudioArgs', () => {
     expect(after(args, '-f')).toBe('wav')
   })
   it('system.wav: estéreo e trilha escolhida', () => {
-    const args = buildExtractAudioArgs({ input: 'tela.webm', output: 'system.wav', channels: 2, track: 1, sampleRate: 44_100 })
+    const args = buildExtractAudioArgs({ input: 'C:/t/tela.webm', output: 'C:/t/system.wav', channels: 2, track: 1, sampleRate: 44_100 })
     expect(after(args, '-ac')).toBe('2')
     expect(after(args, '-ar')).toBe('44100')
     expect(after(args, '-map')).toBe('0:a:1')
@@ -122,14 +122,14 @@ describe('buildExtractAudioArgs', () => {
 
 describe('buildThumbnailArgs', () => {
   it('busca antes da entrada (rápido), um quadro, largura 640 por padrão', () => {
-    const args = buildThumbnailArgs({ input: 'a.mp4', output: 't.jpg', atMs: 3500 })
+    const args = buildThumbnailArgs({ input: 'C:/t/a.mp4', output: 'C:/t/t.jpg', atMs: 3500 })
     expect(args.indexOf('-ss')).toBeLessThan(args.indexOf('-i'))
     expect(after(args, '-ss')).toBe('3.500')
     expect(after(args, '-frames:v')).toBe('1')
     expect(after(args, '-vf')).toBe('scale=640:-2')
   })
   it('tempo negativo vira zero; largura configurável', () => {
-    const args = buildThumbnailArgs({ input: 'a.mp4', output: 't.jpg', atMs: -5, width: 320 })
+    const args = buildThumbnailArgs({ input: 'C:/t/a.mp4', output: 'C:/t/t.jpg', atMs: -5, width: 320 })
     expect(after(args, '-ss')).toBe('0.000')
     expect(after(args, '-vf')).toBe('scale=320:-2')
   })

@@ -4,15 +4,17 @@
  * entram por parâmetro, então tudo isto roda igual nos testes.
  */
 import { createHash } from 'node:crypto'
-import { copyFile, mkdir, readFile, readdir, stat } from 'node:fs/promises'
-import { extname, isAbsolute, join, relative, sep } from 'node:path'
+import { copyFile, mkdir, readFile, readdir, realpath, stat } from 'node:fs/promises'
+import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path'
 import type { MediaFile, ProjectDetail } from '@shared/ipc'
 import { EVENT_FILES } from '@shared/events'
 import { mediaUrl } from '@shared/media-url'
 import { ProjectFormatError, parseProject, projectDurationMs, serializeProject } from '@shared/project'
+import { isReservedWindowsName } from '@shared/safe-path'
 import type { Project, ProjectSummary, Src } from '@shared/types'
 import { pathExists, writeFileAtomic } from './fs-utils'
 import type { Logger } from './logger'
+import { assertDocumentPaths, isInside, resolveProjectFile } from './project-files'
 
 export const PROJECT_FILE = 'project.json'
 export const THUMB_PATH = 'media/thumb.jpg'
@@ -53,15 +55,21 @@ export interface ProjectStore {
 /** Extensões de imagem aceitas como fundo. */
 export const BACKGROUND_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'] as const
 
-/** O id é o nome da pasta: um único segmento, sem separadores nem `..`. */
+/**
+ * O id é o nome da pasta: um único segmento, sem separadores nem `..`. O Windows descarta pontos e espaços do fim
+ * do nome (`...` vira a própria raiz) e nomes como `CON` são dispositivos: também ficam de fora.
+ */
 export function assertProjectId(id: unknown): asserts id is string {
   if (
     typeof id !== 'string' ||
     id.length === 0 ||
+    id.length > 200 ||
     id === '.' ||
     id === '..' ||
-    /[\\/:*?"<>|\0]/.test(id) ||
-    id !== id.trim()
+    /[\\/:*?"<>|\u0000-\u001f]/.test(id) ||
+    id !== id.trim() ||
+    id.endsWith('.') ||
+    isReservedWindowsName(id)
   ) {
     throw new InvalidProjectIdError(`Identificador de projeto inválido: ${JSON.stringify(id)}`)
   }
@@ -84,6 +92,26 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
     const rel = relative(root, dir)
     if (rel === '' || rel.startsWith('..') || isAbsolute(rel) || rel.includes(sep)) {
       throw new InvalidProjectIdError(`Identificador de projeto inválido: ${JSON.stringify(id)}`)
+    }
+    return dir
+  }
+
+  /**
+   * `dirOf` mais a conferência no disco: uma pasta de projeto que é atalho ou junção para FORA da raiz não serve
+   * (senão ler, gravar ou mandar para a Lixeira agiria sobre outro lugar). Pasta que ainda não existe passa.
+   */
+  const checkedDir = async (id: string): Promise<string> => {
+    const dir = dirOf(id)
+    let real: [string, string]
+    try {
+      real = await Promise.all([realpath(deps.root()), realpath(dir)])
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') return dir
+      throw err
+    }
+    if (!isInside(real[0], real[1])) {
+      throw new InvalidProjectIdError(`A pasta do projeto ${JSON.stringify(id)} aponta para fora da pasta dos projetos.`)
     }
     return dir
   }
@@ -117,10 +145,12 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
     }
   }
 
-  const mediaFile = async (id: string, dir: string, src: Src | undefined): Promise<MediaFile | null> => {
+  const mediaFile = async (id: string, dir: string, src: Src | undefined, field: string): Promise<MediaFile | null> => {
     if (!src) return null
+    // caminho que escapa da pasta é erro de verdade (sobe para a tela), não "arquivo não encontrado"
+    const file = await resolveProjectFile(dir, src.path, field)
     try {
-      const info = await stat(join(dir, src.path))
+      const info = await stat(file)
       if (!info.isFile()) throw new Error('não é um arquivo')
       return { url: mediaUrl(id, src.path, info.mtimeMs), bytes: info.size }
     } catch (err) {
@@ -154,7 +184,7 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
     },
 
     async read(id) {
-      const dir = dirOf(id)
+      const dir = await checkedDir(id)
       if (!(await pathExists(dir))) throw new ProjectNotFoundError(`Projeto não encontrado: ${id}`)
       try {
         return { project: await readProject(dir), dir }
@@ -168,24 +198,27 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
 
     async detail(id) {
       const { project, dir } = await this.read(id)
+      // O documento pode vir de terceiros: nenhum caminho dele sai da pasta do projeto.
+      await assertDocumentPaths(dir, project)
+      const eventUrl = async (rel: string): Promise<string | null> => ((await pathExists(await resolveProjectFile(dir, rel))) ? mediaUrl(id, rel) : null)
       return {
         id,
         dir,
         project,
         media: {
-          screen: await mediaFile(id, dir, project.sources.screen),
-          camera: await mediaFile(id, dir, project.sources.camera)
+          screen: await mediaFile(id, dir, project.sources.screen, 'sources.screen.path'),
+          camera: await mediaFile(id, dir, project.sources.camera, 'sources.camera.path')
         },
         events: {
-          cursor: (await pathExists(join(dir, EVENT_FILES.cursor))) ? mediaUrl(id, EVENT_FILES.cursor) : null,
-          clicks: (await pathExists(join(dir, EVENT_FILES.clicks))) ? mediaUrl(id, EVENT_FILES.clicks) : null,
-          keys: (await pathExists(join(dir, EVENT_FILES.keys))) ? mediaUrl(id, EVENT_FILES.keys) : null
+          cursor: await eventUrl(EVENT_FILES.cursor),
+          clicks: await eventUrl(EVENT_FILES.clicks),
+          keys: await eventUrl(EVENT_FILES.keys)
         }
       }
     },
 
     async write(id, project) {
-      const dir = dirOf(id)
+      const dir = await checkedDir(id)
       await writeFileAtomic(join(dir, PROJECT_FILE), serializeProject(project))
     },
 
@@ -201,7 +234,7 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
     },
 
     async trash(id) {
-      const dir = dirOf(id)
+      const dir = await checkedDir(id)
       if (!(await pathExists(dir))) throw new ProjectNotFoundError(`Projeto não encontrado: ${id}`)
       await deps.trash(dir)
       // "Deu certo" só se a pasta saiu mesmo do lugar.
@@ -212,13 +245,13 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
     },
 
     async reveal(id) {
-      const dir = dirOf(id)
+      const dir = await checkedDir(id)
       if (!(await pathExists(dir))) throw new ProjectNotFoundError(`Projeto não encontrado: ${id}`)
       await deps.openFolder(dir)
     },
 
     async importBackground(id, source) {
-      const dir = dirOf(id)
+      const dir = await checkedDir(id)
       if (!(await pathExists(dir))) throw new ProjectNotFoundError(`Projeto não encontrado: ${id}`)
       const ext = extname(source).toLowerCase()
       if (!(BACKGROUND_EXTENSIONS as readonly string[]).includes(ext)) {
@@ -230,8 +263,9 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
       // o nome leva um resumo do caminho e do tamanho: a mesma imagem não se duplica, outra não se confunde
       const tag = createHash('sha1').update(`${source}|${info.size}|${Math.trunc(info.mtimeMs)}`).digest('hex').slice(0, 8)
       const rel = `media/fundo-${tag}${ext}`
-      await mkdir(join(dir, 'media'), { recursive: true })
-      await copyFile(source, join(dir, rel))
+      const target = await resolveProjectFile(dir, rel)
+      await mkdir(dirname(target), { recursive: true })
+      await copyFile(source, target)
       logger.info(`Imagem de fundo importada para o projeto ${id}: ${rel}`)
       return rel
     }

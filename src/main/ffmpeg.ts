@@ -9,6 +9,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
+import { assertFfmpegPath } from './ffmpeg-path'
 
 // ---------------------------------------------------------------------------
 // Localizar
@@ -388,7 +389,7 @@ export function createFfmpeg(paths: FfmpegPaths): Ffmpeg {
     async probe(file, opts = {}) {
       const { stdout } = await runBinary(
         paths.ffprobe,
-        ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', '-i', file],
+        ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', '-i', assertFfmpegPath(file, 'arquivo')],
         opts
       )
       let json: unknown

@@ -11,7 +11,7 @@
  * renomeado por cima: quem lê nunca vê um meio-termo. Sem Electron: roda igual nos testes.
  */
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { PeaksData, PreviewAudioData, ThumbsData } from '@shared/ipc'
 import { mediaUrl } from '@shared/media-url'
 import { PEAKS_PER_SECOND, PEAKS_VERSION, computePeaks, pcmFromBytes, type PeaksFile } from '@shared/peaks'
@@ -19,8 +19,10 @@ import { projectDurationMs } from '@shared/project'
 import type { Project } from '@shared/types'
 import { buildAudioArgs, buildAudioGraph, buildMeasureArgs, parseLoudnormMeasure } from './audio-graph'
 import type { Ffmpeg } from './ffmpeg'
+import { buildPeaksPcmArgs, buildThumbStripArgs } from './ffmpeg-args'
 import { pathExists, writeFileAtomic } from './fs-utils'
 import type { Logger } from './logger'
+import { resolveProjectFile } from './project-files'
 
 export const PEAKS_PATH = 'media/peaks.json'
 export const PREVIEW_AUDIO_PATH = 'media/voice-preview.m4a'
@@ -99,23 +101,25 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     const { project, dir } = await deps.read(id)
     const voice = project.sources.voice
     if (!voice) return null
-    const voicePath = join(dir, voice.path)
+    // todo caminho do documento passa por aqui: relativo, dentro da pasta do projeto, conferido com realpath
+    const voicePath = await resolveProjectFile(dir, voice.path, 'sources.voice.path')
+    const peaksFile = await resolveProjectFile(dir, PEAKS_PATH)
     const mtime = await mtimeOf(voicePath)
     if (mtime === null) {
       logger.warn(`Forma de onda: o arquivo de voz do projeto ${id} não existe (${voice.path}).`)
       return null
     }
-    const cached = await readJson<PeaksFile>(join(dir, PEAKS_PATH))
+    const cached = await readJson<PeaksFile>(peaksFile)
     if (cached && cached.version === PEAKS_VERSION && cached.source === voice.path && cached.sourceMtimeMs === mtime && Array.isArray(cached.peaks)) {
       return { perSecond: cached.perSecond, durationMs: cached.durationMs, peaks: cached.peaks }
     }
     const ff = deps.ffmpeg()
     if (!ff) return null
-    const tmpDir = join(dir, 'media', `.tmp-peaks-${process.pid}`)
+    const tmpDir = await resolveProjectFile(dir, `media/.tmp-peaks-${process.pid}`)
     await mkdir(tmpDir, { recursive: true })
     try {
       const pcmFile = join(tmpDir, 'voz.pcm')
-      await ff.run(['-i', voicePath, '-vn', '-ac', '1', '-ar', String(PEAKS_SAMPLE_RATE), '-f', 's16le', pcmFile], { signal: abort.signal, timeoutMs: 600_000 })
+      await ff.run(buildPeaksPcmArgs({ input: voicePath, output: pcmFile, sampleRate: PEAKS_SAMPLE_RATE }), { signal: abort.signal, timeoutMs: 600_000 })
       const bytes = await readFile(pcmFile)
       const pcm = pcmFromBytes(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength))
       const peaks = computePeaks(pcm, PEAKS_SAMPLE_RATE, PEAKS_PER_SECOND)
@@ -127,7 +131,7 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
         sourceMtimeMs: mtime,
         peaks
       }
-      await writeFileAtomic(join(dir, PEAKS_PATH), JSON.stringify(file))
+      await writeFileAtomic(peaksFile, JSON.stringify(file))
       logger.info(`Forma de onda do projeto ${id}: ${peaks.length} colunas.`)
       return { perSecond: file.perSecond, durationMs: file.durationMs, peaks }
     } finally {
@@ -142,8 +146,10 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     const { project, dir } = await deps.read(id)
     const voiceRel = project.sources.voice?.path
     const systemRel = project.sources.system?.path
-    const voiceMtime = voiceRel ? await mtimeOf(join(dir, voiceRel)) : null
-    const systemMtime = systemRel ? await mtimeOf(join(dir, systemRel)) : null
+    const voicePath = voiceRel ? await resolveProjectFile(dir, voiceRel, 'sources.voice.path') : null
+    const systemPath = systemRel ? await resolveProjectFile(dir, systemRel, 'sources.system.path') : null
+    const voiceMtime = voicePath ? await mtimeOf(voicePath) : null
+    const systemMtime = systemPath ? await mtimeOf(systemPath) : null
     if (voiceMtime === null && systemMtime === null) return null
 
     const durationMs = projectDurationMs(project)
@@ -154,20 +160,21 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
       systemOffsetMs: project.sync.screenOffsetMs,
       durationMs
     }
-    const target = join(dir, PREVIEW_AUDIO_PATH)
+    const target = await resolveProjectFile(dir, PREVIEW_AUDIO_PATH)
+    const infoFile = await resolveProjectFile(dir, PREVIEW_AUDIO_INFO)
     const targetMtime = await mtimeOf(target)
-    const have = await readJson<PreviewInfo>(join(dir, PREVIEW_AUDIO_INFO))
+    const have = await readJson<PreviewInfo>(infoFile)
     const fresh = targetMtime !== null && have !== null && JSON.stringify(have) === JSON.stringify(want)
     if (fresh) return { url: mediaUrl(id, PREVIEW_AUDIO_PATH, targetMtime) }
 
     const ff = deps.ffmpeg()
     if (!ff || !(durationMs > 0)) return null
-    const tmpDir = join(dir, 'media', `.tmp-preview-${process.pid}`)
+    const tmpDir = await resolveProjectFile(dir, `media/.tmp-preview-${process.pid}`)
     await mkdir(tmpDir, { recursive: true })
     try {
       const inputs: string[] = []
-      const voice = voiceMtime !== null ? { input: inputs.push(join(dir, voiceRel!)) - 1, offsetMs: want.voiceOffsetMs, channels: 1 as const } : null
-      const system = systemMtime !== null ? { input: inputs.push(join(dir, systemRel!)) - 1, offsetMs: want.systemOffsetMs, channels: 2 as const } : null
+      const voice = voiceMtime !== null ? { input: inputs.push(voicePath!) - 1, offsetMs: want.voiceOffsetMs, channels: 1 as const } : null
+      const system = systemMtime !== null ? { input: inputs.push(systemPath!) - 1, offsetMs: want.systemOffsetMs, channels: 2 as const } : null
       const kept = [{ start: 0, end: durationMs }]
       const opts = { signal: abort.signal, timeoutMs: 900_000 }
 
@@ -183,7 +190,7 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
 
       await rm(target, { force: true })
       await rename(partial, target)
-      await writeFileAtomic(join(dir, PREVIEW_AUDIO_INFO), JSON.stringify(want))
+      await writeFileAtomic(infoFile, JSON.stringify(want))
       logger.info(`Áudio da prévia do projeto ${id} pronto.`)
       const finalMtime = (await mtimeOf(target)) ?? Date.now()
       return { url: mediaUrl(id, PREVIEW_AUDIO_PATH, finalMtime) }
@@ -199,18 +206,19 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     const { project, dir } = await deps.read(id)
     const src = project.sources.screen ?? project.sources.camera
     if (!src) return null
-    const srcPath = join(dir, src.path)
+    const srcPath = await resolveProjectFile(dir, src.path, project.sources.screen ? 'sources.screen.path' : 'sources.camera.path')
     const mtime = await mtimeOf(srcPath)
     if (mtime === null) return null
 
-    const folder = join(dir, THUMBS_DIR)
+    const folder = await resolveProjectFile(dir, THUMBS_DIR)
+    const infoFile = await resolveProjectFile(dir, THUMBS_INFO)
     const toData = (info: ThumbsInfo): ThumbsData => ({
       intervalMs: info.intervalMs,
       count: info.count,
       height: info.height,
       urls: Array.from({ length: info.count }, (_, i) => mediaUrl(id, `${THUMBS_DIR}/${thumbName(i)}`, info.sourceMtimeMs))
     })
-    const cached = await readJson<ThumbsInfo>(join(dir, THUMBS_INFO))
+    const cached = await readJson<ThumbsInfo>(infoFile)
     if (cached && cached.version === 1 && cached.source === src.path && cached.sourceMtimeMs === mtime && cached.height === THUMB_HEIGHT && (await pathExists(join(folder, thumbName(cached.count - 1))))) {
       return toData(cached)
     }
@@ -218,32 +226,18 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     if (!ff) return null
 
     const intervalMs = thumbIntervalMs(src.durationMs)
-    const tmpDir = join(dir, 'media', `.tmp-thumbs-${process.pid}`)
+    const tmpDir = await resolveProjectFile(dir, `media/.tmp-thumbs-${process.pid}`)
     await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined)
     await mkdir(tmpDir, { recursive: true })
     try {
-      await ff.run(
-        [
-          '-i',
-          srcPath,
-          '-an',
-          '-vf',
-          `fps=1000/${intervalMs},scale=-2:${THUMB_HEIGHT}:flags=lanczos`,
-          '-q:v',
-          '5',
-          '-start_number',
-          '0',
-          join(tmpDir, 'thumb-%04d.jpg')
-        ],
-        { signal: abort.signal, timeoutMs: 600_000 }
-      )
+      await ff.run(buildThumbStripArgs({ input: srcPath, outputPattern: join(tmpDir, 'thumb-%04d.jpg'), intervalMs, height: THUMB_HEIGHT }), { signal: abort.signal, timeoutMs: 600_000 })
       const files = (await readdir(tmpDir)).filter((f) => /^thumb-\d{4}\.jpg$/.test(f)).sort()
       if (files.length === 0) throw new Error('o ffmpeg não gerou nenhuma miniatura')
       await rm(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
-      await mkdir(join(dir, 'media'), { recursive: true })
+      await mkdir(dirname(folder), { recursive: true })
       await rename(tmpDir, folder)
       const info: ThumbsInfo = { version: 1, intervalMs, count: files.length, height: THUMB_HEIGHT, source: src.path, sourceMtimeMs: mtime }
-      await writeFileAtomic(join(dir, THUMBS_INFO), JSON.stringify(info))
+      await writeFileAtomic(infoFile, JSON.stringify(info))
       logger.info(`Miniaturas do projeto ${id}: ${files.length} (uma a cada ${intervalMs} ms).`)
       return toData(info)
     } finally {

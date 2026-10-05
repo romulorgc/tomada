@@ -11,6 +11,7 @@
  *    o grafo vai num ARQUIVO (`-/filter_complex <arquivo>`, ffmpeg 8).
  */
 import type { Range } from '@shared/types'
+import { assertFfmpegPath } from './ffmpeg-path'
 
 export const FADE_MS = 30
 export const TARGET_LUFS = -14
@@ -228,16 +229,21 @@ export function buildAudioGraph(input: AudioGraphInput): AudioGraph {
 
 /** Argumentos do ffmpeg para o primeiro passe (mede; descarta a saída). */
 export function buildMeasureArgs(opts: { inputs: string[]; graphFile: string }): string[] {
+  const inputs = opts.inputs.map((f) => assertFfmpegPath(f, 'entrada de áudio'))
+  const graphFile = assertFfmpegPath(opts.graphFile, 'grafo de filtros')
   // o JSON do loudnorm sai no nível "info" (o ffmpeg do app roda em "error" por padrão)
-  return ['-loglevel', 'info', ...opts.inputs.flatMap((f) => ['-i', f]), '-/filter_complex', opts.graphFile, '-map', '[aout]', '-f', 'null', '-']
+  return ['-loglevel', 'info', ...inputs.flatMap((f) => ['-i', f]), '-/filter_complex', graphFile, '-map', '[aout]', '-f', 'null', '-']
 }
 
 /** Argumentos do ffmpeg para o passe final: AAC 48 kHz 384 kbps. */
 export function buildAudioArgs(opts: { inputs: string[]; graphFile: string; output: string }): string[] {
+  const inputs = opts.inputs.map((f) => assertFfmpegPath(f, 'entrada de áudio'))
+  const graphFile = assertFfmpegPath(opts.graphFile, 'grafo de filtros')
+  const output = assertFfmpegPath(opts.output, 'saída de áudio')
   return [
-    ...opts.inputs.flatMap((f) => ['-i', f]),
+    ...inputs.flatMap((f) => ['-i', f]),
     '-/filter_complex',
-    opts.graphFile,
+    graphFile,
     '-map',
     '[aout]',
     '-c:a',
@@ -246,12 +252,13 @@ export function buildAudioArgs(opts: { inputs: string[]; graphFile: string; outp
     OUTPUT_AUDIO_BITRATE,
     '-ar',
     String(OUTPUT_SAMPLE_RATE),
-    opts.output
+    output
   ]
 }
 
 /** Trilha muda (sem microfone nem som do sistema): `anullsrc` pela duração de saída. */
 export function buildSilentAudioArgs(opts: { durationMs: number; output: string }): string[] {
+  const output = assertFfmpegPath(opts.output, 'saída de áudio')
   return [
     '-f',
     'lavfi',
@@ -265,12 +272,15 @@ export function buildSilentAudioArgs(opts: { durationMs: number; output: string 
     OUTPUT_AUDIO_BITRATE,
     '-ar',
     String(OUTPUT_SAMPLE_RATE),
-    opts.output
+    output
   ]
 }
 
 /** Mux final: vídeo e áudio já prontos, só copiados, com `moov` no começo. */
 export function buildMuxArgs(opts: { video: string; audio: string; output: string }): string[] {
+  const video = assertFfmpegPath(opts.video, 'vídeo')
+  const audio = assertFfmpegPath(opts.audio, 'áudio')
+  const output = assertFfmpegPath(opts.output, 'saída')
   // `-f mp4`: o arquivo parcial tem a extensão `.parcial`, que o ffmpeg não reconhece
-  return ['-i', opts.video, '-i', opts.audio, '-map', '0:v:0', '-map', '1:a:0', '-c', 'copy', '-movflags', '+faststart', '-f', 'mp4', opts.output]
+  return ['-i', video, '-i', audio, '-map', '0:v:0', '-map', '1:a:0', '-c', 'copy', '-movflags', '+faststart', '-f', 'mp4', output]
 }

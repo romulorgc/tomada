@@ -3,26 +3,18 @@ import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import type { Plugin } from 'vite'
+import { buildCsp } from './src/shared/csp'
 
 const alias = { '@shared': resolve(__dirname, 'src/shared') }
 
 /**
  * Política de conteúdo só no build: o servidor de desenvolvimento precisa de
- * script inline (React Refresh) e WebSocket, então lá ela não entra.
+ * script inline (React Refresh) e WebSocket, então lá ela não entra. O texto vem de
+ * `src/shared/csp.ts` (testado: sem `http:`, `https:` nem `*`). No desenvolvimento, quem barra a rede é
+ * o processo principal (`webRequest`, em `src/main/index.ts`).
  */
 function cspNoBuild(): Plugin {
-  const csp = [
-    "default-src 'self'",
-    "script-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: tomada-media:",
-    "media-src 'self' blob: tomada-media:",
-    "font-src 'self' data:",
-    "connect-src 'self' tomada-media:",
-    "worker-src 'self' blob:",
-    "object-src 'none'",
-    "base-uri 'none'"
-  ].join('; ')
+  const csp = buildCsp()
   return {
     name: 'tomada-csp',
     apply: 'build',

@@ -3,15 +3,17 @@
  * dele (diálogos de escolher pasta/arquivo) entra por parâmetro.
  */
 import { exportRequestSchema } from '@shared/export'
-import type { AppInfo, ChunkKind, IpcHandlers } from '@shared/ipc'
+import type { AppInfo, BarAction, ChunkKind, IpcHandlers } from '@shared/ipc'
 import { migrate } from '@shared/project'
 import { recordRequestSchema } from '@shared/recording'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import type { DerivedMedia } from './derived-media'
 import type { ExportService } from './export-service'
 import { locateFfmpeg } from './ffmpeg'
 import { getFfmpegStatus, runFfmpegSelfTest } from './ffmpeg-status'
 import type { Logger } from './logger'
+import { checkOpenable, checkRevealable, type OutputDirs } from './path-guard'
+import { assertDocumentPaths } from './project-files'
 import type { ProjectStore } from './projects'
 import type { RecordingService } from './recording-service'
 import type { AppState } from './state'
@@ -28,6 +30,8 @@ export type HandlerDeps = {
   derived: DerivedMedia
   /** Diálogo de escolher a pasta da exportação (em teste, `TOMADA_TEST_PICK_DIR`). */
   pickExportDir(defaultPath?: string): Promise<string | null>
+  /** Pastas de exportação aprovadas nesta sessão: o que `export:pick-dir` devolve entra aqui (e a exportação só grava nelas). */
+  outputDirs: OutputDirs
   /** Diálogo de escolher uma imagem de fundo (em teste, `TOMADA_TEST_PICK_IMAGE`). */
   pickImage(): Promise<string | null>
   openPath(path: string): Promise<void>
@@ -39,14 +43,36 @@ export type HandlerDeps = {
   clock(): number
 }
 
+function finiteNumber(value: unknown, what: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`Valor inválido (${what}).`)
+  return value
+}
+
 const CHUNK_KINDS: readonly ChunkKind[] = ['screen', 'camera', 'mic']
+const BAR_ACTIONS: readonly BarAction[] = ['pause', 'resume', 'stop', 'discard', 'restart']
+/** Maior posição aceita em `exporter:write` (128 GiB): nada de mandar o arquivo de vídeo para o infinito. */
+const MAX_WRITE_POSITION = 128 * 1024 ** 3
+
+/** O mesmo caminho, comparado como o Windows compara (sem diferença de maiúsculas, sem barra no fim). */
+const sameKey = (a: string): string => resolve(a).toLowerCase()
 
 export function createHandlers(deps: HandlerDeps): IpcHandlers {
   const { state, store, logger, recording, exporter, derived } = deps
-  /** Só caminhos completos: nada de abrir "./coisa" relativo ao processo. */
-  const absolute = (path: unknown): string => {
-    if (typeof path !== 'string' || !isAbsolute(path)) throw new Error('Caminho inválido: precisa ser um caminho completo.')
-    return path
+  /** O que o usuário escolheu nesta sessão pelos diálogos nativos: só isso entra em ajustes que viram caminho. */
+  const pickedSettings = { projectsDir: new Set<string>(), ffmpegPath: new Set<string>() }
+  const guard = () => ({
+    root: state.projectsRoot(),
+    isExportOutput: (real: string) => exporter.isOutput(real),
+    isApprovedDir: (real: string) => deps.outputDirs.has(real)
+  })
+  /** Ajuste que vira caminho (pasta dos projetos, ffmpeg) só vale se veio do diálogo nativo desta sessão (ou se limpa o ajuste). */
+  const assertPicked = (key: 'projectsDir' | 'ffmpegPath', value: string | undefined): void => {
+    if (value === undefined) return
+    if (typeof value !== 'string') throw new Error('Valor inválido para o ajuste.')
+    if (value.trim() === '') return
+    if (!isAbsolute(value.trim()) || !pickedSettings[key].has(sameKey(value.trim()))) {
+      throw new Error('Esse caminho não foi escolhido por você nesta sessão. Use o botão "Escolher" para trocar este ajuste.')
+    }
   }
   return {
     'app:info': async () => deps.info,
@@ -57,20 +83,35 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'projects:save': async (id, project) => {
       // o que vai para o disco passa pelo mesmo esquema de quem lê; campos desconhecidos são preservados
       const checked = migrate(project)
+      // caminhos do documento: relativos e dentro da pasta do projeto (o processo principal não confia no que a interface manda)
+      await assertDocumentPaths(store.dirOf(id), checked)
       await store.write(id, checked)
       return checked
     },
     'projects:trash': (id) => store.trash(id),
     'projects:reveal': (id) => store.reveal(id),
     'projects:pick-background': async (id) => {
+      store.dirOf(id) // id inválido falha ANTES de abrir o diálogo
       const picked = await deps.pickImage()
       return picked ? store.importBackground(id, picked) : null
     },
 
     'settings:get': async () => state.view(),
-    'settings:update': (patch) => state.update(patch),
-    'settings:pick-projects-dir': () => deps.pickFolder(state.projectsRoot()),
-    'settings:pick-ffmpeg': () => deps.pickFfmpeg(),
+    'settings:update': async (patch) => {
+      assertPicked('projectsDir', patch?.projectsDir)
+      assertPicked('ffmpegPath', patch?.ffmpegPath)
+      return state.update(patch)
+    },
+    'settings:pick-projects-dir': async () => {
+      const picked = await deps.pickFolder(state.projectsRoot())
+      if (picked) pickedSettings.projectsDir.add(sameKey(picked))
+      return picked
+    },
+    'settings:pick-ffmpeg': async () => {
+      const picked = await deps.pickFfmpeg()
+      if (picked) pickedSettings.ffmpegPath.add(sameKey(picked))
+      return picked
+    },
 
     'ffmpeg:status': () => getFfmpegStatus(state.ffmpegLocateOptions(), logger),
     'ffmpeg:test': () => runFfmpegSelfTest(locateFfmpeg(state.ffmpegLocateOptions()), logger),
@@ -87,8 +128,8 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
       if (!CHUNK_KINDS.includes(kind)) throw new Error(`Tipo de pedaço desconhecido: ${String(kind)}`)
       return recording.chunk(kind, data)
     },
-    'record:pause': (at) => recording.pause(at),
-    'record:resume': (at) => recording.resume(at),
+    'record:pause': (at) => recording.pause(finiteNumber(at, 'instante')),
+    'record:resume': (at) => recording.resume(finiteNumber(at, 'instante')),
     'record:stop': (info) => recording.stop(info),
     'record:abort': (reason) => recording.abort(reason),
     'record:status': async () => recording.status(),
@@ -97,9 +138,14 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'export:start': (request) => exporter.start(exportRequestSchema.parse(request)),
     'export:cancel': (exportId) => exporter.cancel(exportId),
     'export:status': async () => exporter.status(),
-    'export:pick-dir': (defaultPath) => deps.pickExportDir(defaultPath),
-    'files:open': (path) => deps.openPath(absolute(path)),
-    'files:reveal': (path) => deps.revealPath(absolute(path)),
+    'export:pick-dir': async (defaultPath) => {
+      const picked = await deps.pickExportDir(defaultPath)
+      // só a pasta devolvida pelo diálogo nativo é destino válido da exportação
+      if (picked) await deps.outputDirs.approve(picked)
+      return picked
+    },
+    'files:open': async (path) => deps.openPath(await checkOpenable(path, guard())),
+    'files:reveal': async (path) => deps.revealPath(await checkRevealable(path, guard())),
     'clipboard:write': async (text) => {
       if (typeof text !== 'string' || text.length > 10_000) throw new Error('Texto inválido para a área de transferência.')
       deps.copyText(text)
@@ -108,12 +154,17 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'derived:preview-audio': (id) => derived.previewAudio(id),
     'derived:thumbs': (id) => derived.thumbs(id),
     'exporter:job': async (exportId) => exporter.job(exportId),
-    'exporter:write': (exportId, position, data) => exporter.write(exportId, position, data),
+    'exporter:write': (exportId, position, data) => {
+      if (!Number.isSafeInteger(position) || position < 0 || position > MAX_WRITE_POSITION) throw new Error('Posição de escrita inválida.')
+      if (!(data instanceof Uint8Array)) throw new Error('Dados de escrita inválidos.')
+      return exporter.write(exportId, position, data)
+    },
     'exporter:progress': async (exportId, frame, renderFps) => exporter.progress(exportId, frame, renderFps),
     'exporter:finish': async (exportId, result) => exporter.finish(exportId, result),
 
     'bar:state': async () => recording.barState(),
     'bar:action': async (action) => {
+      if (!BAR_ACTIONS.includes(action)) throw new Error(`Ação da barra desconhecida: ${String(action)}`)
       recording.command(action, 'bar')
     },
     'countdown:begin': async () => recording.countdownConfig(),

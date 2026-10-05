@@ -7,6 +7,8 @@
  *  - o Chrome grava H.264 dentro de .webm e o ffmpeg recusa escrever H.264 em WebM.
  */
 
+import { assertFfmpegPath } from './ffmpeg-path'
+
 export type VideoEncoder = 'libx264' | 'h264_nvenc'
 
 export type NormalizeVideoArgs = {
@@ -71,6 +73,8 @@ export function encoderArgs(encoder: VideoEncoder, gop: number): string[] {
  */
 export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
   if (!(o.fps > 0)) throw new RangeError(`fps inválido: ${o.fps}`)
+  const input = assertFfmpegPath(o.input, 'entrada')
+  const output = assertFfmpegPath(o.output, 'saída')
   const gop = gopFrames(o.fps, o.gopSeconds ?? 1)
   const pad = o.padToMs !== undefined && Number.isFinite(o.padToMs) && o.padToMs > 0
   const vf = [
@@ -84,7 +88,7 @@ export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
     ? ['-map', '0:a:0?', '-c:a', 'aac', '-b:a', '192k', '-af', 'aresample=async=1:first_pts=0']
     : ['-an']
   return [
-    '-i', o.input,
+    '-i', input,
     '-map', '0:v:0',
     ...audio,
     '-vf', vf,
@@ -93,7 +97,7 @@ export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
     ...encoderArgs(o.encoder, gop),
     '-movflags', '+faststart',
     '-f', 'mp4',
-    o.output
+    output
   ]
 }
 
@@ -109,15 +113,17 @@ export type ExtractAudioArgs = {
 
 /** Extrai áudio como WAV PCM 16 bits (voice.wav: 48 kHz mono; system.wav: 48 kHz estéreo). */
 export function buildExtractAudioArgs(o: ExtractAudioArgs): string[] {
+  const input = assertFfmpegPath(o.input, 'entrada')
+  const output = assertFfmpegPath(o.output, 'saída')
   return [
-    '-i', o.input,
+    '-i', input,
     '-map', `0:a:${o.track ?? 0}`,
     '-vn',
     '-ac', String(o.channels),
     '-ar', String(o.sampleRate ?? 48_000),
     '-c:a', 'pcm_s16le',
     '-f', 'wav',
-    o.output
+    output
   ]
 }
 
@@ -130,16 +136,43 @@ export type ThumbnailArgs = {
 }
 
 export function buildThumbnailArgs(o: ThumbnailArgs): string[] {
+  const input = assertFfmpegPath(o.input, 'entrada')
+  const output = assertFfmpegPath(o.output, 'saída')
   const seconds = Math.max(0, o.atMs) / 1000
   return [
     '-ss', seconds.toFixed(3),
-    '-i', o.input,
+    '-i', input,
     '-frames:v', '1',
     '-vf', `scale=${o.width ?? 640}:-2`,
     '-q:v', '4',
     '-update', '1',
     '-f', 'image2',
-    o.output
+    output
+  ]
+}
+
+/** Voz mono em PCM de 16 bits cru (para calcular os picos da forma de onda). */
+export function buildPeaksPcmArgs(o: { input: string; output: string; sampleRate: number }): string[] {
+  const input = assertFfmpegPath(o.input, 'entrada')
+  const output = assertFfmpegPath(o.output, 'saída')
+  return ['-i', input, '-vn', '-ac', '1', '-ar', String(Math.trunc(o.sampleRate)), '-f', 's16le', output]
+}
+
+/** Miniaturas da tela: um JPEG a cada `intervalMs`, numerados a partir de 0 (`outputPattern` leva `%04d`). */
+export function buildThumbStripArgs(o: { input: string; outputPattern: string; intervalMs: number; height: number }): string[] {
+  const input = assertFfmpegPath(o.input, 'entrada')
+  const output = assertFfmpegPath(o.outputPattern, 'saída')
+  return [
+    '-i',
+    input,
+    '-an',
+    '-vf',
+    `fps=1000/${Math.trunc(o.intervalMs)},scale=-2:${Math.trunc(o.height)}:flags=lanczos`,
+    '-q:v',
+    '5',
+    '-start_number',
+    '0',
+    output
   ]
 }
 

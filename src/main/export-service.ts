@@ -15,8 +15,8 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { FileHandle } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { mkdir, open, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { constants, existsSync } from 'node:fs'
+import { copyFile, link, mkdir, open, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import {
   EXPORT_RESOLUTION_LABEL,
@@ -44,6 +44,8 @@ import {
 import type { Ffmpeg } from './ffmpeg'
 import { pathExists } from './fs-utils'
 import type { Logger } from './logger'
+import type { OutputDirs } from './path-guard'
+import { assertDocumentPaths, isInside, resolveProjectFile } from './project-files'
 
 /** Diferença máxima aceita entre a duração do áudio e a do vídeo (ms). */
 export const MAX_AV_DIFF_MS = 50
@@ -64,6 +66,11 @@ export type ExportServiceDeps = {
   /** Lê o projeto (documento + pasta). */
   read(id: string): Promise<{ project: Project; dir: string }>
   ffmpeg(): Ffmpeg | null
+  /**
+   * Pastas de destino que o usuário escolheu nesta sessão (diálogo nativo do processo principal). O destino da
+   * exportação só pode ser a pasta `exports/` do projeto ou uma destas: o caminho que vem da interface não vale por si.
+   */
+  outputDirs: Pick<OutputDirs, 'resolve'>
   /** Abre a janela escondida que renderiza o vídeo. `onGone` avisa se ela caiu antes de terminar. */
   openExporterWindow(exportId: string, hooks: { onGone(reason: string): void }): ExporterWindow
   emit(progress: ExportProgress): void
@@ -82,6 +89,11 @@ export interface ExportService {
   write(exportId: string, position: number, data: Uint8Array): Promise<void>
   progress(exportId: string, frame: number, renderFps: number | null): void
   finish(exportId: string, result: ExporterResult): void
+  /**
+   * O arquivo (caminho já resolvido com `realpath`) é a saída de uma exportação concluída nesta sessão? É o que
+   * deixa `files:open` tocar o vídeo exportado numa pasta fora da raiz dos projetos.
+   */
+  isOutput(realPath: string): boolean
   /** Espera a exportação em andamento terminar (testes). */
   idle(): Promise<void>
   shutdown(): Promise<void>
@@ -101,8 +113,12 @@ type Run = {
   tmpDir: string
   videoPath: string
   audioPath: string
+  /** Nome escolhido (sem extensão) e caminho final; o definitivo só é fixado ao mover, sem sobrescrever. */
+  stem: string
   finalPath: string
   partialFinal: string
+  /** Arquivos do documento já resolvidos (absolutos, dentro da pasta do projeto). */
+  files: { voice: string | null; system: string | null; screen: string | null; camera: string | null }
   handle: FileHandle | null
   progress: ExportProgress
   video: { resolve(r: ExporterResult): void; reject(e: unknown): void } | null
@@ -119,15 +135,54 @@ type Run = {
 
 /** URL do arquivo de eventos, ou null se ele não existe (gravação só de câmera): evita um 404 no console. */
 async function eventUrl(projectId: string, dir: string, rel: string): Promise<string | null> {
-  return (await pathExists(join(dir, rel))) ? mediaUrl(projectId, rel) : null
+  return (await pathExists(await resolveProjectFile(dir, rel))) ? mediaUrl(projectId, rel) : null
+}
+
+/**
+ * Põe o arquivo pronto no nome final SEM sobrescrever nada: `link` falha com EEXIST se o nome já existe (e
+ * onde o sistema de arquivos não faz link, `copyFile` com COPYFILE_EXCL faz o mesmo). Devolve false se o nome
+ * foi tomado no meio do caminho.
+ */
+async function moveWithoutOverwrite(from: string, to: string): Promise<boolean> {
+  try {
+    await link(from, to)
+    return true
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false
+  }
+  try {
+    await copyFile(from, to, constants.COPYFILE_EXCL)
+    return true
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false
+    await rm(to, { force: true }).catch(() => undefined) // meio arquivo (disco cheio): nunca fica com cara de bom
+    throw err
+  }
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/** Chave de comparação de um arquivo (caminho real, sem diferença de maiúsculas: o Windows não distingue). */
+async function outputKey(path: string): Promise<string> {
+  return (await realpath(path)).toLowerCase()
+}
 
 export function createExportService(deps: ExportServiceDeps): ExportService {
   const { logger } = deps
   let current: Run | null = null
   let last: ExportProgress | null = null
+  /** Saídas de exportações concluídas nesta sessão (chave de `outputKey`). */
+  const outputs = new Set<string>()
+
+  /** Escolhe um nome livre e move o parcial para ele; o nome tomado no meio do caminho só faz tentar o próximo. */
+  async function placeFinal(run: Run): Promise<string> {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const name = uniqueName(run.stem, (n) => existsSync(join(run.outDir, `${n}.mp4`)))
+      const target = join(run.outDir, `${name}.mp4`)
+      if (await moveWithoutOverwrite(run.partialFinal, target)) return target
+    }
+    throw new ExportError(`Não consegui achar um nome livre para o arquivo em ${run.outDir}.`)
+  }
 
   const emit = (run: Run, force = false): void => {
     const now = deps.now()
@@ -154,14 +209,14 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
 
   // --- áudio -----------------------------------------------------------------------------------
   async function renderAudio(run: Run, ff: Ffmpeg): Promise<void> {
-    const { project, dir } = run
+    const { project } = run
     const durationMs = projectDurationMs(project)
     const kept = keptRanges(durationMs, project.cuts)
     const outMs = outputDuration(durationMs, project.cuts)
     const signal = run.abort.signal
 
-    const voicePath = project.sources.voice ? join(dir, project.sources.voice.path) : null
-    const systemPath = project.sources.system ? join(dir, project.sources.system.path) : null
+    const voicePath = run.files.voice
+    const systemPath = run.files.system
     const hasVoice = voicePath !== null && (await pathExists(voicePath))
     const hasSystem = systemPath !== null && (await pathExists(systemPath))
     if (project.sources.voice && !hasVoice) logger.warn(`Exportação: o arquivo de voz do projeto não existe (${voicePath}); a trilha sai sem voz.`)
@@ -267,7 +322,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       run.timing = videoResult.timing ?? null
       logger.info(`Exportação ${run.id}: vídeo pronto (${videoResult.frames} quadros, ${videoResult.encoder}). ${videoResult.timing ?? ''}`)
 
-      // mux
+      // mux (o arquivo parcial mora na pasta temporária: o nome definitivo só nasce no fim, sem sobrescrever nada)
       setPhase(run, 'mux')
       await mkdir(exportsDir, { recursive: true })
       await ff.run(buildMuxArgs({ video: run.videoPath, audio: run.audioPath, output: run.partialFinal }), { signal: run.abort.signal })
@@ -275,8 +330,9 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       // conferência
       setPhase(run, 'checking')
       const report = await checkOutput(ff, run, videoResult.frames)
-      await rm(run.finalPath, { force: true })
-      await rename(run.partialFinal, run.finalPath)
+      run.finalPath = await placeFinal(run)
+      report.outputPath = run.finalPath
+      outputs.add(await outputKey(run.finalPath))
       logger.info(`Exportação ${run.id} pronta: ${run.finalPath} (${report.renderFps.toFixed(1)} qps, áudio×vídeo ${report.audioVideoDiffMs} ms).`)
       run.videoFraction = 1
       setPhase(run, 'done', { outputPath: run.finalPath, report, etaMs: 0, frame: run.progress.totalFrames })
@@ -296,14 +352,44 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       run.win = null
       if (run.handle) await run.handle.close().catch(() => undefined)
       run.handle = null
-      // parcial nunca fica com cara de bom: some tudo que não é o arquivo final
+      // parcial nunca fica com cara de bom: some tudo que não é o arquivo final (o parcial mora no tmpDir; o nome
+      // definitivo só existe depois de pronto, então nenhum arquivo do usuário é apagado aqui)
       await rm(run.tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined)
-      if (run.progress.phase !== 'done') {
-        await rm(run.partialFinal, { force: true }).catch(() => undefined)
-        await rm(run.finalPath, { force: true }).catch(() => undefined)
-      }
       current = null
     }
+  }
+
+  /**
+   * Pasta de destino. Só vale (a) a pasta `exports/` do projeto ou (b) uma pasta que o usuário escolheu NESTA sessão
+   * pelo diálogo nativo (`export:pick-dir`); o caminho que chega da interface não vale por si.
+   */
+  async function chooseOutputDir(projectDir: string, asked: string | undefined): Promise<string> {
+    const own = join(projectDir, 'exports')
+    let target = own
+    if (asked !== undefined) {
+      if (!isAbsolute(asked)) throw new ExportError('A pasta de destino precisa ser um caminho completo (ex.: C:\\Videos).')
+      const wanted = resolve(asked)
+      if (wanted.toLowerCase() !== resolve(own).toLowerCase()) {
+        const approved = await deps.outputDirs.resolve(wanted)
+        if (!approved) {
+          throw new ExportError('Essa pasta de destino não foi escolhida por você nesta sessão. Use "Escolher pasta" no diálogo de exportar.')
+        }
+        target = approved
+      }
+    }
+    try {
+      await mkdir(target, { recursive: true })
+    } catch (err) {
+      throw new ExportError(`Não consegui usar a pasta de destino (${target}): ${messageOf(err)}`)
+    }
+    if (target === own) {
+      // `exports/` do projeto é um atalho/junção para fora? Aí o projeto estaria mandando a gravação para onde quiser.
+      const [realProject, realTarget] = await Promise.all([realpath(projectDir), realpath(target)])
+      if (!isInside(realProject, realTarget)) {
+        throw new ExportError('A pasta exports/ deste projeto aponta para fora da pasta dele. Escolha outra pasta de destino.')
+      }
+    }
+    return target
   }
 
   /** ffprobe do arquivo final: trilhas, duração, taxa constante e diferença áudio × vídeo. */
@@ -363,6 +449,15 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       if (!project.sources.screen && !project.sources.camera) {
         throw new ExportError('Este projeto não tem vídeo da tela nem da câmera para exportar.')
       }
+      // O documento pode vir de terceiros: todo caminho dele é relativo e resolve para DENTRO da pasta do projeto.
+      // Erro visível ANTES de começar qualquer coisa ("Este projeto aponta para um arquivo fora da pasta dele").
+      await assertDocumentPaths(dir, project)
+      const files = {
+        screen: project.sources.screen ? await resolveProjectFile(dir, project.sources.screen.path, 'sources.screen.path') : null,
+        camera: project.sources.camera ? await resolveProjectFile(dir, project.sources.camera.path, 'sources.camera.path') : null,
+        voice: project.sources.voice ? await resolveProjectFile(dir, project.sources.voice.path, 'sources.voice.path') : null,
+        system: project.sources.system ? await resolveProjectFile(dir, project.sources.system.path, 'sources.system.path') : null
+      }
       const format = exportFormat(request)
       const durationMs = projectDurationMs(project)
       const outMs = outputDuration(durationMs, project.cuts)
@@ -370,16 +465,8 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       if (totalFrames === 0) throw new ExportError('Não há nada para exportar: todos os trechos foram cortados.')
 
       const id = randomUUID()
-      if (request.dir !== undefined && !isAbsolute(request.dir)) {
-        throw new ExportError('A pasta de destino precisa ser um caminho completo (ex.: C:\\Videos).')
-      }
-      const exportsDir = request.dir ? resolve(request.dir) : join(dir, 'exports')
+      const exportsDir = await chooseOutputDir(dir, request.dir)
       const base = exportFileName(project.title, request)
-      try {
-        await mkdir(exportsDir, { recursive: true })
-      } catch (err) {
-        throw new ExportError(`Não consegui usar a pasta de destino (${exportsDir}): ${messageOf(err)}`)
-      }
       const stem = base.replace(/\.mp4$/, '')
       const unique = uniqueName(stem, (n) => existsSync(join(exportsDir, `${n}.mp4`)))
       const finalPath = join(exportsDir, `${unique}.mp4`)
@@ -414,8 +501,10 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         tmpDir,
         videoPath: join(tmpDir, 'video.mp4'),
         audioPath: join(tmpDir, 'audio.m4a'),
+        stem,
         finalPath,
-        partialFinal: `${finalPath}.parcial`,
+        partialFinal: join(tmpDir, 'saida.parcial'),
+        files,
         handle: null,
         progress: {
           exportId: id,
@@ -460,6 +549,10 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
 
     status() {
       return current ? { ...current.progress } : last ? { ...last } : null
+    },
+
+    isOutput(realPath) {
+      return outputs.has(realPath.toLowerCase())
     },
 
     job(exportId) {

@@ -22,7 +22,7 @@ import {
 import { avcCodecString, fileTimeSeconds, outputFrameCount, sourceTimeOfFrame } from '@shared/export'
 import { eventsFromText } from '@shared/events'
 import type { ExportJob } from '@shared/ipc'
-import { mediaUrl } from '@shared/media-url'
+import { assertMediaUrl, mediaUrl } from '@shared/media-url'
 import {
   createRenderCache,
   drawShadow,
@@ -41,7 +41,7 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 
 async function fetchText(url: string | null): Promise<string | undefined> {
   if (!url) return undefined
-  const response = await fetch(url)
+  const response = await fetch(assertMediaUrl(url)) // só arquivo do projeto, pelo protocolo do app
   if (!response.ok) throw new Error(`Não consegui ler ${url} (${response.status}).`)
   return response.text()
 }
@@ -51,7 +51,7 @@ type Track = { input: Input; sink: VideoSampleSink; offsetMs: number }
 
 async function openTrack(url: string | null, offsetMs: number): Promise<Track | null> {
   if (!url) return null
-  const input = new Input({ source: new UrlSource(url), formats: ALL_FORMATS })
+  const input = new Input({ source: new UrlSource(assertMediaUrl(url)), formats: ALL_FORMATS })
   const track = await input.getPrimaryVideoTrack()
   if (!track) throw new Error(`O arquivo de vídeo não tem trilha de imagem: ${url}`)
   if (!(await track.canDecode())) throw new Error(`Este computador não consegue decodificar o vídeo (${await track.getCodecParameterString()}).`)
@@ -93,8 +93,8 @@ const canvasFactory: CanvasFactory = (w, h) => new OffscreenCanvas(w, h) as unkn
 export async function loadBackgroundImage(project: Project, projectId: string, cache: RenderCache): Promise<void> {
   const bg = project.style.background
   if (bg.type !== 'image' || cache.images.has(bg.path)) return
-  const url = /^[a-z]+:\/\//i.test(bg.path) ? bg.path : mediaUrl(projectId, bg.path)
-  const response = await fetch(url)
+  // só arquivo do PRÓPRIO projeto: o caminho é relativo e validado (http:, https:, file:, data:, `..` e absoluto lançam)
+  const response = await fetch(assertMediaUrl(mediaUrl(projectId, bg.path)))
   if (!response.ok) throw new Error(`Não consegui ler a imagem de fundo (${response.status}): ${bg.path}`)
   const bitmap = await createImageBitmap(await response.blob())
   cache.images.set(bg.path, { image: bitmap, w: bitmap.width, h: bitmap.height })

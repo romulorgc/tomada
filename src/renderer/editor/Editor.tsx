@@ -9,7 +9,7 @@ import { createEditorStore } from '@shared/editor-store'
 import { eventsFromText } from '@shared/events'
 import { regenerateZooms } from '@shared/edits'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
-import { mediaUrl } from '@shared/media-url'
+import { assertMediaUrl, mediaUrl } from '@shared/media-url'
 import { HORIZONTAL_1080, deriveProject, prepareEvents, type CursorData } from '@shared/scene'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
@@ -32,7 +32,7 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 
 async function fetchText(url: string | null): Promise<string | undefined> {
   if (!url) return undefined
-  const r = await fetch(url)
+  const r = await fetch(assertMediaUrl(url))
   if (!r.ok) throw new Error(`Não consegui ler ${url} (${r.status}).`)
   return r.text()
 }
@@ -255,8 +255,8 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     let alive = true
     void (async () => {
       try {
-        const url = /^[a-z]+:\/\//i.test(bg.path) ? bg.path : mediaUrl(detail.id, bg.path)
-        const response = await fetch(url)
+        // só arquivo do PRÓPRIO projeto: o caminho é relativo e validado (http:, https:, file:, data:, `..` e absoluto lançam)
+        const response = await fetch(assertMediaUrl(mediaUrl(detail.id, bg.path)))
         if (!response.ok) throw new Error(`Não consegui ler a imagem de fundo (${response.status}).`)
         const bitmap = await createImageBitmap(await response.blob())
         if (alive) engineRef.current?.setBackgroundImage(bg.path, { image: bitmap, w: bitmap.width, h: bitmap.height })
@@ -276,7 +276,14 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     const engine = engineRef.current
     if (!engine) return
     let alive = true
-    engine.setAudio(voicePath ? window.tomada.mediaUrl(detail.id, voicePath) : null, cameraOffset, false)
+    let voiceUrl: string | null = null
+    try {
+      voiceUrl = voicePath ? window.tomada.mediaUrl(detail.id, voicePath) : null
+    } catch (err) {
+      // caminho do documento que sai da pasta do projeto: sem voz crua (o processo principal já avisou ao abrir)
+      window.tomada.log({ level: 'error', message: 'Caminho de voz inválido no projeto', detail: messageOf(err) })
+    }
+    engine.setAudio(voiceUrl, cameraOffset, false)
     void window.tomada.derived
       .previewAudio(detail.id)
       .then((r) => {
