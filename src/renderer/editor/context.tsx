@@ -6,10 +6,13 @@
 import { createContext, useContext, type MutableRefObject, type RefObject } from 'react'
 import { useStore } from 'zustand'
 import type { EditorState, EditorStore } from '@shared/editor-store'
+import type { Levels } from '@shared/clean'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import type { CursorData, Derived } from '@shared/scene'
+import type { Transcript } from '@shared/types'
 import type { PreviewEngine } from './engine'
 import type { PlaybackState, PlaybackStore } from './playback-store'
+import type { TextStore } from './text/text-store'
 import type { ExportController } from './use-export'
 
 export type AssetState<T> = { status: 'loading' | 'ready' | 'error' | 'none'; data: T | null; error: string | null }
@@ -29,6 +32,13 @@ export type EditorCtx = {
   peaks: AssetState<PeaksData>
   thumbs: AssetState<ThumbsData>
   retryAssets(): void
+  /** A transcrição do projeto (lida do transcript.json). */
+  transcript: AssetState<Transcript>
+  reloadTranscript(): void
+  /** Nível do áudio por quadro (para achar silêncio); só é pedido depois que há transcrição. */
+  levels: AssetState<Levels>
+  /** Estado da aba Texto (seleção, busca, escolhas da limpeza). */
+  text: TextStore
   exporter: ExportController
   /** Os elementos da prévia que o motor usa (o canvas, onde as mídias invisíveis ficam e o quadro). */
   refs: { canvas: RefObject<HTMLCanvasElement | null>; host: RefObject<HTMLDivElement | null>; frame: RefObject<HTMLDivElement | null> }

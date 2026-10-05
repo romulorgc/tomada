@@ -1788,3 +1788,339 @@
   padding-inline: 0.75rem;
   white-space: nowrap;
 }
+
+/* ---------------------------------------------------------------------------
+ * Aba Texto: transcrição por palavra, busca, seleção e Limpeza
+ */
+.ed-panel-body {
+  position: relative;
+}
+.ed-panel-body > .tx {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.tx-panes {
+  padding: 0.65rem 1rem 0.5rem;
+}
+.tx-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0.75rem 0.4rem 1rem;
+  color: var(--color-muted);
+  font-size: 0.75rem;
+}
+.tx-search {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0 1rem 0.5rem;
+  padding: 0 0.25rem 0 0.6rem;
+  border-radius: 0.5rem;
+  background: var(--color-bg);
+  box-shadow: inset 0 0 0 1px var(--color-line-strong);
+  color: var(--color-faint);
+}
+.tx-search:focus-within {
+  box-shadow: inset 0 0 0 1px var(--color-focus);
+}
+.tx-search input {
+  flex: 1;
+  min-width: 0;
+  height: 1.875rem;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-ink);
+  font-size: 0.8125rem;
+}
+.tx-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.tx-search-count {
+  min-width: 3.2rem;
+  text-align: right;
+  font-size: 0.75rem;
+}
+/* Flutua sobre o pé do texto: se empurrasse o texto para baixo ao aparecer, o arraste da seleção erraria o alvo. */
+.tx-selbar {
+  position: absolute;
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 5;
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.6rem;
+  background: color-mix(in oklab, var(--color-rec) 10%, var(--color-surface));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-rec) 40%, transparent),
+    0 10px 28px rgb(0 0 0 / 0.5);
+  font-size: 0.8125rem;
+}
+.tx-selbar-count {
+  font-weight: 600;
+}
+.tx-selbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.tx-selbar .btn {
+  min-height: 1.75rem;
+  padding: 0 0.7rem;
+  font-size: 0.8125rem;
+}
+.tx-fix input {
+  width: 100%;
+  height: 1.875rem;
+  padding: 0 0.6rem;
+  border: 0;
+  border-radius: 0.4rem;
+  background: var(--color-bg);
+  box-shadow: inset 0 0 0 1px var(--color-line-strong);
+  color: var(--color-ink);
+  font-size: 0.8125rem;
+}
+.tx-fix input:focus {
+  outline: 0;
+  box-shadow: inset 0 0 0 1px var(--color-focus);
+}
+.tx-fix label {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.tx-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-line);
+  outline: 0;
+}
+.tx-scroll:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--color-focus);
+}
+.tx-inner {
+  padding: 0.9rem 14px 5.5rem;
+  user-select: none;
+}
+.tx-para {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  column-gap: 4px;
+  padding-bottom: 14px;
+}
+.tx-time {
+  align-self: start;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-faint);
+  font-size: 0.6875rem;
+  line-height: 26px;
+  cursor: pointer;
+}
+.tx-time:hover {
+  color: var(--color-ink);
+}
+.tx-words {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 0.875rem;
+  line-height: 26px;
+  overflow-wrap: anywhere;
+}
+.tx-w {
+  padding: 1px 2px;
+  margin: 0 -2px;
+  border-radius: 4px;
+  cursor: pointer;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition: background-color 90ms ease;
+}
+.tx-w:hover {
+  background: var(--color-raised);
+}
+.tx-w[data-low] {
+  text-decoration: underline dotted var(--color-faint);
+  text-underline-offset: 3px;
+}
+.tx-w[data-fixed] {
+  box-shadow: inset 0 -1px 0 var(--color-layout);
+}
+.tx-w[data-gap] {
+  color: var(--color-warn);
+  font-style: italic;
+}
+.tx-w[data-filler] {
+  background: color-mix(in oklab, var(--color-warn) 20%, transparent);
+  box-shadow: inset 0 -2px 0 color-mix(in oklab, var(--color-warn) 70%, transparent);
+}
+.tx-w[data-filler='crutch'] {
+  background: color-mix(in oklab, var(--color-warn) 9%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in oklab, var(--color-warn) 45%, transparent);
+}
+.tx-w[data-struck] {
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-faint);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklab, var(--color-danger) 80%, transparent);
+}
+.tx-w[data-match] {
+  background: color-mix(in oklab, var(--color-zoom) 28%, transparent);
+}
+.tx-w[data-match='now'] {
+  background: var(--color-zoom);
+  color: var(--color-bg);
+}
+.tx-w[data-sel] {
+  background: color-mix(in oklab, var(--color-rec) 34%, transparent);
+  color: var(--color-ink);
+}
+.tx-w[data-now] {
+  background: var(--color-rec);
+  color: var(--color-rec-ink);
+}
+.tx-pause {
+  display: inline-flex;
+  align-items: center;
+  height: 1.2rem;
+  margin: 0 0.1rem;
+  padding: 0 0.45rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-raised);
+  color: var(--color-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: 1px;
+  cursor: pointer;
+}
+.tx-pause:hover {
+  color: var(--color-ink);
+  box-shadow: inset 0 0 0 1px var(--color-line-strong);
+}
+.tx-pause[data-struck] {
+  background: color-mix(in oklab, var(--color-danger) 14%, transparent);
+  color: var(--color-danger);
+  text-decoration: line-through;
+}
+.tx-prepare {
+  width: 100%;
+  max-width: 17rem;
+  margin-top: 0.5rem;
+  text-align: left;
+}
+
+.tx-clean {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.tx-clean-body {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.35rem 1rem 1.5rem;
+}
+.clean-preview {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.5rem;
+  background: var(--color-bg);
+  box-shadow: inset 0 0 0 1px var(--color-line);
+  font-size: 0.8125rem;
+}
+.clean-preview[data-changed='true'] > strong {
+  color: var(--color-ok);
+}
+.rv {
+  display: grid;
+  gap: 0.7rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--color-line);
+}
+.rv-title {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+.rv-group header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.rv-group h4 {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.rv-group h4 > span,
+.rv-total {
+  color: var(--color-faint);
+  font-size: 0.75rem;
+  font-weight: 450;
+}
+.rv-list {
+  display: grid;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.rv-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0;
+  border-top: 1px solid var(--color-line);
+  font-size: 0.75rem;
+}
+.rv-row[data-enabled='false'] .rv-label {
+  color: var(--color-faint);
+}
+.rv-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rv-label em {
+  font-style: normal;
+  color: var(--color-faint);
+}
+.rv-seek,
+.rv-act,
+.rv-more {
+  padding: 0.15rem 0.35rem;
+  border: 0;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.rv-seek:hover,
+.rv-act:hover,
+.rv-more:hover {
+  background: var(--color-raised);
+  color: var(--color-ink);
+}
+.rv-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.2rem;
+}

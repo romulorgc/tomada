@@ -11,11 +11,15 @@ import type { DerivedMedia } from './derived-media'
 import type { ExportService } from './export-service'
 import { locateFfmpeg } from './ffmpeg'
 import { getFfmpegStatus, runFfmpegSelfTest } from './ffmpeg-status'
+import { LlmError } from '@shared/llm-json'
+import type { LlmManager } from './llm/manager'
+import { detectRetakes } from './llm/retakes'
 import type { Logger } from './logger'
 import { checkOpenable, checkRevealable, type OutputDirs } from './path-guard'
 import { assertDocumentPaths } from './project-files'
 import type { ProjectStore } from './projects'
 import type { RecordingService } from './recording-service'
+import type { TranscriptionService } from './transcription/service'
 import type { AppState } from './state'
 
 export type HandlerDeps = {
@@ -28,6 +32,8 @@ export type HandlerDeps = {
   recording: RecordingService
   exporter: ExportService
   derived: DerivedMedia
+  transcription: TranscriptionService
+  llm: LlmManager
   /** Diálogo de escolher a pasta da exportação (em teste, `TOMADA_TEST_PICK_DIR`). */
   pickExportDir(defaultPath?: string): Promise<string | null>
   /** Pastas de exportação aprovadas nesta sessão: o que `export:pick-dir` devolve entra aqui (e a exportação só grava nelas). */
@@ -57,7 +63,7 @@ const MAX_WRITE_POSITION = 128 * 1024 ** 3
 const sameKey = (a: string): string => resolve(a).toLowerCase()
 
 export function createHandlers(deps: HandlerDeps): IpcHandlers {
-  const { state, store, logger, recording, exporter, derived } = deps
+  const { state, store, logger, recording, exporter, derived, transcription, llm } = deps
   /** O que o usuário escolheu nesta sessão pelos diálogos nativos: só isso entra em ajustes que viram caminho. */
   const pickedSettings = { projectsDir: new Set<string>(), ffmpegPath: new Set<string>() }
   const guard = () => ({
@@ -153,6 +159,41 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'derived:peaks': (id) => derived.peaks(id),
     'derived:preview-audio': (id) => derived.previewAudio(id),
     'derived:thumbs': (id) => derived.thumbs(id),
+    'derived:levels': (id) => derived.levels(id),
+
+    'transcription:status': () => transcription.view(),
+    'transcription:prepare': () => transcription.prepare(),
+    'transcription:cancel-prepare': async () => transcription.cancelPrepare(),
+    'transcription:start': (projectId) => transcription.start(projectId),
+    'transcription:cancel': async (projectId) => {
+      store.dirOf(projectId) // id inválido falha aqui
+      transcription.cancel(projectId)
+    },
+    'transcription:get-prefs': async () => state.transcriptionPrefs(),
+    'transcription:set-prefs': (patch) => state.updateTranscriptionPrefs(patch ?? {}),
+    'transcript:get': (projectId) => transcription.getTranscript(projectId),
+    'dictionary:get': async () => state.dictionary(),
+    'dictionary:set': (terms) => state.setDictionary(terms),
+
+    'llm:status': async () => llm.status(),
+    'llm:set-prefs': async (patch) => {
+      const provider = patch?.provider
+      if (provider !== undefined && provider !== 'auto' && provider !== 'cli' && provider !== 'api') throw new Error('Escolha de IA inválida.')
+      if (patch?.model !== undefined && typeof patch.model !== 'string') throw new Error('Modelo inválido.')
+      await state.updateLlmPrefs({ ...(provider !== undefined ? { provider } : {}), ...(patch?.model !== undefined ? { model: patch.model } : {}) })
+      return llm.status()
+    },
+    'llm:set-key': (key) => llm.setKey(key),
+    'llm:clear-key': () => llm.clearKey(),
+    'llm:test': async () => llm.test(),
+    'ai:retakes': async (projectId) => {
+      const transcript = await transcription.getTranscript(projectId)
+      if (!transcript || transcript.words.length === 0) throw new Error('Este projeto ainda não tem transcrição. Transcreva primeiro.')
+      const provider = llm.provider()
+      if (!provider) throw new LlmError(llm.status().detail ?? 'A IA não está configurada.', false)
+      // só o TEXTO da transcrição (com o número de cada palavra) vai para a IA
+      return detectRetakes({ provider, words: transcript.words })
+    },
     'exporter:job': async (exportId) => exporter.job(exportId),
     'exporter:write': (exportId, position, data) => {
       if (!Number.isSafeInteger(position) || position < 0 || position > MAX_WRITE_POSITION) throw new Error('Posição de escrita inválida.')

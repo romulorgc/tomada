@@ -5,20 +5,26 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { useStore } from 'zustand'
+import { DEFAULT_CLEAN, type Levels } from '@shared/clean'
 import { createEditorStore } from '@shared/editor-store'
 import { eventsFromText } from '@shared/events'
 import { regenerateZooms } from '@shared/edits'
+import { formatSpan } from '@shared/format'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
 import { HORIZONTAL_1080, deriveProject, prepareEvents, type CursorData } from '@shared/scene'
+import type { Transcript } from '@shared/types'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
+import { useTranscription } from '../transcription-store'
 import { EditorContext, useEditor, type AssetState, type EditorCtx } from './context'
 import { PreviewEngine } from './engine'
 import { ExportDialog } from './ExportDialog'
 import { useEditorOps } from './ops'
 import { createPlaybackStore } from './playback-store'
+import { applyClean, buildCleanInput } from './text/clean-actions'
+import { createTextStore } from './text/text-store'
 import { SidePanel } from './panels/SidePanel'
 import { PreviewStage } from './PreviewStage'
 import { useEditorShortcuts } from './shortcuts'
@@ -54,6 +60,17 @@ function EditorInner({ onBack, layoutRef }: { onBack: () => void; layoutRef: Rea
   const ctx = useEditor()
   const ops = useEditorOps()
   useEditorShortcuts(ops, !ctx.exporter.open)
+
+  // Palavra selecionada na aba Texto e zoom/trecho/intervalo selecionado na linha do tempo não convivem: o Delete teria dois alvos.
+  const { store: docStore, text: textStore } = ctx
+  useEffect(
+    () =>
+      docStore.subscribe((s, prev) => {
+        const picked = (s.selection && s.selection !== prev.selection) || (s.range && s.range !== prev.range)
+        if (picked && textStore.getState().selection) textStore.getState().select(null)
+      }),
+    [docStore, textStore]
+  )
 
   // --- altura da linha do tempo (arrastar a alça; ↑/↓ no teclado) -----------------------------------------
   const [height, setHeight] = useState<number | null>(() => readSavedHeight())
@@ -145,6 +162,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     [detail.id]
   )
   const playback = useMemo(() => createPlaybackStore(), [detail.id])
+  const text = useMemo(() => createTextStore(), [detail.id])
   const project = useStore(store, (s) => s.project)
   const durationMs = Math.max(project.sources.screen?.durationMs ?? 0, project.sources.camera?.durationMs ?? 0, project.sources.voice?.durationMs ?? 0)
   const hasScreen = Boolean(project.sources.screen)
@@ -330,6 +348,71 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     loadAssets(peaks.status === 'error' && thumbs.status !== 'error' ? 'peaks' : thumbs.status === 'error' && peaks.status !== 'error' ? 'thumbs' : undefined)
   }, [loadAssets, peaks.status, thumbs.status])
 
+  // --- transcrição (aba Texto) ------------------------------------------------------------------------------------
+  const [transcript, setTranscript] = useState<AssetState<Transcript>>({ status: voicePath ? 'loading' : 'none', data: null, error: null })
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const loadTranscript = useCallback(() => {
+    setTranscript((s) => ({ status: 'loading', data: s.data, error: null }))
+    void window.tomada.transcription
+      .get(detail.id)
+      .then((data) => {
+        if (mounted.current) setTranscript(data ? { status: 'ready', data, error: null } : { status: 'none', data: null, error: null })
+      })
+      .catch((err: unknown) => {
+        window.tomada.log({ level: 'error', message: 'Falha ao ler a transcrição do projeto', detail: messageOf(err) })
+        if (mounted.current) setTranscript({ status: 'error', data: null, error: messageOf(err) })
+      })
+  }, [detail.id])
+  useEffect(() => {
+    loadTranscript()
+  }, [loadTranscript])
+  // o trabalho deste projeto terminou (aqui ou em segundo plano): lê o texto novo
+  const jobState = useTranscription((s) => s.jobs[detail.id]?.state)
+  useEffect(() => {
+    if (jobState === 'done') loadTranscript()
+  }, [jobState, loadTranscript])
+
+  // Nível do áudio (para achar silêncio): só depois que há texto. Depois dele, a limpeza automática, uma vez por projeto.
+  const [levels, setLevels] = useState<AssetState<Levels>>({ status: 'none', data: null, error: null })
+  const levelsAsked = useRef(false)
+  useEffect(() => {
+    const tr = transcript.data
+    if (levelsAsked.current || transcript.status !== 'ready' || !tr || tr.words.length === 0) return
+    levelsAsked.current = true
+    setLevels({ status: 'loading', data: null, error: null })
+    void (async () => {
+      let lv: Levels | null = null
+      try {
+        lv = await window.tomada.derived.levels(detail.id)
+        if (mounted.current) setLevels(lv ? { status: 'ready', data: lv, error: null } : { status: 'none', data: null, error: null })
+      } catch (err) {
+        window.tomada.log({ level: 'error', message: 'Falha ao medir o volume do áudio', detail: messageOf(err) })
+        if (mounted.current) setLevels({ status: 'error', data: null, error: messageOf(err) })
+      }
+      if (!mounted.current) return
+      // Limpeza automática: só em projeto cuja transcrição é NOVA (feita depois do projeto existir), uma vez, e se a pessoa não desligou.
+      const doc = store.getState().project
+      if (doc.autoCleaned || !tr.createdAt || tr.createdAt < doc.createdAt) return
+      try {
+        const prefs = await window.tomada.transcription.getPrefs()
+        if (!prefs.autoClean || !mounted.current) return
+        // a marca fica FORA do desfazer: quem desfaz a limpeza não a vê voltar na próxima vez que abrir o projeto
+        store.getState().change((d) => ({ ...d, autoCleaned: true }), { history: false })
+        const out = applyClean(store, buildCleanInput(tr, lv, durationMs), DEFAULT_CLEAN, durationMs)
+        if (out.applied && out.plan.deltaMs > 0) notify({ kind: 'info', text: t.editor.clean.autoDone(formatSpan(out.plan.deltaMs)) })
+      } catch (err) {
+        window.tomada.log({ level: 'error', message: 'Falha na limpeza automática', detail: messageOf(err) })
+        notify({ kind: 'error', text: 'Não consegui aplicar a limpeza automática', detail: messageOf(err) })
+      }
+    })()
+  }, [transcript.status, transcript.data, detail.id, store, durationMs, notify])
+
   // --- exportação ---------------------------------------------------------------------------------------------
   const flush = useCallback(() => store.getState().flush(), [store])
   const exporter = useExportController(detail.id, flush)
@@ -365,10 +448,14 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       peaks,
       thumbs,
       retryAssets,
+      transcript,
+      reloadTranscript: loadTranscript,
+      levels,
+      text,
       exporter,
       refs: { canvas, host, frame }
     }),
-    [detail, store, playback, cursorData, eventsError, derived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, exporter]
+    [detail, store, playback, cursorData, eventsError, derived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, levels, text, exporter]
   )
 
   return (

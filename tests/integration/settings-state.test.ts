@@ -10,6 +10,7 @@ import { loadSettings, saveSettings } from '../../src/main/settings'
 import { createAppState } from '../../src/main/state'
 import { locateFfmpeg } from '../../src/main/ffmpeg'
 import { copyTree, FIX, useTmpDir } from '../helpers/env'
+import { transcriptionDeps } from '../helpers/handler-extras'
 import { createIdleExportService, createIdleRecordingService } from '../helpers/recording'
 
 const tmp = useTmpDir()
@@ -189,7 +190,7 @@ function editorDeps(over: { image?: string | null } = {}) {
   const calls: string[] = []
   return {
     calls,
-    derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, idle: async () => undefined, shutdown: () => undefined },
+    derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, levels: async () => null, idle: async () => undefined, shutdown: () => undefined },
     pickExportDir: async () => null,
     outputDirs: createOutputDirs(),
     pickImage: async () => over.image ?? null,
@@ -219,6 +220,7 @@ describe('handlers de IPC (contrato completo, sem Electron)', () => {
       recording: createIdleRecordingService(),
       exporter: createIdleExportService(),
       ...extras,
+      ...transcriptionDeps({ state, store, logger: log }),
       finishCountdown: () => undefined,
       clock: () => 0
     })
@@ -330,6 +332,7 @@ describe('handlers de IPC (contrato completo, sem Electron)', () => {
       recording: createIdleRecordingService(),
       exporter: createIdleExportService(),
       ...editorDeps(),
+      ...transcriptionDeps({ state, store, logger: log }),
       finishCountdown: () => undefined,
       clock: () => 0
     })

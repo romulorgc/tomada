@@ -4,8 +4,8 @@
  */
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
-import { LEVEL_CHANNEL, type AppInfo, type IpcEvents } from '@shared/ipc'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, protocol, safeStorage, session, shell } from 'electron'
+import { LEVEL_CHANNEL, type AppInfo, type IpcEvents, type ProcessSnapshot } from '@shared/ipc'
 import { createSourceProvider } from './capture-sources'
 import { createDerivedMedia } from './derived-media'
 import { createExporterWindowFactory } from './export-window'
@@ -13,6 +13,7 @@ import { createExportService } from './export-service'
 import { createFfmpeg, locateFfmpeg } from './ffmpeg'
 import { createHandlers } from './handlers'
 import { registerIpc } from './ipc'
+import { createLlmManager, type KeyVault } from './llm/manager'
 import { createLogger } from './logger'
 import { handleMediaRequest, MEDIA_SCHEME } from './media-protocol'
 import { isAppOrigin, isAppUrl, isExternalRequest, type AppUrlContext } from './navigation'
@@ -22,6 +23,8 @@ import { createProjectStore } from './projects'
 import { createRecordingService } from './recording-service'
 import { createAppState } from './state'
 import { createTracker } from './tracker'
+import { chooseEngine } from './transcription/engines'
+import { createTranscriptionService } from './transcription/service'
 import { createAuxWindows } from './windows'
 
 // Testes isolam ajustes e logs do app real. Precisa vir antes de qualquer uso de userData.
@@ -138,6 +141,57 @@ async function main(): Promise<void> {
   const sources = createSourceProvider({ logger, ownHwnds: () => windows.ownHwnds(), env: process.env })
   sources.installDisplayMediaHandler(session.defaultSession)
 
+  // --- Transcrição e IA ----------------------------------------------------------------------------------
+  const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, '../../resources')
+  const { engine } = chooseEngine({ env: process.env, settingsEngine: state.transcriptionEngine(), scriptPath: join(resourcesDir, 'transcribe.py'), logger })
+  const transcription = createTranscriptionService({
+    logger,
+    engine,
+    read: (id) => store.read(id),
+    vocabulary: () => state.dictionary(),
+    emit
+  })
+  const vault: KeyVault = {
+    available: () => safeStorage.isEncryptionAvailable(),
+    encrypt: (plain) => safeStorage.encryptString(plain).toString('base64'),
+    decrypt: (enc) => safeStorage.decryptString(Buffer.from(enc, 'base64'))
+  }
+  const llm = createLlmManager({
+    env: process.env,
+    getPrefs: () => state.llmPrefs(),
+    savePrefs: (patch) => state.updateLlmPrefs(patch),
+    vault,
+    scratchDir: join(app.getPath('temp'), 'tomada-ia'),
+    logger
+  })
+
+  /** Depois de cada gravação processada, a transcrição começa sozinha (se estiver ligada e o motor, pronto). */
+  const autoStarted = new Set<string>()
+  const autoTranscribe = async (folder: string): Promise<void> => {
+    if (!state.transcriptionPrefs().auto) return
+    try {
+      const check = await engine.check()
+      if (check.state !== 'ready') {
+        emit('record:notice', { kind: 'info', text: 'Gravação salva. A transcrição ainda não foi preparada: prepare nos Ajustes para editar pelo texto.' })
+        return
+      }
+      await transcription.start(folder)
+    } catch (err) {
+      logger.error(`Não consegui começar a transcrição automática de ${folder}.`, err)
+      emit('record:notice', { kind: 'error', text: 'Não consegui começar a transcrição desta gravação', detail: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  const emitRecording = <K extends keyof IpcEvents>(channel: K, payload: IpcEvents[K]): void => {
+    emit(channel, payload)
+    if (channel === 'process:progress') {
+      const snap = payload as ProcessSnapshot
+      if (snap.status === 'done' && !autoStarted.has(snap.sessionId)) {
+        autoStarted.add(snap.sessionId)
+        void autoTranscribe(snap.folder)
+      }
+    }
+  }
+
   const clock = (): number => performance.timeOrigin + performance.now()
   const recording = createRecordingService({
     logger,
@@ -157,7 +211,7 @@ async function main(): Promise<void> {
           recording.command('stop', 'window')
         }
       }),
-    emit,
+    emit: emitRecording,
     trash,
     clock,
     now: () => new Date(),
@@ -210,6 +264,7 @@ async function main(): Promise<void> {
     quitting = true
     void recording.shutdown()
     void exporter.shutdown()
+    transcription.shutdown()
     derived.shutdown()
     windows.closeAll()
   })
@@ -223,6 +278,8 @@ async function main(): Promise<void> {
       recording,
       exporter,
       derived,
+      transcription,
+      llm,
       outputDirs,
       pickExportDir: async (defaultPath) => {
         // TOMADA_TEST_PICK_DIR: nos testes o diálogo do Windows não aparece; vazio = "cancelou"

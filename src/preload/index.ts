@@ -71,7 +71,27 @@ const api: TomadaApi = {
   derived: {
     peaks: (id) => invoke('derived:peaks', id),
     previewAudio: (id) => invoke('derived:preview-audio', id),
-    thumbs: (id) => invoke('derived:thumbs', id)
+    thumbs: (id) => invoke('derived:thumbs', id),
+    levels: (id) => invoke('derived:levels', id)
+  },
+  transcription: {
+    status: () => invoke('transcription:status'),
+    prepare: () => invoke('transcription:prepare'),
+    cancelPrepare: () => invoke('transcription:cancel-prepare'),
+    start: (projectId) => invoke('transcription:start', projectId),
+    cancel: (projectId) => invoke('transcription:cancel', projectId),
+    getPrefs: () => invoke('transcription:get-prefs'),
+    setPrefs: (patch) => invoke('transcription:set-prefs', patch),
+    get: (projectId) => invoke('transcript:get', projectId)
+  },
+  dictionary: { get: () => invoke('dictionary:get'), set: (terms) => invoke('dictionary:set', terms) },
+  ai: {
+    status: () => invoke('llm:status'),
+    setPrefs: (patch) => invoke('llm:set-prefs', patch),
+    setKey: (key) => invoke('llm:set-key', key),
+    clearKey: () => invoke('llm:clear-key'),
+    test: () => invoke('llm:test'),
+    retakes: (projectId) => invoke('ai:retakes', projectId)
   },
   exportWorker: {
     job: (exportId) => invoke('exporter:job', exportId),

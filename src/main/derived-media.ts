@@ -12,7 +12,9 @@
  */
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import type { Levels } from '@shared/clean'
 import type { PeaksData, PreviewAudioData, ThumbsData } from '@shared/ipc'
+import { LEVELS_VERSION, LEVEL_FRAME_MS, alignLevels, computeLevels, type LevelsFile } from '@shared/levels'
 import { mediaUrl } from '@shared/media-url'
 import { PEAKS_PER_SECOND, PEAKS_VERSION, computePeaks, pcmFromBytes, type PeaksFile } from '@shared/peaks'
 import { projectDurationMs } from '@shared/project'
@@ -27,6 +29,7 @@ import { resolveProjectFile } from './project-files'
 export const PEAKS_PATH = 'media/peaks.json'
 export const PREVIEW_AUDIO_PATH = 'media/voice-preview.m4a'
 export const PREVIEW_AUDIO_INFO = 'media/voice-preview.json'
+export const LEVELS_PATH = 'media/levels.json'
 export const THUMBS_DIR = 'media/thumbs'
 export const THUMBS_INFO = 'media/thumbs/info.json'
 
@@ -55,6 +58,8 @@ export interface DerivedMedia {
   peaks(projectId: string): Promise<PeaksData | null>
   previewAudio(projectId: string): Promise<PreviewAudioData | null>
   thumbs(projectId: string): Promise<ThumbsData | null>
+  /** Nível (dBFS por quadro de 20 ms) do microfone e do som do computador, para a limpeza de silêncio. */
+  levels(projectId: string): Promise<Levels | null>
   /** Espera tudo que está na fila (testes). */
   idle(): Promise<void>
   /** Interrompe o que está rodando e esvazia a fila (fechar o app). */
@@ -245,6 +250,58 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     }
   }
 
+  // --- nível do áudio (limpeza de silêncio) ----------------------------------------------------------------
+  /** Taxa de análise do nível (basta para RMS de 20 ms). */
+  const LEVEL_SAMPLE_RATE = 8000
+
+  async function pcmOf(ff: Ffmpeg, input: string, tmpDir: string, name: string): Promise<Int16Array> {
+    const pcmFile = join(tmpDir, name)
+    await ff.run(buildPeaksPcmArgs({ input, output: pcmFile, sampleRate: LEVEL_SAMPLE_RATE }), { signal: abort.signal, timeoutMs: 600_000 })
+    const bytes = await readFile(pcmFile)
+    return pcmFromBytes(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength))
+  }
+
+  async function buildLevels(id: string): Promise<Levels | null> {
+    const { project, dir } = await deps.read(id)
+    const voice = project.sources.voice
+    const system = project.sources.system
+    if (!voice && !system) return null
+    const voicePath = voice ? await resolveProjectFile(dir, voice.path, 'sources.voice.path') : null
+    const systemPath = system ? await resolveProjectFile(dir, system.path, 'sources.system.path') : null
+    const voiceMtime = voicePath ? await mtimeOf(voicePath) : null
+    const systemMtime = systemPath ? await mtimeOf(systemPath) : null
+    if (voiceMtime === null && systemMtime === null) return null
+    const startMs = project.sync.cameraOffsetMs
+    const want: LevelsFile['sources'] = {
+      ...(voice && voiceMtime !== null ? { voice: { path: voice.path, mtimeMs: voiceMtime } } : {}),
+      ...(system && systemMtime !== null ? { system: { path: system.path, mtimeMs: systemMtime } } : {})
+    }
+    const file = await resolveProjectFile(dir, LEVELS_PATH)
+    const toLevels = (f: LevelsFile): Levels => ({ frameMs: f.frameMs, startMs: f.startMs, mic: f.mic, system: f.system })
+    const cached = await readJson<LevelsFile>(file)
+    if (cached && cached.version === LEVELS_VERSION && cached.startMs === startMs && JSON.stringify(cached.sources) === JSON.stringify(want)) return toLevels(cached)
+
+    const ff = deps.ffmpeg()
+    if (!ff) return null
+    const tmpDir = await resolveProjectFile(dir, `media/.tmp-levels-${process.pid}`)
+    await mkdir(tmpDir, { recursive: true })
+    try {
+      const mic = voicePath && voiceMtime !== null ? computeLevels(await pcmOf(ff, voicePath, tmpDir, 'mic.pcm'), LEVEL_SAMPLE_RATE, LEVEL_FRAME_MS) : null
+      let sys: number[] | null = null
+      if (systemPath && systemMtime !== null) {
+        const raw = computeLevels(await pcmOf(ff, systemPath, tmpDir, 'sys.pcm'), LEVEL_SAMPLE_RATE, LEVEL_FRAME_MS)
+        // o som do computador vem do arquivo da tela: alinha ao eixo da voz
+        sys = alignLevels(raw, Math.round((project.sync.screenOffsetMs - startMs) / LEVEL_FRAME_MS))
+      }
+      const out: LevelsFile = { version: LEVELS_VERSION, frameMs: LEVEL_FRAME_MS, startMs, sources: want, mic, system: sys }
+      await writeFileAtomic(file, JSON.stringify(out))
+      logger.info(`Níveis de áudio do projeto ${id}: ${mic?.length ?? 0} quadros de microfone, ${sys?.length ?? 0} de som do computador.`)
+      return toLevels(out)
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => undefined)
+    }
+  }
+
   /** Falha vira aviso no log e `null` (o editor funciona sem a forma de onda ou as miniaturas). */
   const safe = <T>(label: string, id: string, job: () => Promise<T | null>): Promise<T | null> =>
     job().catch((err: unknown) => {
@@ -257,6 +314,7 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     peaks: (id) => once(`peaks:${id}`, () => safe('a forma de onda', id, () => buildPeaks(id))),
     previewAudio: (id) => once(`audio:${id}`, () => safe('o áudio da prévia', id, () => buildPreviewAudio(id))),
     thumbs: (id) => once(`thumbs:${id}`, () => safe('as miniaturas', id, () => buildThumbs(id))),
+    levels: (id) => once(`levels:${id}`, () => safe('o nível do áudio', id, () => buildLevels(id))),
     async idle() {
       while (inflight.size > 0) await Promise.allSettled([...inflight.values()])
     },

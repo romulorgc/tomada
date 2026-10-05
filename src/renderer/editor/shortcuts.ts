@@ -4,7 +4,8 @@
  *
  *   Espaço tocar/pausar · J/K/L voltar/parar/avançar · ←/→ um quadro · Shift+←/→ 1 s · Home/End
  *   Delete/Backspace corta o intervalo (ou apaga o selecionado) · S divide o layout · Z cria zoom
- *   Ctrl+Z desfazer · Ctrl+Shift+Z / Ctrl+Y refazer · Esc limpa a seleção
+ *   Ctrl+Z desfazer · Ctrl+Shift+Z / Ctrl+Y refazer · Ctrl+F busca no texto · Esc limpa a seleção
+ *   (Delete também apaga as palavras selecionadas na aba Texto)
  */
 import { useEffect } from 'react'
 import type { EditorOps } from './ops'
@@ -49,6 +50,11 @@ export function useEditorShortcuts(ops: EditorOps, enabled: boolean): void {
       if (mod && key === 'y') {
         e.preventDefault()
         ops.redo()
+        return
+      }
+      // Ctrl+F: buscar no texto (só quando há transcrição; sem ela o atalho não faz nada)
+      if (mod && !e.shiftKey && key === 'f') {
+        if (ops.openSearch()) e.preventDefault()
         return
       }
       if (mod || e.altKey) return // não rouba Ctrl+S, Alt+F4 etc.

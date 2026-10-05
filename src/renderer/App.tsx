@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar'
 import { t } from './i18n/pt-BR'
 import { useRecorder } from './recording/controller'
 import { useApp } from './store'
+import { useTranscription } from './transcription-store'
 import { Library } from './views/Library'
 import { Processing } from './views/Processing'
 import { ProjectView } from './views/ProjectView'
@@ -50,6 +51,8 @@ export function App() {
   const viewName = useApp((s) => s.view.name)
   // Comandos da barra/atalhos, avisos e progresso do processamento chegam do processo principal.
   useEffect(() => useRecorder.getState().attach(), [])
+  // O estado da transcrição (preparação e fila) também chega por evento e vale em qualquer tela.
+  useEffect(() => useTranscription.getState().attach(), [])
   return (
     <div className="flex h-full">
       {/* O editor ocupa a janela inteira: a navegação do app só volta ao fechar o projeto. */}

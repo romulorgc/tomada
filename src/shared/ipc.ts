@@ -4,9 +4,11 @@
  * e o preload e o renderer só enxergam o que está declarado.
  * Código puro: sem DOM, sem Node.
  */
+import type { Levels } from './clean'
 import type { ExportOptions } from './export'
 import type { RecordPrefs, RecordRequest } from './recording'
-import type { Project, ProjectSummary, Size } from './types'
+import type { LlmStatus, PrepareSnapshot, RetakesResult, TranscriptionJob, TranscriptionPrefs, TranscriptionView } from './transcription'
+import type { Project, ProjectSummary, Size, Transcript } from './types'
 
 // --- Tipos que atravessam a ponte ---------------------------------------------
 
@@ -26,7 +28,16 @@ export type Settings = {
   ffmpegPath?: string
   /** Escolhas da tela Gravar (ver `normalizeRecordPrefs`). */
   record?: Partial<RecordPrefs>
+  /** Dicionário: nomes próprios e termos que a transcrição deve acertar (vira prompt e `hotwords`). */
+  dictionary?: string[]
+  /** Preferências da transcrição; `engine` só por arquivo (não há botão: o padrão é o que se mediu melhor). */
+  transcription?: Partial<TranscriptionPrefs> & { engine?: 'faster-whisper' | 'whisper-cpp' }
+  /** IA de texto: qual usar e o modelo. A chave cifrada NUNCA sai do processo principal. */
+  llm?: LlmStoredPrefs
 }
+
+/** Como a IA está configurada em disco. `apiKeyEnc` é a chave cifrada pelo cofre do sistema (só o main a vê). */
+export type LlmStoredPrefs = { provider?: 'auto' | 'cli' | 'api'; model?: string; apiKeyEnc?: string }
 
 export type SettingsView = {
   settings: Settings
@@ -268,6 +279,7 @@ export type ThumbsData = { intervalMs: number; count: number; height: number; ur
 
 // --- Contrato ------------------------------------------------------------------
 
+
 export type IpcContract = {
   'app:info': { args: []; result: AppInfo }
 
@@ -321,6 +333,29 @@ export type IpcContract = {
   'derived:peaks': { args: [id: string]; result: PeaksData | null }
   'derived:preview-audio': { args: [id: string]; result: PreviewAudioData | null }
   'derived:thumbs': { args: [id: string]; result: ThumbsData | null }
+  /** Nível do áudio por quadro (microfone e som do computador) para a limpeza de silêncio. */
+  'derived:levels': { args: [id: string]; result: Levels | null }
+
+  // Transcrição (M3): a interface só diz QUAL projeto; o main resolve a voz, executa o motor e grava o transcript.json.
+  'transcription:status': { args: []; result: TranscriptionView }
+  'transcription:prepare': { args: []; result: void }
+  'transcription:cancel-prepare': { args: []; result: void }
+  'transcription:start': { args: [projectId: string]; result: void }
+  'transcription:cancel': { args: [projectId: string]; result: void }
+  'transcription:get-prefs': { args: []; result: TranscriptionPrefs }
+  'transcription:set-prefs': { args: [patch: Partial<TranscriptionPrefs>]; result: TranscriptionPrefs }
+  'transcript:get': { args: [projectId: string]; result: Transcript | null }
+  'dictionary:get': { args: []; result: string[] }
+  'dictionary:set': { args: [terms: string[]]; result: string[] }
+
+  // IA de texto (M3): provedor, chave (guardada cifrada no main) e a tarefa de recomeços.
+  'llm:status': { args: []; result: LlmStatus }
+  'llm:set-prefs': { args: [patch: { provider?: 'auto' | 'cli' | 'api'; model?: string }]; result: LlmStatus }
+  'llm:set-key': { args: [key: string]; result: LlmStatus }
+  'llm:clear-key': { args: []; result: LlmStatus }
+  'llm:test': { args: []; result: { ok: boolean; message?: string } }
+  'ai:retakes': { args: [projectId: string]; result: RetakesResult }
+
   // Canais da janela escondida de exportação (identificada pelo `exportId` que vai no hash da URL).
   'exporter:job': { args: [exportId: string]; result: ExportJob }
   'exporter:write': { args: [exportId: string, position: number, data: Uint8Array]; result: void }
@@ -346,6 +381,10 @@ export type IpcEvents = {
   'bar:state': BarState
   'bar:level': { level: number }
   'export:progress': ExportProgress
+  /** Preparação da transcrição: cada mudança de passo ou de progresso. */
+  'transcription:prepare': PrepareSnapshot
+  /** Uma transcrição na fila mudou de estado (ou de progresso). */
+  'transcription:job': TranscriptionJob
 }
 
 export type IpcChannel = keyof IpcContract
@@ -425,6 +464,28 @@ export type TomadaApi = {
     peaks(id: string): Promise<PeaksData | null>
     previewAudio(id: string): Promise<PreviewAudioData | null>
     thumbs(id: string): Promise<ThumbsData | null>
+    levels(id: string): Promise<Levels | null>
+  }
+  transcription: {
+    status(): Promise<TranscriptionView>
+    prepare(): Promise<void>
+    cancelPrepare(): Promise<void>
+    start(projectId: string): Promise<void>
+    cancel(projectId: string): Promise<void>
+    getPrefs(): Promise<TranscriptionPrefs>
+    setPrefs(patch: Partial<TranscriptionPrefs>): Promise<TranscriptionPrefs>
+    /** O transcript.json do projeto (null se ainda não há). */
+    get(projectId: string): Promise<Transcript | null>
+  }
+  dictionary: { get(): Promise<string[]>; set(terms: string[]): Promise<string[]> }
+  ai: {
+    status(): Promise<LlmStatus>
+    setPrefs(patch: { provider?: 'auto' | 'cli' | 'api'; model?: string }): Promise<LlmStatus>
+    setKey(key: string): Promise<LlmStatus>
+    clearKey(): Promise<LlmStatus>
+    test(): Promise<{ ok: boolean; message?: string }>
+    /** Pede à IA os recomeços da transcrição do projeto (só o texto vai). */
+    retakes(projectId: string): Promise<RetakesResult>
   }
   /** Só para a janela escondida de exportação. */
   exportWorker: {

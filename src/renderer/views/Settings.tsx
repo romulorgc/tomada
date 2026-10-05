@@ -4,6 +4,7 @@ import { ErrorPanel } from '../components/Feedback'
 import { CheckIcon, CrossIcon, FolderIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
+import { AiSettings, TranscriptionSettings } from './SettingsTranscription'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -209,6 +210,14 @@ export function Settings() {
             {!test.encoders.h264Nvenc ? <p className="mt-3 text-[0.8125rem] text-muted">{t.settings.ffmpeg.nvencNote}</p> : null}
           </div>
         ) : null}
+      </Section>
+
+      <Section title={t.settings.transcription.title} help={t.settings.transcription.help} testId="settings-transcription">
+        <TranscriptionSettings />
+      </Section>
+
+      <Section title={t.settings.ai.title} help={t.settings.ai.help} testId="settings-ai">
+        <AiSettings />
       </Section>
 
       <Section title={t.settings.about.title} testId="settings-about">

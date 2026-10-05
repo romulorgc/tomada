@@ -1,0 +1,7 @@
+Detected 6 speech segments:
+Speech segment 0: start = 39.00, end = 185.00
+Speech segment 1: start = 275.00, end = 569.00
+Speech segment 2: start = 711.00, end = 1120.00
+Speech segment 3: start = 1181.00, end = 1661.00
+Speech segment 4: start = 1802.00, end = 1869.00
+Speech segment 5: start = 1952.00, end = 2237.00

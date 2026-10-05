@@ -5,8 +5,10 @@
 import { mkdir } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { z } from 'zod'
-import type { Settings, SettingsView } from '@shared/ipc'
+import { normalizeDictionary } from '@shared/dictionary'
+import type { LlmStoredPrefs, Settings, SettingsView } from '@shared/ipc'
 import { normalizeRecordPrefs, type RecordPrefs } from '@shared/recording'
+import { DEFAULT_TRANSCRIPTION_PREFS, type TranscriptionPrefs } from '@shared/transcription'
 import { locateFfmpeg, type LocateOptions } from './ffmpeg'
 import type { Logger } from './logger'
 import { resolveProjectsDir } from './paths'
@@ -21,6 +23,16 @@ export interface AppState {
   /** Escolhas da tela Gravar (sempre válidas: o que faltar ou estiver ruim volta ao padrão). */
   recordPrefs(): RecordPrefs
   updateRecordPrefs(patch: Partial<RecordPrefs>): Promise<RecordPrefs>
+  /** Dicionário (nomes próprios) da transcrição. */
+  dictionary(): string[]
+  setDictionary(terms: unknown): Promise<string[]>
+  transcriptionPrefs(): TranscriptionPrefs
+  updateTranscriptionPrefs(patch: Partial<TranscriptionPrefs>): Promise<TranscriptionPrefs>
+  /** Qual motor transcreve (padrão: faster-whisper; o outro só por arquivo de ajustes ou `TOMADA_TRANSCRIBER`). */
+  transcriptionEngine(): 'faster-whisper' | 'whisper-cpp'
+  /** Ajustes da IA, COM a chave cifrada: só o processo principal usa; `view()` nunca a devolve. */
+  llmPrefs(): LlmStoredPrefs
+  updateLlmPrefs(patch: LlmStoredPrefs): Promise<void>
 }
 
 const patchSchema = z.object({
@@ -47,8 +59,16 @@ export async function createAppState(args: {
     return run
   }
 
+  /** O que a interface pode ver: nunca a chave da IA (nem cifrada). */
+  const publicSettings = (): Settings => {
+    const { llm, ...rest } = current
+    if (!llm) return { ...rest }
+    const { apiKeyEnc: _secret, ...safe } = llm
+    void _secret
+    return { ...rest, llm: safe }
+  }
   const view = (): SettingsView => ({
-    settings: { ...current },
+    settings: publicSettings(),
     effective: resolveProjectsDir({ env, settings: current })
   })
 
@@ -92,6 +112,51 @@ export async function createAppState(args: {
     },
 
     recordPrefs: () => normalizeRecordPrefs(current.record),
+
+    dictionary: () => normalizeDictionary(current.dictionary),
+
+    setDictionary: (terms) =>
+      serialized(async () => {
+        const dictionary = normalizeDictionary(terms)
+        const next: Settings = { ...current, dictionary }
+        await saveSettings(args.file, next)
+        current = next
+        return dictionary
+      }),
+
+    transcriptionPrefs: () => ({ ...DEFAULT_TRANSCRIPTION_PREFS, ...(current.transcription?.auto !== undefined ? { auto: current.transcription.auto } : {}), ...(current.transcription?.autoClean !== undefined ? { autoClean: current.transcription.autoClean } : {}) }),
+
+    updateTranscriptionPrefs: (patch) =>
+      serialized(async () => {
+        const clean: Partial<TranscriptionPrefs> = {}
+        if (typeof patch.auto === 'boolean') clean.auto = patch.auto
+        if (typeof patch.autoClean === 'boolean') clean.autoClean = patch.autoClean
+        const next: Settings = { ...current, transcription: { ...current.transcription, ...clean } }
+        await saveSettings(args.file, next)
+        current = next
+        return { ...DEFAULT_TRANSCRIPTION_PREFS, ...(next.transcription?.auto !== undefined ? { auto: next.transcription.auto } : {}), ...(next.transcription?.autoClean !== undefined ? { autoClean: next.transcription.autoClean } : {}) }
+      }),
+
+    transcriptionEngine: () => current.transcription?.engine ?? 'faster-whisper',
+
+    llmPrefs: () => ({ ...current.llm }),
+
+    updateLlmPrefs: (patch) =>
+      serialized(async () => {
+        const merged: LlmStoredPrefs = { ...current.llm }
+        if (patch.provider !== undefined) merged.provider = patch.provider
+        if (patch.model !== undefined) {
+          if (patch.model.trim() === '') delete merged.model
+          else merged.model = patch.model.trim().slice(0, 100)
+        }
+        if (patch.apiKeyEnc !== undefined) {
+          if (patch.apiKeyEnc === '') delete merged.apiKeyEnc
+          else merged.apiKeyEnc = patch.apiKeyEnc
+        }
+        const next: Settings = { ...current, llm: merged }
+        await saveSettings(args.file, next)
+        current = next
+      }),
 
     updateRecordPrefs: (patch) =>
       serialized(async () => {

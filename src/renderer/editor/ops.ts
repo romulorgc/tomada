@@ -6,7 +6,9 @@
 import { useMemo } from 'react'
 import { addManualCut, restoreCut } from '@shared/cuts'
 import { createLayoutSeg, createZoom, createZoomAt, deleteLayoutSeg, deleteZoom, splitLayoutAt } from '@shared/edits'
+import { cutWords, restoreWords, togglePause } from '@shared/text-edit'
 import type { LayoutKind } from '@shared/types'
+import { selectionRange } from './text/text-store'
 import { useEditor } from './context'
 
 /** Zoom criado com a tecla Z sem intervalo marcado: dura isto (ms) a partir da cabeça de reprodução. */
@@ -15,7 +17,8 @@ export const QUICK_ZOOM_MS = 2000
 export type EditorOps = ReturnType<typeof useEditorOps>
 
 export function useEditorOps() {
-  const { store, playback, engineRef, durationMs } = useEditor()
+  const { store, playback, engineRef, durationMs, transcript, text } = useEditor()
+  const words = transcript.data?.words ?? null
   return useMemo(() => {
     const st = () => store.getState()
     const ops = {
@@ -28,8 +31,62 @@ export function useEditorOps() {
         return true
       },
 
-      /** Delete/Backspace: apaga o zoom ou trecho de layout selecionado, restaura o corte selecionado ou corta o intervalo. */
+      /** Apaga as palavras selecionadas na aba Texto (vira UM corte manual, desfazível). */
+      cutWordSelection(): boolean {
+        const r = selectionRange(text.getState().selection)
+        if (!r || !words) return false
+        st().change((p) => ({ ...p, cuts: cutWords(p.cuts, words, r.from, r.to, durationMs) }))
+        text.getState().select(null)
+        return true
+      },
+
+      /** Restaura as palavras selecionadas: o que as cobre sai dos cortes (automático fica desligado). */
+      restoreWordSelection(): boolean {
+        const r = selectionRange(text.getState().selection)
+        if (!r || !words) return false
+        st().change((p) => ({ ...p, cuts: restoreWords(p.cuts, words, r.from, r.to, durationMs) }))
+        return true
+      },
+
+      /** Clicar numa ficha de pausa: corta a pausa, ou restaura se já está cortada. */
+      togglePauseAfter(k: number): boolean {
+        if (!words) return false
+        return st().change((p) => ({ ...p, cuts: togglePause(p.cuts, words, k, durationMs) }))
+      },
+
+      /** Corrige o texto de uma palavra (vale para a legenda, não para o áudio). Vazio ou igual ao original volta ao original. */
+      fixWord(i: number, value: string): boolean {
+        const original = words?.[i]?.text
+        if (original === undefined) return false
+        const clean = value.replace(/\s+/g, ' ').trim()
+        return st().change((p) => {
+          const fixes = { ...(p.wordFixes ?? {}) }
+          if (clean.length === 0 || clean === original.trim()) delete fixes[String(i)]
+          else fixes[String(i)] = clean
+          if (JSON.stringify(fixes) === JSON.stringify(p.wordFixes ?? {})) return p
+          const next = { ...p }
+          if (Object.keys(fixes).length > 0) next.wordFixes = fixes
+          else delete next.wordFixes
+          return next
+        })
+      },
+
+      /** Leva a reprodução ao começo da palavra. */
+      seekWord(i: number): void {
+        const w = words?.[i]
+        if (w) engineRef.current?.seekSource(w.start)
+      },
+
+      /** Ctrl+F: abre a busca da aba Texto. */
+      openSearch(): boolean {
+        if (!words) return false
+        text.getState().openSearch()
+        return true
+      },
+
+      /** Delete/Backspace: apaga as palavras selecionadas, o zoom ou trecho de layout selecionado, restaura o corte selecionado ou corta o intervalo. */
       deleteSelected(): boolean {
+        if (ops.cutWordSelection()) return true
         const { selection } = st()
         if (selection?.kind === 'zoom') {
           st().change((p) => deleteZoom(p, selection.id))
@@ -116,9 +173,10 @@ export function useEditorOps() {
       clearSelection(): void {
         st().setSelection(null)
         st().setRange(null)
+        text.getState().clear()
       },
       engine: () => engineRef.current
     }
     return ops
-  }, [store, playback, engineRef, durationMs])
+  }, [store, playback, engineRef, durationMs, words, text])
 }

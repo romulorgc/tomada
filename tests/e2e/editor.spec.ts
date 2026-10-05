@@ -606,9 +606,9 @@ test('capturas: cada aba do painel e a linha do tempo', async () => {
     await page.waitForTimeout(150)
     await shot(page, `28-editor-aba-${tab}`)
   }
-  // abas "em breve": visíveis, com a marca, e sem controle que finja funcionar
+  // a aba Texto é de verdade (ver texto.spec.ts); a aba IA continua "em breve", com a marca e sem controle que finja funcionar
   await page.getByTestId('tab-text').click()
-  await expect(page.getByTestId('text-panel')).toContainText(/em breve/i)
+  await expect(page.getByTestId('text-panel')).not.toContainText(/em breve/i)
   await page.getByTestId('tab-ai').click()
   await expect(page.getByTestId('ai-panel')).toContainText(/em breve/i)
 

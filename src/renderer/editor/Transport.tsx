@@ -19,6 +19,8 @@ const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Shift+←+→', label: t.editor.shortcuts.second },
   { keys: 'Home+End', label: t.editor.shortcuts.homeEnd },
   { keys: 'Delete', label: t.editor.shortcuts.cut },
+  { keys: 'Delete', label: t.editor.shortcuts.cutWords },
+  { keys: 'Ctrl+F', label: t.editor.shortcuts.search },
   { keys: 'S', label: t.editor.shortcuts.split },
   { keys: 'Z', label: t.editor.shortcuts.zoom },
   { keys: 'Ctrl+Z', label: t.editor.shortcuts.undo },
@@ -49,7 +51,7 @@ function ShortcutsPopover({ onClose }: { onClose: () => void }) {
       <h3>{t.editor.shortcuts.title}</h3>
       <dl>
         {SHORTCUTS.map((s) => (
-          <div key={s.keys}>
+          <div key={`${s.keys}-${s.label}`}>
             <dt>
               <Keys keys={s.keys} />
             </dt>

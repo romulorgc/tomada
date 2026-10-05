@@ -23,6 +23,7 @@ import { createOutputDirs } from '../../src/main/path-guard'
 import { createProjectStore } from '../../src/main/projects'
 import { createAppState } from '../../src/main/state'
 import { copyTree, FIX, requireFfmpeg, useTmpDir } from '../helpers/env'
+import { transcriptionDeps } from '../helpers/handler-extras'
 import { createIdleRecordingService } from '../helpers/recording'
 
 const tmp = useTmpDir()
@@ -79,6 +80,7 @@ async function build(over: Over = {}) {
     recording: createIdleRecordingService(),
     exporter,
     derived,
+    ...transcriptionDeps({ state, store, logger }),
     outputDirs,
     pickExportDir: async () => over.exportDir ?? null,
     pickImage: async () => null,

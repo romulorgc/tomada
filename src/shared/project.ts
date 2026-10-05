@@ -82,6 +82,14 @@ const cutSchema = z.looseObject({
   enabled: z.boolean()
 })
 
+const muteSchema = z.looseObject({
+  id: z.string(),
+  start: z.number(),
+  end: z.number(),
+  reason: z.enum(['filler', 'manual']),
+  enabled: z.boolean()
+})
+
 const zoomSchema = z.looseObject({
   id: z.string(),
   start: z.number(),
@@ -201,12 +209,15 @@ export const projectSchema = z.looseObject({
     .prefault({}),
   capture: captureSchema.default(defaultCapture()),
   cuts: z.array(cutSchema).default([]),
+  mutes: z.array(muteSchema).optional(),
   zooms: z.array(zoomSchema).default([]),
   layouts: z.array(layoutSegSchema).default([]),
   style: styleSchema.prefault({}),
   captions: captionStyleSchema.prefault({}),
   clips: z.array(clipSchema).default([]),
   zoomPreset: z.enum(['subtle', 'moderate', 'intense', 'off']).optional(),
+  wordFixes: z.record(z.string(), z.string()).optional(),
+  autoCleaned: z.boolean().optional(),
   meta: z.looseObject({}).optional()
 })
 

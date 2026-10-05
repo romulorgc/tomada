@@ -371,3 +371,16 @@ export const ShapeSquareIcon = (p: IconProps) => (
     <rect x="4.5" y="6.5" width="15" height="11" rx="0.6" />
   </Svg>
 )
+
+export const SearchIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="10.5" cy="10.5" r="5.5" />
+    <path d="m15 15 4.5 4.5" />
+  </Svg>
+)
+
+export const ChevronUpIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m6.5 14.5 5.5-5.5 5.5 5.5" />
+  </Svg>
+)

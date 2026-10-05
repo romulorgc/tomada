@@ -227,8 +227,109 @@ export const ptBR = {
 
     soon: {
       badge: 'Em breve',
-      text: { title: 'Editar pelo texto', body: 'A transcrição por palavra chega na próxima etapa: apagar uma frase vai cortar o vídeo.' },
-      ai: { title: 'Edição com IA', body: 'Cortes de silêncio e de recomeços, cortes verticais prontos e "edite pedindo" chegam depois da transcrição.' }
+      ai: { title: 'Edição com IA', body: 'Cortes verticais prontos e "edite pedindo" chegam nas próximas etapas. Os recomeços já saem pela aba Texto, em Limpeza.' }
+    },
+
+    text: {
+      title: 'Texto',
+      words: (n: number): string => (n === 1 ? '1 palavra' : `${n.toLocaleString('pt-BR')} palavras`),
+      noVoice: { title: 'Sem voz para transcrever', body: 'Este projeto não tem voz gravada. Grave de novo com o microfone ligado.' },
+      needsPrepare: {
+        title: 'Falta preparar a transcrição',
+        body: 'Na primeira vez o Tomada baixa o que precisa (cerca de 2,5 GB) e fica pronto para sempre. A transcrição roda neste computador: a voz não sai daqui.'
+      },
+      preparing: { title: 'Preparando a transcrição', body: 'Pode continuar editando. O texto aparece aqui quando terminar.' },
+      none: { title: 'Este projeto ainda não tem texto', body: 'Transcreva a voz para editar o vídeo pelo texto: apagar uma frase corta o vídeo.', cta: 'Transcrever' },
+      queued: 'Na fila para transcrever…',
+      running: (pct: number): string => `Transcrevendo… ${pct}%`,
+      failed: 'Não consegui transcrever',
+      loadFailed: 'Não consegui ler a transcrição',
+      retry: 'Tentar de novo',
+      cancel: 'Cancelar',
+      transcribeAgain: 'Transcrever de novo',
+      emptyResult: { title: 'Não achei fala neste áudio', body: 'A transcrição terminou sem nenhuma palavra. Confira se o microfone estava ligado e transcreva de novo.' },
+      view: { label: 'Transcrição', struck: 'cortada', crutch: 'muleta', lowConfidence: 'o motor não tem certeza desta palavra' },
+      pause: (text: string): string => `⏸ ${text}`,
+      pauseTip: { cut: 'Cortar esta pausa', restore: 'Restaurar esta pausa' },
+      selection: {
+        count: (n: number): string => (n === 1 ? '1 palavra selecionada' : `${n} palavras selecionadas`),
+        cut: 'Apagar',
+        restore: 'Restaurar',
+        clear: 'Limpar seleção'
+      },
+      search: {
+        label: 'Buscar no texto',
+        placeholder: 'Buscar no texto',
+        none: 'Nada encontrado',
+        count: (at: number, total: number): string => `${at} de ${total}`,
+        next: 'Próxima',
+        prev: 'Anterior',
+        close: 'Fechar busca'
+      },
+      fix: { label: 'Corrigir o texto da palavra', hint: 'Vale só para a legenda. O som não muda.', save: 'Salvar', cancel: 'Cancelar', revert: 'Voltar ao original' },
+      stats: (struckWords: number, total: number): string => `${struckWords.toLocaleString('pt-BR')} de ${total.toLocaleString('pt-BR')} palavras cortadas`
+    },
+
+    clean: {
+      title: 'Limpeza',
+      help: 'Tira silêncios, hesitações e recomeços de uma vez. Dá para revisar cada corte e desfazer com Ctrl+Z.',
+      silence: {
+        label: 'Silêncios',
+        off: 'Manter',
+        natural: 'Natural',
+        fast: 'Rápido',
+        faster: 'Mais rápido',
+        hint: { natural: 'Corta pausas acima de 0,7 s e deixa 0,25 s.', fast: 'Corta pausas acima de 0,4 s e deixa 0,15 s.', faster: 'Corta pausas acima de 0,25 s e deixa 0,1 s.' }
+      },
+      hesitations: { label: 'Hesitações', hint: 'hã, hum, ahn e fala sem palavra' },
+      crutches: { label: 'Muletas', hint: 'né, tipo, então… só as que o contexto mostra que sobram', count: (n: number): string => (n === 0 ? 'nenhuma por aqui' : n === 1 ? '1 sugestão' : `${n} sugestões`) },
+      mode: { label: 'O que fazer com elas', cut: 'Cortar', mute: 'Silenciar', mixed: 'Misto', hint: 'Silenciar mantém a imagem e o tempo, só a voz some. Misto corta as hesitações e só silencia as muletas.' },
+      retakes: {
+        label: 'Recomeços',
+        hint: 'Trechos que você disse errado e repetiu. A IA lê só o texto e aponta o que cortar.',
+        find: 'Procurar recomeços',
+        finding: 'Procurando…',
+        found: (n: number): string => (n === 0 ? 'Nenhum recomeço encontrado' : n === 1 ? '1 recomeço encontrado' : `${n} recomeços encontrados`),
+        dropped: (n: number): string => (n === 1 ? '1 sugestão sem sentido foi descartada.' : `${n} sugestões sem sentido foram descartadas.`),
+        failed: 'Não consegui procurar os recomeços',
+        unavailable: 'A IA não está disponível. Veja nos Ajustes como ligar.',
+        include: 'Cortar os recomeços',
+        confirm: {
+          title: 'Isso corta muito do vídeo',
+          body: (pct: number): string => `Os recomeços somam ${pct}% do vídeo. Confira a lista antes de aplicar: dá para restaurar cada um depois.`,
+          ok: 'Aplicar mesmo assim'
+        }
+      },
+      levelsLoading: 'Medindo o volume do áudio…',
+      levelsFailed: 'Não consegui medir o volume do áudio: os silêncios usam só a transcrição.',
+      preview: {
+        none: 'Nada para limpar com estas escolhas.',
+        back: (returned: string, from: string, to: string): string => `Volta ${returned} · de ${from} para ${to}`,
+        cut: (removed: string, from: string, to: string): string => `Sai ${removed} · de ${from} para ${to}`,
+        mute: (muted: string): string => `Voz silenciada: ${muted}`
+      },
+      counts: { silence: 'silêncios', hesitation: 'hesitações', 'gap-speech': 'falas sem palavra', crutch: 'muletas', retake: 'recomeços' },
+      apply: 'Aplicar limpeza',
+      appliedSaved: (removed: string): string => `Limpeza aplicada: sai ${removed}. Ctrl+Z desfaz.`,
+      appliedMuteOnly: 'Limpeza aplicada: só silenciei trechos da voz. Ctrl+Z desfaz.',
+      nothingToApply: 'Nada mudou: o documento já está assim.',
+      auto: { label: 'Aplicar sozinho depois de transcrever', hint: 'Silêncio Rápido e hesitações, uma vez por gravação. Dá para desfazer.' },
+      autoDone: (removed: string): string => `Limpeza automática aplicada: sai ${removed}. Ctrl+Z desfaz.`,
+      review: {
+        title: 'Cortes automáticos',
+        none: 'Nenhum corte automático neste projeto.',
+        reasons: { silence: 'Silêncios', filler: 'Hesitações e muletas', retake: 'Recomeços' },
+        mutes: 'Voz silenciada',
+        restore: 'Restaurar',
+        enable: 'Cortar de novo',
+        disabled: 'restaurado',
+        goTo: 'Ver este trecho',
+        more: (n: number): string => `Mostrar mais ${n}`,
+        restoreAll: 'Restaurar todos',
+        enableAll: 'Cortar todos de novo',
+        pause: (text: string): string => `pausa de ${text}`,
+        item: (n: number): string => (n === 1 ? '1 corte' : `${n} cortes`)
+      }
     },
 
     timeline: {
@@ -277,6 +378,8 @@ export const ptBR = {
       second: 'Um segundo para trás / para a frente',
       homeEnd: 'Começo / fim',
       cut: 'Cortar o intervalo marcado (ou apagar o selecionado)',
+      cutWords: 'Na aba Texto: apagar as palavras selecionadas',
+      search: 'Na aba Texto: buscar uma palavra ou frase',
       split: 'Dividir o layout no ponto da reprodução',
       zoom: 'Criar zoom no intervalo marcado',
       undo: 'Desfazer',
@@ -455,6 +558,21 @@ export const ptBR = {
 
   countdown: { label: 'Contagem para começar a gravar', cancel: 'Esc para cancelar', go: 'Gravando' },
 
+  transcription: {
+    steps: { python: 'Ambiente do Python', packages: 'Pacotes de transcrição', binary: 'Programa de transcrição', model: 'Modelo de voz', check: 'Teste final' },
+    state: { ready: 'Pronta', missing: 'Falta preparar', preparing: 'Preparando…', error: 'Com problema' },
+    prepare: 'Preparar transcrição',
+    preparing: 'Preparando…',
+    cancel: 'Cancelar',
+    retry: 'Tentar de novo',
+    cancelled: 'Preparação cancelada. O que já foi baixado fica guardado e a próxima tentativa continua de onde parou.',
+    failed: (message: string): string => `A preparação parou: ${message}`,
+    failedStep: (step: string): string => `Parou em: ${step}`,
+    done: 'Tudo pronto. A transcrição roda neste computador.',
+    stepStatus: { pending: 'Na fila', running: 'Em andamento', done: 'Pronto', error: 'Erro' },
+    chip: { queued: 'Na fila para transcrever', running: (pct: number): string => `Transcrevendo ${pct}%` }
+  },
+
   bubble: { label: 'Bolha da câmera', error: 'Câmera indisponível' },
 
   settings: {
@@ -491,6 +609,54 @@ export const ptBR = {
       saved: 'Ajuste do ffmpeg atualizado.',
       saveFailed: 'Não consegui usar esse ffmpeg',
       nvencNote: 'A placa NVIDIA (NVENC) é opcional: sem ela o Tomada usa o processador.'
+    },
+    transcription: {
+      title: 'Transcrição',
+      help: 'O texto do que você diz, palavra por palavra, feito neste computador. Nada sai daqui.',
+      status: 'Estado',
+      device: 'Placa',
+      cpu: 'Processador',
+      auto: { label: 'Transcrever sozinho depois de cada gravação', hint: 'Se estiver pronta, começa assim que a gravação termina.' },
+      autoClean: { label: 'Aplicar a limpeza sozinho', hint: 'Silêncio Rápido e hesitações, uma vez por gravação, desfazível.' },
+      prefsFailed: 'Não consegui salvar esta escolha',
+      dictionary: {
+        label: 'Dicionário',
+        help: 'Nomes próprios e termos que a transcrição deve acertar (um por linha). Vale para as próximas transcrições.',
+        placeholder: 'Tomada\nKubernetes\nDra. Fulana',
+        save: 'Salvar dicionário',
+        saved: 'Dicionário salvo.',
+        saveFailed: 'Não consegui salvar o dicionário',
+        count: (n: number, max: number): string => `${n} de ${max} termos`
+      }
+    },
+    ai: {
+      title: 'IA',
+      help: 'Usada só para achar recomeços no texto. Vai o texto da transcrição, nunca o áudio nem o vídeo.',
+      status: { ready: 'Disponível', missing: 'Nada configurado' },
+      preference: {
+        label: 'Como usar',
+        auto: 'Automático',
+        cli: 'Programa deste computador',
+        api: 'Chave de acesso'
+      },
+      key: {
+        label: 'Chave de acesso',
+        placeholder: 'Cole a chave aqui',
+        save: 'Guardar chave',
+        clear: 'Apagar a chave',
+        saved: 'Chave guardada com segurança neste computador.',
+        cleared: 'Chave apagada.',
+        has: 'Há uma chave guardada (ela nunca é mostrada de novo).',
+        none: 'Nenhuma chave guardada.',
+        failed: 'Não consegui guardar a chave',
+        help: 'Fica cifrada pelo cofre do Windows e só o Tomada a usa.'
+      },
+      cli: { found: 'Programa deste computador encontrado', missing: 'Programa deste computador não encontrado' },
+      test: 'Testar',
+      testing: 'Testando…',
+      testOk: 'A IA respondeu.',
+      testFailed: 'A IA não respondeu',
+      prefsFailed: 'Não consegui salvar esta escolha'
     },
     about: {
       title: 'Sobre',

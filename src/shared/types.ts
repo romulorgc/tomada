@@ -192,6 +192,8 @@ export type Project = {
   sync: { screenOffsetMs: number; cameraOffsetMs: number }
   capture: CaptureInfo
   cuts: Cut[]
+  /** Trechos de voz silenciada (muletas no modo "silenciar"). Ausente = nenhum. */
+  mutes?: Mute[]
   zooms: Zoom[]
   layouts: LayoutSeg[]
   style: Style
@@ -203,21 +205,66 @@ export type Project = {
    * desligou o zoom automático (não regenerar).
    */
   zoomPreset?: ZoomPresetId | 'off'
+  /**
+   * Correções de texto da transcrição, por índice de palavra (`Word.i`): valem para a legenda, nunca para o áudio.
+   * Ficam no documento (e não em `transcript.json`) para entrar no desfazer.
+   */
+  wordFixes?: Record<string, string>
+  /** A limpeza automática já foi aplicada a este projeto (acontece uma vez, depois da primeira transcrição). */
+  autoCleaned?: boolean
   meta?: ProjectMeta
 }
 
-/** Palavra transcrita (tempos em ms, tempo de origem). */
+/**
+ * Natureza de um item da transcrição. `filler` = hesitação pura ("hã", "hum", "ahn"…); `gap-speech` = o VAD
+ * marcou fala onde o motor não transcreveu nada (> 250 ms): costuma ser a hesitação que o Whisper engoliu.
+ * "né", "tipo", "então" e "é" são `word`: só viram sugestão de corte pelo contexto (`clean.ts`).
+ */
+export type WordKind = 'word' | 'filler' | 'gap-speech'
+
+/** Palavra transcrita (tempos em ms, tempo de ORIGEM = relógio da gravação). */
 export type Word = {
+  /** Posição na transcrição (0, 1, 2…). É assim que a IA e a interface apontam uma palavra. */
+  i: number
+  /** Como foi dita, com a pontuação que o motor pôs ("pessoal."). */
   text: string
   start: number
   end: number
-  /** Confiança 0..1, quando o transcritor informa. */
-  confidence?: number
+  /** Confiança 0..1 (probabilidade da palavra). */
+  prob: number
+  kind: WordKind
+}
+
+/** Um trecho de fala que o motor entregou junto (frase ou parte dela). `first`/`last` são índices de palavra. */
+export type TranscriptSegment = {
+  start: number
+  end: number
+  text: string
+  first: number
+  last: number
 }
 
 export type Transcript = {
+  /** Motor que transcreveu: "faster-whisper", "whisper.cpp" ou "teste". */
+  engine: string
+  model: string
   language: string
+  /** Quanto o áudio dura (ms). */
+  durationMs: number
   words: Word[]
+  segments: TranscriptSegment[]
+  /** Onde o VAD marcou fala (ms, tempo de origem). Vazio = o motor não informou. */
+  vad: Range[]
+  createdAt: string
+}
+
+/** Um trecho cuja voz fica muda (a imagem e o tempo seguem). Usado pelas muletas no modo "silenciar". */
+export type Mute = {
+  id: string
+  start: number
+  end: number
+  reason: 'filler' | 'manual'
+  enabled: boolean
 }
 
 /** Amostra de cursor: x/y normalizados 0..1 na área capturada. */

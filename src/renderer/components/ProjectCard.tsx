@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { formatDate, formatDateTime, formatDuration } from '@shared/format'
 import type { ProjectSummary } from '@shared/types'
 import { t } from '../i18n/pt-BR'
+import { isJobActive, useTranscription } from '../transcription-store'
 import { CameraIcon, FolderIcon, PencilIcon, ScreenIcon, TrashIcon } from './Icons'
 
 type Props = {
@@ -17,6 +18,7 @@ export function ProjectCard({ project, onOpen, onRename, onReveal, onAskDelete }
   const [draft, setDraft] = useState(project.title)
   const [saving, setSaving] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const job = useTranscription((s) => s.jobs[project.id])
   // Enter e blur disparam um atrás do outro: só o primeiro vale.
   const settled = useRef(false)
 
@@ -73,6 +75,12 @@ export function ProjectCard({ project, onOpen, onRename, onReveal, onAskDelete }
           data-testid="card-open"
           onClick={() => onOpen(project.id)}
         />
+        {job && isJobActive(job) ? (
+          <span className="job-chip tnum" data-testid="card-transcribing" data-state={job.state} role="status">
+            <span className="spinner" aria-hidden="true" />
+            {job.state === 'queued' ? t.transcription.chip.queued : t.transcription.chip.running(Math.round(job.fraction * 100))}
+          </span>
+        ) : null}
         <span className="duration-chip tnum" data-testid="card-duration">
           {formatDuration(project.durationMs)}
         </span>

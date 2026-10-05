@@ -233,7 +233,8 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     const system = hasSystem ? { input: inputs.push(systemPath!) - 1, offsetMs: project.sync.screenOffsetMs, channels: 2 as const } : null
 
     // passe 1: mede (ffmpeg imprime o JSON do loudnorm no stderr)
-    const graph1 = buildAudioGraph({ kept, voice, system, mode: 'measure' })
+    const voiceMutes = project.mutes?.filter((m) => m.enabled).map((m) => ({ start: m.start, end: m.end }))
+    const graph1 = buildAudioGraph({ kept, voice, system, mode: 'measure', ...(voiceMutes?.length ? { voiceMutes } : {}) })
     const graphFile1 = join(run.tmpDir, 'audio-medir.txt')
     await writeFile(graphFile1, graph1.graph, 'utf8')
     const measureRun = await ff.run(buildMeasureArgs({ inputs, graphFile: graphFile1 }), {
@@ -247,7 +248,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     if (!measured) logger.warn('Exportação: o primeiro passe do loudnorm não deu medição válida (faixa muda?); usando o passe único.')
 
     // passe 2: aplica
-    const graph2 = buildAudioGraph({ kept, voice, system, mode: 'final', measured })
+    const graph2 = buildAudioGraph({ kept, voice, system, mode: 'final', measured, ...(voiceMutes?.length ? { voiceMutes } : {}) })
     const graphFile2 = join(run.tmpDir, 'audio-final.txt')
     await writeFile(graphFile2, graph2.graph, 'utf8')
     await ff.run(buildAudioArgs({ inputs, graphFile: graphFile2, output: run.audioPath }), {

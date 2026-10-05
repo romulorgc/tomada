@@ -138,6 +138,8 @@ export type AudioGraphInput = {
   /** `measure`: só mede (primeiro passe); `final`: normaliza (com `measured` quando válido). */
   mode: 'measure' | 'final'
   measured?: LoudnormMeasure | null
+  /** Trechos (ms, relógio da gravação) em que a VOZ fica muda (muletas no modo "silenciar"); o resto não muda. */
+  voiceMutes?: readonly Range[]
 }
 
 export type AudioGraph = {
@@ -148,7 +150,27 @@ export type AudioGraph = {
 }
 
 /** Um trecho de uma faixa: corta, completa com silêncio o que falta e põe fade nas duas bordas. */
-export function segmentChain(range: Range, offsetMs: number): string {
+/** Rampa (ms) de cada lado de um silenciamento: sem ela a borda abrupta estala. */
+export const MUTE_RAMP_MS = 15
+/** Quantos silenciamentos cabem numa única expressão do `volume` (as expressões do ffmpeg são recursivas). */
+const MUTES_PER_FILTER = 40
+
+/**
+ * Filtros `volume` que calam os trechos `mutes` (tempo do TRECHO, em ms, já relativo ao começo dele). Cada um é uma
+ * rampa para zero (e de volta) de `MUTE_RAMP_MS`; fora deles o ganho é 1.
+ */
+export function muteFilters(mutes: readonly Range[]): string[] {
+  const r = MUTE_RAMP_MS / 1000
+  const terms = mutes.filter((m) => m.end > m.start).map((m) => `clip(min((t-${sec(m.start)})/${r},(${sec(m.end)}-t)/${r}),0,1)`)
+  const out: string[] = []
+  for (let i = 0; i < terms.length; i += MUTES_PER_FILTER) {
+    const group = terms.slice(i, i + MUTES_PER_FILTER)
+    out.push(`volume='1-min(1,${group.join('+')})':eval=frame`)
+  }
+  return out
+}
+
+export function segmentChain(range: Range, offsetMs: number, mutes: readonly Range[] = []): string {
   const len = range.end - range.start
   const fileStart = range.start - offsetMs
   const fileEnd = range.end - offsetMs
@@ -160,6 +182,11 @@ export function segmentChain(range: Range, offsetMs: number): string {
   if (lead > 0.5) steps.push(`adelay=delays=${Math.round(lead)}:all=1`)
   // garante a duração exata do trecho mesmo se o arquivo for mais curto que o vídeo
   steps.push(`apad=whole_dur=${sec(len)}`, `atrim=end=${sec(len)}`, 'asetpts=PTS-STARTPTS')
+  // muletas silenciadas: só os trechos que caem neste pedaço, com o tempo relativo ao começo dele
+  const local = mutes
+    .filter((m) => m.end > range.start && m.start < range.end)
+    .map((m) => ({ start: Math.max(0, m.start - range.start), end: Math.min(len, m.end - range.start) }))
+  steps.push(...muteFilters(local))
   if (fade > 0.5) {
     steps.push(`afade=t=in:st=0:d=${sec(fade)}`, `afade=t=out:st=${sec(len - fade)}:d=${sec(fade)}`)
   }
@@ -167,7 +194,7 @@ export function segmentChain(range: Range, offsetMs: number): string {
 }
 
 /** `[in:a]asplit` + trechos + `concat` para uma faixa; devolve as linhas do grafo e o rótulo da saída. */
-function trackBranch(kept: readonly Range[], track: AudioTrackInput, tag: string): { lines: string[]; out: string } {
+function trackBranch(kept: readonly Range[], track: AudioTrackInput, tag: string, mutes: readonly Range[] = []): { lines: string[]; out: string } {
   const n = kept.length
   const lines: string[] = []
   const labels = kept.map((_, i) => `${tag}s${i}`)
@@ -176,7 +203,7 @@ function trackBranch(kept: readonly Range[], track: AudioTrackInput, tag: string
   const outs: string[] = []
   kept.forEach((range, i) => {
     const o = `${tag}c${i}`
-    lines.push(`[${labels[i]}]${segmentChain(range, track.offsetMs)}[${o}]`)
+    lines.push(`[${labels[i]}]${segmentChain(range, track.offsetMs, mutes)}[${o}]`)
     outs.push(o)
   })
   const cat = `${tag}cat`
@@ -198,7 +225,7 @@ export function buildAudioGraph(input: AudioGraphInput): AudioGraph {
 
   const totalMs = kept.reduce((acc, r) => acc + (r.end - r.start), 0)
   if (input.voice) {
-    const b = trackBranch(kept, input.voice, 'v')
+    const b = trackBranch(kept, input.voice, 'v', input.voiceMutes ?? [])
     lines.push(...b.lines)
     const stereo = input.voice.channels === 1 ? ',pan=stereo|c0=c0|c1=c0' : ''
     lines.push(`[${b.out}]${voiceChainCompensated(totalMs)}${stereo}[voz]`)

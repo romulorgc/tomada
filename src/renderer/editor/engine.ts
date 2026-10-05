@@ -134,6 +134,8 @@ export class PreviewEngine {
   private audio: HTMLAudioElement | null = null
   private audioOffsetMs = 0
   private audioNudging = false
+  /** Trechos em que a voz fica muda (muletas silenciadas): ordenados, só os ligados. */
+  private mutes: { start: number; end: number }[] = []
 
   private raf = 0
   private lastNow = 0
@@ -171,6 +173,7 @@ export class PreviewEngine {
   setScene(project: Project, derived: Derived): void {
     this.project = project
     this.derived = derived
+    this.mutes = (project.mutes ?? []).filter((m) => m.enabled && m.end > m.start).map((m) => ({ start: m.start, end: m.end })).sort((a, b) => a.start - b.start)
     this.dirty = true
     // cortes novos mudam a emenda: a pré-busca antiga pode apontar para o lugar errado
     this.prefetched = null
@@ -457,6 +460,11 @@ export class PreviewEngine {
       }
     }
     const a = this.audio
+    // muleta silenciada: a voz fica muda enquanto o relógio está dentro do trecho (a imagem e o tempo seguem)
+    if (a) {
+      const wantVolume = this.mutes.some((m) => this.sourceMs >= m.start && this.sourceMs < m.end) ? 0 : 1
+      if (a.volume !== wantVolume) a.volume = wantVolume
+    }
     if (a && !a.error && !a.seeking && !a.ended && a.readyState >= 1) {
       const want = this.audioSeconds(this.sourceMs)
       const fix = driftFix((a.currentTime - want) * 1000, frame, rate, {

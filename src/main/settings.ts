@@ -14,7 +14,22 @@ export const settingsSchema = z.looseObject({
   projectsDir: z.string().min(1).optional(),
   ffmpegPath: z.string().min(1).optional(),
   // Preferências da tela Gravar: validadas na leitura (`normalizeRecordPrefs`), aqui só passam.
-  record: z.looseObject({}).optional()
+  record: z.looseObject({}).optional(),
+  dictionary: z.array(z.string().max(80)).max(200).optional(),
+  transcription: z
+    .looseObject({
+      auto: z.boolean().optional(),
+      autoClean: z.boolean().optional(),
+      engine: z.enum(['faster-whisper', 'whisper-cpp']).optional()
+    })
+    .optional(),
+  llm: z
+    .looseObject({
+      provider: z.enum(['auto', 'cli', 'api']).optional(),
+      model: z.string().max(100).optional(),
+      apiKeyEnc: z.string().max(4000).optional()
+    })
+    .optional()
 })
 
 export async function loadSettings(file: string, logger: Logger): Promise<Settings> {

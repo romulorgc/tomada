@@ -43,7 +43,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 export const ROOT = resolve(HERE, '..')
 export const FIXTURES_DIR = join(ROOT, 'tests', 'fixtures')
 /** Muda quando o conteúdo gerado muda: força regerar nas máquinas que já têm fixtures. */
-export const FIXTURES_VERSION = 1
+export const FIXTURES_VERSION = 2
 const MARKER = join(FIXTURES_DIR, '.fixtures-ok')
 
 const EXAMPLE_FOLDER = 'projeto-exemplo'
@@ -484,24 +484,36 @@ async function makeFakeCamera(tmp) {
 // ---------------------------------------------------------------------------
 // Projeto de exemplo
 
+/**
+ * `transcript.json` do exemplo no formato do app (ver `Transcript` em src/shared/types.ts): as palavras do gabarito com
+ * o tempo repartido pelo tamanho de cada uma, os trechos de fala como VAD e `createdAt` vazio (é uma transcrição de
+ * teste: a limpeza automática só vale para transcrição feita DEPOIS da criação do projeto). O Node não resolve os
+ * imports sem extensão de src/shared, então o formato é escrito aqui; tests/unit/transcript.test.ts confere que o
+ * código do app lê este arquivo.
+ */
 function transcriptFrom(gabarito) {
+  const HESITATION = /^(h[ãa]+n?|hu+m+|hm+|ahn+|[ãa]h+n*|eh+n?|uh+n?)$/iu
   const words = []
+  const segments = []
+  const vad = []
   for (const seg of gabarito.segments) {
     if (seg.kind === 'pause') continue
-    const tokens = seg.text
-      .replace(/[.,!?…]/g, ' ')
-      .split(/\s+/)
-      .filter(Boolean)
+    const tokens = seg.text.split(/\s+/).filter(Boolean)
     const weights = tokens.map((t) => t.length + 1)
-    const sum = weights.reduce((a, b) => a + b, 0)
+    const sum = weights.reduce((x, y) => x + y, 0)
     let cursor = seg.startMs
-    tokens.forEach((text, i) => {
-      const end = i === tokens.length - 1 ? seg.endMs : cursor + Math.round(((seg.endMs - seg.startMs) * weights[i]) / sum)
-      words.push({ text, start: cursor, end, confidence: 0.95 })
+    const first = words.length
+    tokens.forEach((text, k) => {
+      const end = k === tokens.length - 1 ? seg.endMs : cursor + Math.round(((seg.endMs - seg.startMs) * weights[k]) / sum)
+      const bare = text.replace(/[.,!?…]/g, '')
+      words.push({ i: words.length, text, start: cursor, end, prob: 0.95, kind: HESITATION.test(bare) ? 'filler' : 'word' })
       cursor = end
     })
+    segments.push({ start: seg.startMs, end: seg.endMs, text: seg.text, first, last: words.length - 1 })
+    vad.push({ start: seg.startMs, end: seg.endMs })
   }
-  return { language: 'pt', words }
+  return `${JSON.stringify({ engine: 'teste', model: 'gabarito', language: 'pt', durationMs: gabarito.durationMs, words, segments, vad, createdAt: '' })}
+`
 }
 
 function smooth(a, b, u) {
@@ -625,7 +637,7 @@ async function makeExampleProject(tmp, ctx) {
     join(dir, 'events', 'keys.jsonl'),
     `${Array.from({ length: 8 }, (_, i) => JSON.stringify({ t: typingStart + i * 140 })).join('\n')}\n`
   )
-  writeFileSync(join(dir, 'transcript.json'), `${JSON.stringify(transcriptFrom(gabarito), null, 2)}\n`)
+  writeFileSync(join(dir, 'transcript.json'), transcriptFrom(gabarito))
 
   // project.json pelo MESMO código do app (src/shared/project.ts): o Node 24 lê TypeScript direto.
   const { createProject, serializeProject, parseProject } = await import(
