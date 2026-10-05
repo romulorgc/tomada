@@ -69,18 +69,22 @@ test('todas as vistas cabem de 1280×720 a 2560×1440, sem rolagem lateral nem n
     expect(await overflowOf(), `biblioteca ${tag}`).toEqual({ doc: 0, main: 0 })
     await shot(page, `02-biblioteca-${tag}`)
 
-    // Projeto aberto (provisório): os dois vídeos e a barra aparecem inteiros
+    // Projeto aberto: o editor ocupa a janela inteira (sem a barra lateral) e nada fica cortado
     await page.getByTestId('card-open').click()
     await expect(page.getByTestId('project-view')).toBeVisible()
+    await expect(page.getByTestId('editor')).toBeVisible()
     await expect.poll(async () => (await videoState(page, 'video-screen')).readyState).toBeGreaterThanOrEqual(2)
     expect(await overflowOf(), `projeto ${tag}`).toEqual({ doc: 0, main: 0 })
-    for (const id of ['video-screen', 'video-camera', 'play-toggle', 'scrubber']) {
+    for (const id of ['preview-canvas', 'play-toggle', 'timeline-ruler', 'side-panel', 'export-open']) {
       const b = await page.getByTestId(id).boundingBox()
+      expect(b, id).not.toBeNull()
       expect(b!.x + b!.width, `${id} cortado em ${tag}`).toBeLessThanOrEqual(w)
     }
     await shot(page, `03-projeto-${tag}`)
 
-    // Gravar e Ajustes
+    // Gravar e Ajustes (a barra lateral volta ao sair do editor)
+    await page.getByTestId('back-to-library').click()
+    await expect(page.getByTestId('project-card')).toBeVisible()
     await page.getByTestId('nav-record').click()
     await expect(page.getByTestId('record-view')).toBeVisible()
     expect(await overflowOf(), `gravar ${tag}`).toEqual({ doc: 0, main: 0 })
@@ -133,8 +137,8 @@ test('abrir o projeto toca o vídeo: currentTime avança, tela e câmera juntas,
   await page.waitForTimeout(600)
   expect((await videoState(page, 'video-screen')).currentTime).toBeCloseTo(paused, 1)
 
-  // Buscar para a frente só funciona se o protocolo atende Range.
-  await page.getByTestId('scrubber').fill('17000')
+  // Buscar para a frente só funciona se o protocolo atende Range (Shift+→ pula 1 s de saída: 17 s).
+  for (let i = 0; i < 17; i++) await page.keyboard.press('Shift+ArrowRight')
   await expect.poll(async () => (await videoState(page, 'video-screen')).currentTime).toBeGreaterThan(16.5)
   await expect.poll(async () => (await videoState(page, 'video-camera')).currentTime).toBeGreaterThan(16.5)
   await page.getByTestId('play-toggle').click()

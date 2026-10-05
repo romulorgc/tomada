@@ -168,6 +168,22 @@ class FpsMeter {
 }
 
 /**
+ * Escolhe o encoder H.264 que o Chromium ACEITA para esta configuração: o de hardware, se ele aceita; senão o que
+ * o navegador oferecer (software). Sem nenhum dos dois, falha logo, com o motivo e o que fazer.
+ */
+async function pickAcceleration(codec: string, width: number, height: number, framerate: number, bitrate: number): Promise<'prefer-hardware' | 'no-preference'> {
+  const base = { codec, width, height, framerate, bitrate, latencyMode: 'quality' as const, avc: { format: 'avc' as const } }
+  for (const hardwareAcceleration of ['prefer-hardware', 'no-preference'] as const) {
+    try {
+      if ((await VideoEncoder.isConfigSupported({ ...base, hardwareAcceleration })).supported) return hardwareAcceleration
+    } catch {
+      // configuração recusada: tenta a próxima
+    }
+  }
+  throw new Error(`Este computador não consegue codificar H.264 em ${width}×${height} a ${framerate} qps (${codec}). Tente uma resolução ou uma taxa de quadros menor.`)
+}
+
+/**
  * Renderiza o vídeo (sem áudio) e o entrega por `io.write`. Devolve quantos quadros saíram e
  * qual encoder foi usado.
  */
@@ -207,7 +223,10 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
       return { output, source }
     }
 
-    let { output, source } = makeOutput('prefer-hardware')
+    // O encoder por hardware nem sempre aceita a configuração pedida (nesta máquina recusa 1440p e 4K a 60 qps; o
+    // Chromium só descobre no PRIMEIRO quadro, e a exportação inteira falharia). Pergunta antes e escolhe.
+    const acceleration = await pickAcceleration(codec, format.w, format.h, fps, job.bitrate)
+    let { output, source } = makeOutput(acceleration)
     try {
       await output.start()
     } catch (err) {

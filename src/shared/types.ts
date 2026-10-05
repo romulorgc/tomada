@@ -89,6 +89,10 @@ export type CameraStyle = {
   borderWidth: number
   borderColor: string
   mirror: boolean
+  /** Esconde a câmera (os layouts se comportam como se não houvesse câmera). */
+  hidden: boolean
+  /** A bolha encolhe enquanto um zoom está aberto (padrão: sim). */
+  shrinkOnZoom: boolean
 }
 
 export type CursorStyle = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatBytes, formatDate, formatDateTime, formatDuration } from '@shared/format'
+import { formatBytes, formatDate, formatDateTime, formatDuration, formatSpan, formatTimecode } from '@shared/format'
 
 describe('formatDuration', () => {
   it('formata m:ss', () => {
@@ -62,5 +62,32 @@ describe('formatDate / formatDateTime (pt-BR)', () => {
   it('data inválida vira travessão', () => {
     expect(formatDate('não é data')).toBe('—')
     expect(formatDateTime('')).toBe('—')
+  })
+})
+
+describe('formatTimecode (relógio do editor)', () => {
+  it('m:ss.cc com centésimos, arredondado', () => {
+    expect(formatTimecode(0)).toBe('0:00.00')
+    expect(formatTimecode(3200)).toBe('0:03.20')
+    expect(formatTimecode(65_432)).toBe('1:05.43')
+    expect(formatTimecode(999)).toBe('0:01.00') // arredonda para cima sem virar "0:00.100"
+    expect(formatTimecode(3_723_450)).toBe('1:02:03.45')
+  })
+  it('valor inválido ou negativo vira zero', () => {
+    expect(formatTimecode(-5)).toBe('0:00.00')
+    expect(formatTimecode(Number.NaN)).toBe('0:00.00')
+  })
+})
+
+describe('formatSpan (duração em palavras)', () => {
+  it('abaixo de um minuto, em segundos com vírgula', () => {
+    expect(formatSpan(400)).toBe('0,4 s')
+    expect(formatSpan(3200)).toBe('3,2 s')
+    expect(formatSpan(2000)).toBe('2 s')
+    expect(formatSpan(0)).toBe('0 s')
+  })
+  it('de um minuto em diante, minutos e segundos', () => {
+    expect(formatSpan(65_000)).toBe('1 min 05 s')
+    expect(formatSpan(3_660_000)).toBe('1 h 01 min')
   })
 })

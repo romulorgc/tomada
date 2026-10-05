@@ -140,7 +140,7 @@ export function deriveProject(project: Project, data: CursorData, format: Format
   const durationMs = projectDurationMs(project)
   const kept = keptRanges(durationMs, project.cuts)
   const screenSize = sizeOf(project.sources.screen)
-  const cameraSize = sizeOf(project.sources.camera)
+  const cameraSize = project.style.camera.hidden ? null : sizeOf(project.sources.camera)
   const view = baseView(format, screenSize)
   const cameraPath = computeCameraPath(project, data.grid, {
     durationMs,
@@ -358,7 +358,8 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
   const unit = styleUnit(format)
   const sources = { screen: derived.screenSize, camera: derived.cameraSize }
   const sample = sampleCameraPath(derived.cameraPath, sourceT)
-  const zoomProgress = smoothstep(clamp01((sample.scale - 1) / 0.5))
+  // "encolher no zoom" desligado: a bolha mantém o tamanho com o zoom aberto
+  const zoomProgress = style.camera.shrinkOnZoom ? smoothstep(clamp01((sample.scale - 1) / 0.5)) : 0
 
   const { layout, prev, since } = layoutAt(derived.layoutPoints, sourceT)
   const p = layout === prev ? 1 : clamp01((sourceT - since) / LAYOUT_TRANSITION_MS)

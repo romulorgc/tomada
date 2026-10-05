@@ -4,9 +4,10 @@
  */
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, protocol, session, shell } from 'electron'
 import { LEVEL_CHANNEL, type AppInfo, type IpcEvents } from '@shared/ipc'
 import { createSourceProvider } from './capture-sources'
+import { createDerivedMedia } from './derived-media'
 import { createExporterWindowFactory } from './export-window'
 import { createExportService } from './export-service'
 import { createFfmpeg, locateFfmpeg } from './ffmpeg'
@@ -164,6 +165,22 @@ async function main(): Promise<void> {
     now: () => performance.now()
   })
 
+  // Mídias derivadas do editor (forma de onda, áudio da prévia, miniaturas): ffmpeg, uma vez, em segundo plano.
+  const derived = createDerivedMedia({
+    logger,
+    read: (id) => store.read(id),
+    ffmpeg: () => {
+      const paths = locateFfmpeg(state.ffmpegLocateOptions())
+      return paths ? createFfmpeg(paths) : null
+    }
+  })
+
+  /** Em teste, abrir programa e Explorer de verdade atrapalha a máquina: só anota o pedido. */
+  const testCalls = (): { op: string; path: string }[] => {
+    const g = globalThis as { __tomadaTestCalls?: { op: string; path: string }[] }
+    return (g.__tomadaTestCalls ??= [])
+  }
+
   // Nível do microfone (só de ida) → mini medidor da barra.
   ipcMain.on(LEVEL_CHANNEL, (_event, level: unknown) => {
     if (typeof level === 'number' && Number.isFinite(level)) recording.level(level)
@@ -173,6 +190,7 @@ async function main(): Promise<void> {
     quitting = true
     void recording.shutdown()
     void exporter.shutdown()
+    derived.shutdown()
     windows.closeAll()
   })
 
@@ -184,6 +202,46 @@ async function main(): Promise<void> {
       logger,
       recording,
       exporter,
+      derived,
+      pickExportDir: async (defaultPath) => {
+        // TOMADA_TEST_PICK_DIR: nos testes o diálogo do Windows não aparece; vazio = "cancelou"
+        const forced = process.env.TOMADA_TEST_PICK_DIR
+        if (forced !== undefined) return forced === '' ? null : forced
+        const options = {
+          title: 'Escolha a pasta da exportação',
+          properties: ['openDirectory', 'createDirectory'] as ('openDirectory' | 'createDirectory')[],
+          ...(defaultPath ? { defaultPath } : {})
+        }
+        const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+        return result.canceled ? null : (result.filePaths[0] ?? null)
+      },
+      pickImage: async () => {
+        const forced = process.env.TOMADA_TEST_PICK_IMAGE
+        if (forced !== undefined) return forced === '' ? null : forced
+        const options = {
+          title: 'Escolha a imagem de fundo',
+          properties: ['openFile'] as 'openFile'[],
+          filters: [{ name: 'Imagens', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+        }
+        const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+        return result.canceled ? null : (result.filePaths[0] ?? null)
+      },
+      openPath: async (path) => {
+        if (testMode) {
+          testCalls().push({ op: 'open', path })
+          return
+        }
+        const error = await shell.openPath(path)
+        if (error) throw new Error(`Não consegui abrir o arquivo: ${error}`)
+      },
+      revealPath: async (path) => {
+        if (testMode) {
+          testCalls().push({ op: 'reveal', path })
+          return
+        }
+        shell.showItemInFolder(path)
+      },
+      copyText: (text) => clipboard.writeText(text),
       finishCountdown: (completed) => windows.finishCountdown(completed),
       clock,
       pickFolder: async (defaultPath) => {

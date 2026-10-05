@@ -257,6 +257,15 @@ export type ExportJob = {
 /** O que a janela de exportação informa ao terminar a fase de vídeo. */
 export type ExporterResult = { ok: true; frames: number; encoder: string; timing?: string } | { ok: false; message: string }
 
+// --- Mídias derivadas do editor (M2b) -----------------------------------------
+
+/** Picos da voz para a forma de onda: 0..255 por coluna, `perSecond` colunas por segundo. */
+export type PeaksData = { perSecond: number; durationMs: number; peaks: number[] }
+/** A voz tratada da prévia (sem cortes), pronta para um `<audio>`. */
+export type PreviewAudioData = { url: string }
+/** Miniaturas da tela: uma a cada `intervalMs` (a de índice `i` mostra o instante `i * intervalMs`). */
+export type ThumbsData = { intervalMs: number; count: number; height: number; urls: string[] }
+
 // --- Contrato ------------------------------------------------------------------
 
 export type IpcContract = {
@@ -269,6 +278,8 @@ export type IpcContract = {
   'projects:save': { args: [id: string, project: Project]; result: Project }
   'projects:trash': { args: [id: string]; result: void }
   'projects:reveal': { args: [id: string]; result: void }
+  /** Escolhe uma imagem, copia para `media/` do projeto e devolve o caminho RELATIVO (null = cancelou). */
+  'projects:pick-background': { args: [id: string]; result: string | null }
 
   'settings:get': { args: []; result: SettingsView }
   'settings:update': { args: [patch: Partial<Settings>]; result: SettingsView }
@@ -300,6 +311,16 @@ export type IpcContract = {
   'export:start': { args: [request: ExportRequest]; result: { exportId: string } }
   'export:cancel': { args: [exportId: string]; result: void }
   'export:status': { args: []; result: ExportProgress | null }
+  'export:pick-dir': { args: [defaultPath?: string]; result: string | null }
+  /** Abre o arquivo no programa padrão (tocar o vídeo exportado). */
+  'files:open': { args: [path: string]; result: void }
+  /** Mostra o arquivo no Explorer. */
+  'files:reveal': { args: [path: string]; result: void }
+  'clipboard:write': { args: [text: string]; result: void }
+  // Mídias derivadas (geradas uma vez pelo ffmpeg, em segundo plano)
+  'derived:peaks': { args: [id: string]; result: PeaksData | null }
+  'derived:preview-audio': { args: [id: string]; result: PreviewAudioData | null }
+  'derived:thumbs': { args: [id: string]; result: ThumbsData | null }
   // Canais da janela escondida de exportação (identificada pelo `exportId` que vai no hash da URL).
   'exporter:job': { args: [exportId: string]; result: ExportJob }
   'exporter:write': { args: [exportId: string, position: number, data: Uint8Array]; result: void }
@@ -355,6 +376,7 @@ export type TomadaApi = {
     save(id: string, project: Project): Promise<Project>
     trash(id: string): Promise<void>
     reveal(id: string): Promise<void>
+    pickBackground(id: string): Promise<string | null>
   }
   settings: {
     get(): Promise<SettingsView>
@@ -392,6 +414,17 @@ export type TomadaApi = {
     start(request: ExportRequest): Promise<{ exportId: string }>
     cancel(exportId: string): Promise<void>
     status(): Promise<ExportProgress | null>
+    pickDir(defaultPath?: string): Promise<string | null>
+  }
+  files: {
+    open(path: string): Promise<void>
+    reveal(path: string): Promise<void>
+  }
+  clipboard: { write(text: string): Promise<void> }
+  derived: {
+    peaks(id: string): Promise<PeaksData | null>
+    previewAudio(id: string): Promise<PreviewAudioData | null>
+    thumbs(id: string): Promise<ThumbsData | null>
   }
   /** Só para a janela escondida de exportação. */
   exportWorker: {

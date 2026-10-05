@@ -93,6 +93,8 @@ export function createFakeWorld(args: {
   source?: ResolvedSource
   failTracker?: boolean
   now?: () => Date
+  /** Quanto a "Lixeira" demora (ms): prova a ORDEM entre apagar a gravação e devolver a janela. */
+  trashDelayMs?: number
 }): FakeWorld {
   const emitted: Emitted[] = []
   const calls: string[] = []
@@ -158,7 +160,9 @@ export function createFakeWorld(args: {
     emit: (channel, payload) => void emitted.push({ channel, payload } as Emitted),
     trash: async (path) => {
       trashed.push(path)
+      if (args.trashDelayMs) await new Promise((r) => setTimeout(r, args.trashDelayMs))
       await rm(path, { recursive: true, force: true })
+      calls.push('trash:feito')
     },
     clock: () => (clockBase += 5),
     now: args.now ?? (() => new Date(2026, 9, 4, 15, 0, 0)),

@@ -183,14 +183,30 @@ describe('AppState', () => {
   })
 })
 
+/** O que o editor (M2b) pede ao main: mídias derivadas, diálogos, abrir/mostrar arquivo e área de transferência. */
+function editorDeps(over: { image?: string | null } = {}) {
+  const calls: string[] = []
+  return {
+    calls,
+    derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, idle: async () => undefined, shutdown: () => undefined },
+    pickExportDir: async () => null,
+    pickImage: async () => over.image ?? null,
+    openPath: async (path: string) => void calls.push(`open ${path}`),
+    revealPath: async (path: string) => void calls.push(`reveal ${path}`),
+    copyText: (text: string) => void calls.push(`copy ${text}`)
+  }
+}
+
 describe('handlers de IPC (contrato completo, sem Electron)', () => {
-  async function build() {
+  async function build(over: { image?: string | null } = {}) {
     const dir = tmp()
     const root = join(dir, 'projetos')
     copyTree(FIX.exemplo, join(root, 'exemplo'))
     const log = createMemoryLogger()
     const state = await createAppState({ file: join(dir, 'settings.json'), env: { ...process.env, [ENV_PROJECTS_DIR]: root }, logger: log })
     const store = createProjectStore({ root: () => state.projectsRoot(), logger: log, trash: async () => {}, openFolder: async () => {} })
+    const extras = editorDeps(over)
+    const calls = extras.calls
     const handlers = createHandlers({
       info: { name: 'Tomada', version: '0.0.0', platform: 'win32', electron: '40.9.3', userDataDir: dir, logsDir: dir },
       state,
@@ -200,10 +216,11 @@ describe('handlers de IPC (contrato completo, sem Electron)', () => {
       pickFfmpeg: async () => null,
       recording: createIdleRecordingService(),
       exporter: createIdleExportService(),
+      ...extras,
       finishCountdown: () => undefined,
       clock: () => 0
     })
-    return { handlers, state }
+    return { handlers, state, root, calls }
   }
 
   it('lista, detalha e renomeia por IPC', async () => {
@@ -212,6 +229,66 @@ describe('handlers de IPC (contrato completo, sem Electron)', () => {
     expect(list.map((p) => p.id)).toEqual(['exemplo'])
     expect((await handlers['projects:get']('exemplo')).media.screen?.url).toContain('tomada-media://project/exemplo/media/screen.mp4')
     expect((await handlers['projects:rename']('exemplo', 'Outro nome')).title).toBe('Outro nome')
+  })
+
+  it('projects:save valida o documento, grava por inteiro e devolve o que gravou; documento inválido não toca o arquivo', async () => {
+    const { handlers, root } = await build()
+    const file = join(root, 'exemplo', 'project.json')
+    const project = (await handlers['projects:get']('exemplo')).project
+    const saved = await handlers['projects:save']('exemplo', { ...project, title: 'Salvo pelo editor' })
+    expect(saved.title).toBe('Salvo pelo editor')
+    expect(JSON.parse(readFileSync(file, 'utf8')).title).toBe('Salvo pelo editor')
+    const before = readFileSync(file, 'utf8')
+    await expect(handlers['projects:save']('exemplo', { ...project, style: 'isto não é um estilo' } as never)).rejects.toThrow()
+    await expect(handlers['projects:save']('exemplo', { ...project, cuts: [{ id: 'x', start: 'a' }] } as never)).rejects.toThrow()
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    expect(readdirSync(join(root, 'exemplo')).filter((n) => n.endsWith('.tmp'))).toEqual([])
+    await expect(handlers['projects:save']('../fora', project)).rejects.toThrow(/inválido/)
+  })
+
+  it('projects:pick-background copia a imagem escolhida para media/ e devolve o caminho; cancelar devolve null; arquivo que não é imagem falha', async () => {
+    const dir = tmp()
+    const png = join(dir, 'fundo.png')
+    writeFileSync(png, Buffer.from('89504e470d0a1a0a', 'hex'))
+    const ok = await (async () => {
+      const { handlers, root } = await build({ image: png })
+      const rel = await handlers['projects:pick-background']('exemplo')
+      return { rel, root }
+    })()
+    expect(ok.rel).toMatch(/^media\/fundo-[0-9a-f]{8}\.png$/)
+    expect(existsSync(join(ok.root, 'exemplo', ok.rel!))).toBe(true)
+
+    const cancelled = await build({ image: null })
+    expect(await cancelled.handlers['projects:pick-background']('exemplo')).toBeNull()
+
+    const txt = join(dir, 'nota.txt')
+    writeFileSync(txt, 'oi')
+    const bad = await build({ image: txt })
+    await expect(bad.handlers['projects:pick-background']('exemplo')).rejects.toThrow(/PNG, JPG ou WebP/)
+  })
+
+  it('files:open, files:reveal e clipboard:write só aceitam o que é seguro', async () => {
+    const { handlers, calls } = await build()
+    const abs = join(tmp(), 'video.mp4')
+    await handlers['files:open'](abs)
+    await handlers['files:reveal'](abs)
+    await handlers['clipboard:write'](abs)
+    expect(calls).toEqual([`open ${abs}`, `reveal ${abs}`, `copy ${abs}`])
+    // o registro de IPC embrulha tudo em async: aqui também, para o erro chegar como rejeição
+    const asyncCall = async <T,>(fn: () => T): Promise<Awaited<T>> => await fn()
+    await expect(asyncCall(() => handlers['files:open']('relativo/video.mp4'))).rejects.toThrow(/caminho completo/)
+    await expect(asyncCall(() => handlers['files:reveal']('..\\video.mp4'))).rejects.toThrow(/caminho completo/)
+    await expect(handlers['clipboard:write']('x'.repeat(10_001))).rejects.toThrow(/Texto inválido/)
+    await expect(handlers['clipboard:write'](42 as never)).rejects.toThrow(/Texto inválido/)
+    expect(calls).toHaveLength(3)
+  })
+
+  it('export:pick-dir e derived:* passam pelo contrato', async () => {
+    const { handlers } = await build()
+    expect(await handlers['export:pick-dir']('C:\qualquer')).toBeNull()
+    expect(await handlers['derived:peaks']('exemplo')).toBeNull()
+    expect(await handlers['derived:preview-audio']('exemplo')).toBeNull()
+    expect(await handlers['derived:thumbs']('exemplo')).toBeNull()
   })
 
   it('ffmpeg:status acha o ffmpeg e traz a versão', async () => {
@@ -250,6 +327,7 @@ describe('handlers de IPC (contrato completo, sem Electron)', () => {
       pickFfmpeg: async () => null,
       recording: createIdleRecordingService(),
       exporter: createIdleExportService(),
+      ...editorDeps(),
       finishCountdown: () => undefined,
       clock: () => 0
     })

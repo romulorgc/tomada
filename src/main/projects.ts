@@ -3,8 +3,9 @@
  * com um `project.json`. Sem Electron: lixeira e "abrir no Explorer"
  * entram por parâmetro, então tudo isto roda igual nos testes.
  */
-import { mkdir, readFile, readdir, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { createHash } from 'node:crypto'
+import { copyFile, mkdir, readFile, readdir, stat } from 'node:fs/promises'
+import { extname, isAbsolute, join, relative, sep } from 'node:path'
 import type { MediaFile, ProjectDetail } from '@shared/ipc'
 import { EVENT_FILES } from '@shared/events'
 import { mediaUrl } from '@shared/media-url'
@@ -45,7 +46,12 @@ export interface ProjectStore {
   rename(id: string, title: string): Promise<ProjectSummary>
   trash(id: string): Promise<void>
   reveal(id: string): Promise<void>
+  /** Copia uma imagem para `media/` do projeto (fundo do vídeo); devolve o caminho relativo. */
+  importBackground(id: string, source: string): Promise<string>
 }
+
+/** Extensões de imagem aceitas como fundo. */
+export const BACKGROUND_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'] as const
 
 /** O id é o nome da pasta: um único segmento, sem separadores nem `..`. */
 export function assertProjectId(id: unknown): asserts id is string {
@@ -209,6 +215,25 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
       const dir = dirOf(id)
       if (!(await pathExists(dir))) throw new ProjectNotFoundError(`Projeto não encontrado: ${id}`)
       await deps.openFolder(dir)
+    },
+
+    async importBackground(id, source) {
+      const dir = dirOf(id)
+      if (!(await pathExists(dir))) throw new ProjectNotFoundError(`Projeto não encontrado: ${id}`)
+      const ext = extname(source).toLowerCase()
+      if (!(BACKGROUND_EXTENSIONS as readonly string[]).includes(ext)) {
+        throw new Error(`Use uma imagem PNG, JPG ou WebP (esta é "${ext || 'sem extensão'}").`)
+      }
+      const info = await stat(source).catch(() => null)
+      if (!info || !info.isFile()) throw new Error(`Não encontrei a imagem: ${source}`)
+      if (info.size > 40 * 1024 * 1024) throw new Error('A imagem passa de 40 MB. Use uma menor.')
+      // o nome leva um resumo do caminho e do tamanho: a mesma imagem não se duplica, outra não se confunde
+      const tag = createHash('sha1').update(`${source}|${info.size}|${Math.trunc(info.mtimeMs)}`).digest('hex').slice(0, 8)
+      const rel = `media/fundo-${tag}${ext}`
+      await mkdir(join(dir, 'media'), { recursive: true })
+      await copyFile(source, join(dir, rel))
+      logger.info(`Imagem de fundo importada para o projeto ${id}: ${rel}`)
+      return rel
     }
   }
 }

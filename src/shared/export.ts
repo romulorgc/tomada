@@ -11,13 +11,22 @@ import type { Range } from './types'
 export type ExportResolution = '1080p' | '1440p' | '2160p'
 export type ExportFps = 30 | 60
 
-export type ExportOptions = { resolution: ExportResolution; fps: ExportFps }
+export type ExportOptions = {
+  resolution: ExportResolution
+  fps: ExportFps
+  /** Nome do arquivo SEM extensão. Ausente ou vazio = o padrão "<título> - YouTube 1080p". */
+  fileName?: string
+  /** Pasta de destino (caminho absoluto). Ausente = `exports/` dentro da pasta do projeto. */
+  dir?: string
+}
 
 /** Validação do pedido de exportação que atravessa a IPC. */
 export const exportRequestSchema = z.object({
   projectId: z.string().min(1).max(300),
   resolution: z.enum(['1080p', '1440p', '2160p']),
-  fps: z.union([z.literal(30), z.literal(60)])
+  fps: z.union([z.literal(30), z.literal(60)]),
+  fileName: z.string().max(200).optional(),
+  dir: z.string().min(1).max(1000).optional()
 })
 
 export const EXPORT_SIZES: Record<ExportResolution, { w: number; h: number }> = {
@@ -109,10 +118,16 @@ export function sanitizeFileName(title: string, fallback = 'Gravação'): string
   return safe.slice(0, 120).replace(/[. ]+$/g, '')
 }
 
-/** `<título> - YouTube 1080p.mp4` (60 qps vira `1080p60`). */
-export function exportFileName(title: string, opts: ExportOptions): string {
+/** O nome padrão sem extensão: `<título> - YouTube 1080p` (60 qps vira `1080p60`). */
+export function defaultExportStem(title: string, opts: Pick<ExportOptions, 'resolution' | 'fps'>): string {
   const label = EXPORT_RESOLUTION_LABEL[opts.resolution]
-  return `${sanitizeFileName(title)} - YouTube ${label}${opts.fps === 60 ? '60' : ''}.mp4`
+  return `${sanitizeFileName(title)} - YouTube ${label}${opts.fps === 60 ? '60' : ''}`
+}
+
+/** `<nome escolhido>.mp4`, ou o padrão `<título> - YouTube 1080p.mp4` quando o nome não foi escolhido. */
+export function exportFileName(title: string, opts: ExportOptions): string {
+  const custom = opts.fileName?.trim().replace(/\.mp4$/i, '').trim()
+  return `${custom ? sanitizeFileName(custom) : defaultExportStem(title, opts)}.mp4`
 }
 
 /** Progresso → tempo restante (ms) a partir de quadros por segundo medidos. */

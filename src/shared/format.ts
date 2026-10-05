@@ -14,6 +14,32 @@ export function formatDuration(ms: number): string {
   return `${m}:${ss}`
 }
 
+/** Tempo com centésimos para o editor: `0:03.20` (ou `1:02:03.20` a partir de 1 hora). Arredonda ao centésimo. */
+export function formatTimecode(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '0:00.00'
+  const cs = Math.round(ms / 10)
+  const total = Math.floor(cs / 100)
+  const frac = String(cs % 100).padStart(2, '0')
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const ss = String(total % 60).padStart(2, '0')
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}.${frac}` : `${m}:${ss}.${frac}`
+}
+
+/** Um intervalo em palavras curtas: `0,4 s`, `3,2 s`, `1 min 05 s`. */
+export function formatSpan(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '0 s'
+  if (ms < 60_000) {
+    const s = Math.round(ms / 100) / 10
+    return `${s.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 1 })} s`
+  }
+  const total = Math.round(ms / 1000)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = String(total % 60).padStart(2, '0')
+  return h > 0 ? `${h} h ${String(m).padStart(2, '0')} min` : `${m} min ${s} s`
+}
+
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const
 
 /** Bytes → "1,5 MB" (base 1024, vírgula decimal, até 1 casa; bytes inteiros sem casa). */

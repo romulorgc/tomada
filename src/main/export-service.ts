@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto'
 import type { FileHandle } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { mkdir, open, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import {
   EXPORT_RESOLUTION_LABEL,
   etaMs,
@@ -96,6 +96,8 @@ type Run = {
   abort: AbortController
   cancelled: boolean
   win: ExporterWindow | null
+  /** Pasta onde o arquivo final (e o temporário, ao lado dele) é gravado. */
+  outDir: string
   tmpDir: string
   videoPath: string
   audioPath: string
@@ -230,7 +232,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     let watchdog: NodeJS.Timeout | undefined
     try {
       if (!ff) throw new ExportError('Não encontrei o ffmpeg. Escolha o ffmpeg nos Ajustes e tente de novo.')
-      const exportsDir = join(run.dir, 'exports')
+      const exportsDir = run.outDir
       await mkdir(run.tmpDir, { recursive: true })
       run.handle = await open(run.videoPath, 'w+')
 
@@ -368,9 +370,16 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       if (totalFrames === 0) throw new ExportError('Não há nada para exportar: todos os trechos foram cortados.')
 
       const id = randomUUID()
-      const exportsDir = join(dir, 'exports')
+      if (request.dir !== undefined && !isAbsolute(request.dir)) {
+        throw new ExportError('A pasta de destino precisa ser um caminho completo (ex.: C:\\Videos).')
+      }
+      const exportsDir = request.dir ? resolve(request.dir) : join(dir, 'exports')
       const base = exportFileName(project.title, request)
-      await mkdir(exportsDir, { recursive: true })
+      try {
+        await mkdir(exportsDir, { recursive: true })
+      } catch (err) {
+        throw new ExportError(`Não consegui usar a pasta de destino (${exportsDir}): ${messageOf(err)}`)
+      }
       const stem = base.replace(/\.mp4$/, '')
       const unique = uniqueName(stem, (n) => existsSync(join(exportsDir, `${n}.mp4`)))
       const finalPath = join(exportsDir, `${unique}.mp4`)
@@ -401,6 +410,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         abort: new AbortController(),
         cancelled: false,
         win: null,
+        outDir: exportsDir,
         tmpDir,
         videoPath: join(tmpDir, 'video.mp4'),
         audioPath: join(tmpDir, 'audio.m4a'),

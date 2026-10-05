@@ -52,8 +52,9 @@ export function App() {
   useEffect(() => useRecorder.getState().attach(), [])
   return (
     <div className="flex h-full">
-      <Sidebar />
-      <main className="min-w-0 flex-1 overflow-y-auto" aria-label={t.app.name} data-view={viewName}>
+      {/* O editor ocupa a janela inteira: a navegação do app só volta ao fechar o projeto. */}
+      {viewName === 'project' ? null : <Sidebar />}
+      <main className={['min-w-0 flex-1', viewName === 'project' ? 'overflow-hidden' : 'overflow-y-auto'].join(' ')} aria-label={t.app.name} data-view={viewName}>
         <Boundary>
           <CurrentView />
         </Boundary>

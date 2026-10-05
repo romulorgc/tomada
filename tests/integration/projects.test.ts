@@ -251,6 +251,43 @@ describe('ProjectStore.trash / reveal', () => {
   })
 })
 
+describe('ProjectStore.importBackground', () => {
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+
+  it('copia a imagem para media/ com nome que não se repete para a mesma imagem e não se confunde com outra', async () => {
+    const { root, store } = seed()
+    const dir = tmp()
+    const a = join(dir, 'a.png')
+    const b = join(dir, 'b.PNG')
+    writeFileSync(a, png)
+    writeFileSync(b, Buffer.concat([png, Buffer.from('mais bytes')]))
+    const first = await store.importBackground(EXAMPLE_ID, a)
+    const again = await store.importBackground(EXAMPLE_ID, a)
+    const other = await store.importBackground(EXAMPLE_ID, b)
+    expect(first).toMatch(/^media\/fundo-[0-9a-f]{8}\.png$/)
+    expect(again).toBe(first) // a mesma imagem não se duplica
+    expect(other).not.toBe(first)
+    expect(other.endsWith('.png')).toBe(true) // extensão em minúsculas
+    expect(readFileSync(join(root, EXAMPLE_ID, first))).toEqual(png)
+  })
+
+  it('recusa o que não é imagem, o que não existe, o que passa de 40 MB e projeto que não existe', async () => {
+    const { store } = seed()
+    const dir = tmp()
+    const txt = join(dir, 'nota.txt')
+    writeFileSync(txt, 'oi')
+    await expect(store.importBackground(EXAMPLE_ID, txt)).rejects.toThrow(/PNG, JPG ou WebP/)
+    await expect(store.importBackground(EXAMPLE_ID, join(dir, 'sumiu.png'))).rejects.toThrow(/Não encontrei a imagem/)
+    const big = join(dir, 'grande.jpg')
+    writeFileSync(big, Buffer.alloc(41 * 1024 * 1024))
+    await expect(store.importBackground(EXAMPLE_ID, big)).rejects.toThrow(/40 MB/)
+    const ok = join(dir, 'ok.webp')
+    writeFileSync(ok, png)
+    await expect(store.importBackground('fantasma', ok)).rejects.toBeInstanceOf(ProjectNotFoundError)
+    await expect(store.importBackground('../fora', ok)).rejects.toBeInstanceOf(InvalidProjectIdError)
+  })
+})
+
 describe('writeFileAtomic', () => {
   it('cria pastas que faltam e grava o conteúdo', async () => {
     const file = join(tmp(), 'a', 'b', 'c.json')

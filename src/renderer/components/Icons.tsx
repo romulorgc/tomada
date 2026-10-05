@@ -145,3 +145,229 @@ export const MicIcon = (p: IconProps) => (
     <path d="M6 11.5a6 6 0 0 0 12 0M12 17.5V21" />
   </Svg>
 )
+
+// --- Editor ------------------------------------------------------------------
+
+export const UndoIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9 4.5 4.5 9 9 13.5" />
+    <path d="M5 9h8.5a5 5 0 0 1 0 10H10" />
+  </Svg>
+)
+
+export const RedoIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m15 4.5 4.5 4.5-4.5 4.5" />
+    <path d="M19 9h-8.5a5 5 0 0 0 0 10H14" />
+  </Svg>
+)
+
+export const ScissorsIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="6.5" cy="7" r="2.5" />
+    <circle cx="6.5" cy="17" r="2.5" />
+    <path d="m8.4 8.6 11.1 8.4M8.4 15.4 19.5 7" />
+  </Svg>
+)
+
+export const SplitIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3.5v17" />
+    <path d="m8 8-3.5 4L8 16M16 8l3.5 4-3.5 4" />
+  </Svg>
+)
+
+export const ZoomInIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="10.5" cy="10.5" r="6" />
+    <path d="m15 15 5 5M10.5 8v5M8 10.5h5" />
+  </Svg>
+)
+
+export const MinusIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6 12h12" />
+  </Svg>
+)
+
+export const PlusIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 6v12M6 12h12" />
+  </Svg>
+)
+
+export const ChevronDownIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m6.5 9.5 5.5 5.5 5.5-5.5" />
+  </Svg>
+)
+
+export const SkipStartIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6.5 5.5v13" />
+    <path d="M18 6v12l-8.5-6z" fill="currentColor" />
+  </Svg>
+)
+
+export const SkipEndIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M17.5 5.5v13" />
+    <path d="M6 6v12l8.5-6z" fill="currentColor" />
+  </Svg>
+)
+
+export const FrameBackIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M15.5 6 9 12l6.5 6" />
+    <path d="M6 6.5v11" />
+  </Svg>
+)
+
+export const FrameForwardIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M8.5 6 15 12l-6.5 6" />
+    <path d="M18 6.5v11" />
+  </Svg>
+)
+
+export const CollapseIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4.5 5v14M19.5 5v14" />
+    <path d="M9 12h6M11.4 9.4 8.8 12l2.6 2.6M12.6 9.4l2.6 2.6-2.6 2.6" />
+  </Svg>
+)
+
+export const FitIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 12h6M14 12h6M7.5 8.5 4 12l3.5 3.5M16.5 8.5 20 12l-3.5 3.5" />
+  </Svg>
+)
+
+export const ExportIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 15V4M7.5 8.2 12 3.7l4.5 4.5" />
+    <path d="M5 13.5V18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4.5" />
+  </Svg>
+)
+
+export const PaletteIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.4 0 2-.9 2-1.8 0-1.4-1.2-1.7-1.2-2.9 0-.9.8-1.5 1.7-1.5H17a3.5 3.5 0 0 0 3.5-3.5c0-4-3.8-7.3-8.5-7.3z" />
+    <circle cx="7.8" cy="11.2" r="1" fill="currentColor" stroke="none" />
+    <circle cx="10.2" cy="7.4" r="1" fill="currentColor" stroke="none" />
+    <circle cx="14.6" cy="7.4" r="1" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+export const LayoutGridIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2.2" />
+    <path d="M3.5 10h17M10 10v9.5" />
+  </Svg>
+)
+
+export const TextIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 7V5.5h14V7M12 5.5v13M9.5 18.5h5" />
+  </Svg>
+)
+
+export const SparkleIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3.5c.5 4.3 2.2 6 6.5 6.5-4.3.5-6 2.2-6.5 6.5-.5-4.3-2.2-6-6.5-6.5 4.3-.5 6-2.2 6.5-6.5z" />
+    <path d="M18.5 15.5c.2 1.8.9 2.5 2.5 2.7-1.6.2-2.3.9-2.5 2.6-.2-1.7-.9-2.4-2.5-2.6 1.6-.2 2.3-.9 2.5-2.7z" />
+  </Svg>
+)
+
+export const KeyboardIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="6.5" width="18" height="11" rx="2" />
+    <path d="M7 10.5h.01M10.5 10.5h.01M14 10.5h.01M17.5 10.5h.01M7.5 14h9" />
+  </Svg>
+)
+
+export const ImageIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2.2" />
+    <circle cx="9" cy="10" r="1.6" />
+    <path d="m4 17 5-4.5 3.5 3L15.5 13 20 17" />
+  </Svg>
+)
+
+export const TargetIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="6.5" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4" />
+  </Svg>
+)
+
+export const PlayFolderIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3.5" y="5" width="17" height="14" rx="2.4" />
+    <path d="m10.5 9.2 4.2 2.8-4.2 2.8z" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+export const CopyIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="8.5" y="8.5" width="11" height="11" rx="2" />
+    <path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2" />
+  </Svg>
+)
+
+export const AlertIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 4.5 3.5 19h17z" />
+    <path d="M12 10v4.2M12 16.8h.01" />
+  </Svg>
+)
+
+/** Diagramas dos layouts (o retângulo do quadro e o que vai dentro dele). */
+export const LayoutBubbleIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2.2" />
+    <circle cx="16.5" cy="14.5" r="2.6" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+export const LayoutSideIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2.2" />
+    <path d="M15 5v14" />
+    <rect x="16.4" y="8" width="3" height="8" rx="1" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+export const LayoutScreenIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2.2" />
+    <rect x="6" y="8" width="12" height="8" rx="1" fill="currentColor" fillOpacity="0.35" stroke="none" />
+  </Svg>
+)
+
+export const LayoutCameraIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2.2" />
+    <circle cx="12" cy="11" r="2.2" fill="currentColor" stroke="none" />
+    <path d="M7.5 17c.6-2.2 2.3-3.4 4.5-3.4s3.9 1.2 4.5 3.4" />
+  </Svg>
+)
+
+export const ShapeCircleIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="7.5" />
+  </Svg>
+)
+
+export const ShapeRoundedIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4.5" y="6.5" width="15" height="11" rx="3.5" />
+  </Svg>
+)
+
+export const ShapeSquareIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4.5" y="6.5" width="15" height="11" rx="0.6" />
+  </Svg>
+)

@@ -3,10 +3,12 @@ import {
   EXPORT_SIZES,
   avcCodecString,
   avcLevelIdc,
+  defaultExportStem,
   etaMs,
   exportBitrate,
   exportFileName,
   exportFormat,
+  exportRequestSchema,
   fileTimeSeconds,
   outputFrameCount,
   outputFrameTime,
@@ -98,6 +100,28 @@ describe('plano da exportação', () => {
     expect(sanitizeFileName('fim com ponto.')).toBe('fim com ponto')
     expect(sanitizeFileName('CON')).toBe('CON_')
     expect(sanitizeFileName('a'.repeat(300)).length).toBeLessThanOrEqual(120)
+  })
+
+  it('nome escolhido na exportação: sem extensão, sem caracteres proibidos, vazio cai no padrão', () => {
+    const base = { resolution: '1080p', fps: 30 } as const
+    expect(defaultExportStem('Aula 1', { resolution: '2160p', fps: 60 })).toBe('Aula 1 - YouTube 4K60')
+    expect(exportFileName('Aula 1', { ...base, fileName: 'Minha aula final' })).toBe('Minha aula final.mp4')
+    expect(exportFileName('Aula 1', { ...base, fileName: 'Minha aula final.MP4' })).toBe('Minha aula final.mp4')
+    expect(exportFileName('Aula 1', { ...base, fileName: '  com espaços  ' })).toBe('com espaços.mp4')
+    expect(exportFileName('Aula 1', { ...base, fileName: 'a/b:c' })).toBe('a b c.mp4')
+    expect(exportFileName('Aula 1', { ...base, fileName: '   ' })).toBe('Aula 1 - YouTube 1080p.mp4')
+    expect(exportFileName('Aula 1', { ...base, fileName: '.mp4' })).toBe('Aula 1 - YouTube 1080p.mp4')
+    expect(exportFileName('Aula 1', base)).toBe('Aula 1 - YouTube 1080p.mp4')
+  })
+
+  it('o pedido de exportação aceita nome e pasta, e recusa o que não é do formato', () => {
+    const ok = { projectId: 'p', resolution: '1440p', fps: 60 }
+    expect(exportRequestSchema.parse(ok)).toEqual(ok)
+    expect(exportRequestSchema.parse({ ...ok, fileName: 'x', dir: 'C:\Videos' })).toMatchObject({ fileName: 'x', dir: 'C:\Videos' })
+    expect(() => exportRequestSchema.parse({ ...ok, dir: '' })).toThrow()
+    expect(() => exportRequestSchema.parse({ ...ok, fileName: 'x'.repeat(201) })).toThrow()
+    expect(() => exportRequestSchema.parse({ ...ok, fps: 24 })).toThrow()
+    expect(() => exportRequestSchema.parse({ ...ok, resolution: '8k' })).toThrow()
   })
 
   it('ETA a partir dos quadros por segundo', () => {

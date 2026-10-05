@@ -29,7 +29,8 @@ const api: TomadaApi = {
     rename: (id, title) => invoke('projects:rename', id, title),
     save: (id, project) => invoke('projects:save', id, project),
     trash: (id) => invoke('projects:trash', id),
-    reveal: (id) => invoke('projects:reveal', id)
+    reveal: (id) => invoke('projects:reveal', id),
+    pickBackground: (id) => invoke('projects:pick-background', id)
   },
   settings: {
     get: () => invoke('settings:get'),
@@ -62,7 +63,15 @@ const api: TomadaApi = {
   exporter: {
     start: (request) => invoke('export:start', request),
     cancel: (exportId) => invoke('export:cancel', exportId),
-    status: () => invoke('export:status')
+    status: () => invoke('export:status'),
+    pickDir: (defaultPath) => invoke('export:pick-dir', defaultPath)
+  },
+  files: { open: (path) => invoke('files:open', path), reveal: (path) => invoke('files:reveal', path) },
+  clipboard: { write: (text) => invoke('clipboard:write', text) },
+  derived: {
+    peaks: (id) => invoke('derived:peaks', id),
+    previewAudio: (id) => invoke('derived:preview-audio', id),
+    thumbs: (id) => invoke('derived:thumbs', id)
   },
   exportWorker: {
     job: (exportId) => invoke('exporter:job', exportId),

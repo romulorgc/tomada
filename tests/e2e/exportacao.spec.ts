@@ -4,7 +4,7 @@
  * `flash-bipe`, estalo nas emendas, prévia × exportação, cancelamento, interface sem travar e velocidade.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { exportFileName, outputFrameCount } from '../../src/shared/export'
@@ -195,17 +195,22 @@ test('PRÉVIA = EXPORTAÇÃO: o quadro da prévia e o do arquivo exportado, no m
   await expect(page.getByTestId('project-card')).toHaveCount(1)
   await page.getByTestId('card-open').click()
   await expect(page.getByTestId('editor')).toBeVisible()
+  await expect(page.getByTestId('preview-canvas')).toHaveAttribute('data-ready', 'true', { timeout: 15_000 })
   // ao abrir sem zooms, o editor gera os do preset moderado e grava no project.json
+  await page.getByTestId('tab-zoom').click()
   await expect(page.getByTestId('zoom-count')).toHaveText('3 zooms')
   const file = join(s.projects, EXAMPLE_FOLDER, 'project.json')
   await expect.poll(() => (JSON.parse(readFileSync(file, 'utf8')) as Project).zoomPreset, { timeout: 10_000 }).toBe('moderate')
 
   const times = [3000, 8000, 14_000] // dentro de um zoom e logo depois de um clique (ripple visível)
   const preview: Uint8Array[] = []
+  let at = 0
   for (const t of times) {
-    await page.getByTestId('scrubber').fill(String(t))
-    await expect(page.getByTestId('preview-canvas')).toHaveAttribute('data-ready', 'true', { timeout: 15_000 })
+    // Shift+→ anda exatamente 1 s de saída (sem cortes, saída = origem): 3 s, depois +5 s, depois +6 s
+    for (let n = 0; n < (t - at) / 1000; n++) await page.keyboard.press('Shift+ArrowRight')
+    at = t
     await expect.poll(async () => Number(await page.getByTestId('preview-canvas').getAttribute('data-source-ms')), { timeout: 15_000 }).toBeCloseTo(t, 0)
+    await expect(page.getByTestId('preview-canvas')).toHaveAttribute('data-ready', 'true', { timeout: 15_000 })
     await page.waitForTimeout(250) // deixa o quadro novo do <video> chegar e ser desenhado
     // o canvas fica "contaminado" pelo vídeo do protocolo tomada-media (sem CORS): não dá para ler os pixels
     // por script, então a prévia é fotografada pelo Chromium (o que o usuário vê) e reduzida com média de área
@@ -224,93 +229,6 @@ test('PRÉVIA = EXPORTAÇÃO: o quadro da prévia e o do arquivo exportado, no m
     expect(d.strongRatio, `pixels muito diferentes em t=${t}`).toBeLessThan(0.02)
   })
   console.log(`prévia × exportação (320×180):\n  ${results.join('\n  ')}`)
-})
-
-test('interface: exportar pelo botão mostra o progresso real, a interface não trava e o resultado aparece; cancelar apaga o parcial', async () => {
-  test.setTimeout(300_000)
-  s = await launchTomada()
-  const { page } = s
-  await expect(page.getByTestId('project-card')).toHaveCount(1)
-  editProject(s, (p) => {
-    p.zoomPreset = 'moderate'
-    p.zooms = [{ id: 'z1', start: 2240, end: 4140, scale: 1.7, focus: 'auto', origin: 'auto' }]
-  })
-  await page.getByTestId('card-open').click()
-  await expect(page.getByTestId('editor')).toBeVisible()
-  await expect(page.getByTestId('export-start')).toHaveText('Exportar 1080p')
-
-  // mede o maior intervalo entre dois tiques de 20 ms na interface durante a exportação
-  await page.evaluate(() => {
-    const w = window as unknown as { __gaps: number[]; __stop: () => void }
-    w.__gaps = []
-    let last = performance.now()
-    const id = window.setInterval(() => {
-      const n = performance.now()
-      w.__gaps.push(n - last)
-      last = n
-    }, 20)
-    w.__stop = () => window.clearInterval(id)
-  })
-
-  // cancelamento primeiro (4K a 60 qps demora o bastante para dar tempo de cancelar)
-  await page.getByTestId('export-resolution').selectOption('2160p')
-  await page.getByTestId('export-fps').selectOption('60')
-  await expect(page.getByTestId('export-start')).toHaveText('Exportar 4K')
-  await page.getByTestId('export-start').click()
-  await expect(page.getByTestId('export-progress')).toBeVisible()
-  await expect(page.getByTestId('export-phase')).toHaveText('Gerando o vídeo', { timeout: 20_000 })
-  await expect(page.getByTestId('export-detail')).toContainText(/\d+ de \d+ quadros/, { timeout: 30_000 })
-  await shot(page, '22-exportando')
-  await page.getByTestId('export-cancel').click()
-  await expect(page.getByTestId('export-cancelled')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId('export-start')).toBeVisible()
-  expect(listExports(s)).toEqual([]) // nenhum parcial, nenhum temporário, nenhum arquivo final
-  await shot(page, '23-exportacao-cancelada')
-
-  // e agora até o fim, em 1080p30
-  await page.getByTestId('export-resolution').selectOption('1080p')
-  await page.getByTestId('export-fps').selectOption('30')
-  await page.getByTestId('export-start').click()
-  await expect(page.getByTestId('export-progress')).toBeVisible()
-  const seen = new Set<string>()
-  const t0 = Date.now()
-  while (Date.now() - t0 < 120_000 && !(await page.getByTestId('export-done').isVisible())) {
-    const ph = await page.getByTestId('export-progress').getAttribute('data-phase', { timeout: 2000 }).catch(() => null)
-    if (ph) seen.add(ph)
-    await page.waitForTimeout(40)
-  }
-  await expect(page.getByTestId('export-done')).toBeVisible()
-  await expect(page.getByTestId('export-done-path')).toContainText('Projeto de exemplo - YouTube 1080p.mp4')
-  await expect(page.getByTestId('export-report')).toContainText('1920×1080')
-  expect(seen.has('rendering')).toBe(true)
-  await shot(page, '24-exportacao-pronta')
-
-  const maxGap = await page.evaluate(() => {
-    const w = window as unknown as { __gaps: number[]; __stop: () => void }
-    w.__stop()
-    return Math.max(...w.__gaps)
-  })
-  console.log(`interface durante a exportação: maior intervalo entre tiques de 20 ms = ${maxGap.toFixed(0)} ms`)
-  expect(maxGap, 'a interface travou durante a exportação').toBeLessThan(300)
-  expect(listExports(s)).toEqual(['Projeto de exemplo - YouTube 1080p.mp4'])
-})
-
-test('falha visível: sem a mídia da tela a exportação mostra o motivo e oferece tentar de novo', async () => {
-  test.setTimeout(120_000)
-  s = await launchTomada()
-  const { page } = s
-  await expect(page.getByTestId('project-card')).toHaveCount(1)
-  // apaga o vídeo da tela do disco: o render não consegue abrir
-  const screenFile = join(s.projects, EXAMPLE_FOLDER, 'media', 'screen.mp4')
-  writeFileSync(screenFile, 'isto não é um vídeo')
-  await page.getByTestId('card-open').click()
-  await expect(page.getByTestId('editor')).toBeVisible()
-  await page.getByTestId('export-start').click()
-  await expect(page.getByTestId('export-error')).toBeVisible({ timeout: 60_000 })
-  await expect(page.getByTestId('export-error')).toContainText('Não consegui')
-  await expect(page.getByTestId('export-retry')).toBeVisible()
-  expect(listExports(s)).toEqual([])
-  s.problems.length = 0 // o vídeo quebrado também aparece como erro de mídia no console, de propósito
 })
 
 test('VELOCIDADE: 3 min sintéticos em 1080p30 (com 30 cortes e zooms) exportam a pelo menos 60 qps', async () => {

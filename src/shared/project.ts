@@ -32,7 +32,9 @@ export function defaultStyle(): Style {
       corner: 'bottom-right',
       borderWidth: 4,
       borderColor: '#ffffff',
-      mirror: false
+      mirror: false,
+      hidden: false,
+      shrinkOnZoom: true
     },
     cursor: { mode: 'real', scale: 2, ripple: true, hideAfterIdleMs: 2000, halo: false }
   }
@@ -120,7 +122,9 @@ const cameraStyleSchema = z.looseObject({
   corner: cornerSchema.default(D.camera.corner),
   borderWidth: z.number().default(D.camera.borderWidth),
   borderColor: z.string().default(D.camera.borderColor),
-  mirror: z.boolean().default(D.camera.mirror)
+  mirror: z.boolean().default(D.camera.mirror),
+  hidden: z.boolean().default(D.camera.hidden),
+  shrinkOnZoom: z.boolean().default(D.camera.shrinkOnZoom)
 })
 
 const cursorStyleSchema = z.looseObject({

@@ -152,6 +152,14 @@ type Session = {
   /** Quantos ms o renderer está à frente do main (renderer = main − offset). */
   offsetMs: number
   hadData: boolean
+  /**
+   * A sessão não aceita mais pedaços (parou, foi descartada ou o app está fechando). Um pedaço que ainda
+   * estava a caminho, ou já dentro do `open()`, vê isto e desiste em vez de reabrir um arquivo que o
+   * fechamento já deu por encerrado (handle vazado + arquivo recriado dentro da pasta que está sumindo).
+   */
+  closed: boolean
+  /** Fila das escritas aceitas: fechar a sessão espera esta fila esvaziar antes de fechar os arquivos. */
+  writes: Promise<unknown>
 }
 
 const COUNTDOWN_SECONDS = 3
@@ -201,7 +209,10 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     deps.windows.updateBar(barSnapshot)
   }
 
+  /** Encerra a sessão para novas escritas, espera as que já foram aceitas e fecha os arquivos. */
   async function closeFiles(s: Session): Promise<void> {
+    s.closed = true
+    await s.writes
     for (const slot of s.files.values()) {
       try {
         await slot.handle.sync().catch(() => undefined)
@@ -235,6 +246,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
   }
 
   async function discardSession(s: Session): Promise<void> {
+    s.closed = true // pedaços que ainda chegarem não reabrem nada
     await stopTrackerQuietly(s)
     await closeFiles(s)
     deps.sources.disarm()
@@ -403,7 +415,9 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           openPause: null,
           writeError: null,
           offsetMs: 0,
-          hadData: false
+          hadData: false,
+          closed: false,
+          writes: Promise.resolve()
         }
         logger.info(`Gravação preparada: ${folder} (${request.mode}, ${request.fps} qps${source ? `, fonte "${source.name}" [${source.kind}]` : ''})`)
         return {
@@ -437,8 +451,8 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       }
       if (!completed) {
         logger.info('Contagem cancelada: nada foi gravado.')
-        deps.windows.setMainMinimized(false)
         await discardSession(s)
+        deps.windows.setMainMinimized(false)
         session = null
         setStatus('idle')
         return false
@@ -517,31 +531,38 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
 
     async chunk(kind, data) {
       const s = session
-      if (!s) {
+      if (!s || s.closed) {
         logger.debug(`Pedaço de ${kind} chegou depois do fim da gravação; ignorado.`)
         return
       }
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
-      try {
-        let slot = s.files.get(kind)
-        if (!slot) {
-          const rel = kind === 'screen' ? RAW_SCREEN : kind === 'camera' ? RAW_CAMERA : RAW_MIC
-          const path = join(s.dir, rel)
-          slot = { handle: await open(path, 'a'), bytes: 0, path }
-          s.files.set(kind, slot)
+      // Escritas em fila: fechar a sessão (parar, descartar, sair) espera as aceitas e recusa as novas.
+      const job = s.writes.then(async () => {
+        if (s.closed) return
+        try {
+          let slot = s.files.get(kind)
+          if (!slot) {
+            const rel = kind === 'screen' ? RAW_SCREEN : kind === 'camera' ? RAW_CAMERA : RAW_MIC
+            const path = join(s.dir, rel)
+            const handle = await open(path, 'a')
+            slot = { handle, bytes: 0, path }
+            s.files.set(kind, slot)
+          }
+          await slot.handle.write(bytes)
+          slot.bytes += bytes.byteLength
+          s.hadData = true
+        } catch (err) {
+          const message = messageOf(err)
+          if (!s.writeError) {
+            s.writeError = message
+            logger.error(`Erro ao gravar em disco (${kind}).`, err)
+            deps.emit('record:notice', { kind: 'error', text: 'Não consegui gravar em disco. A gravação vai parar e salvar o que já está no disco.', detail: message })
+          }
+          throw new Error(`Erro ao gravar em disco: ${message}`)
         }
-        await slot.handle.write(bytes)
-        slot.bytes += bytes.byteLength
-        s.hadData = true
-      } catch (err) {
-        const message = messageOf(err)
-        if (!s.writeError) {
-          s.writeError = message
-          logger.error(`Erro ao gravar em disco (${kind}).`, err)
-          deps.emit('record:notice', { kind: 'error', text: 'Não consegui gravar em disco. A gravação vai parar e salvar o que já está no disco.', detail: message })
-        }
-        throw new Error(`Erro ao gravar em disco: ${message}`)
-      }
+      })
+      s.writes = job.catch(() => undefined)
+      return job
     },
 
     async pause(at) {
@@ -605,8 +626,9 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       if (!s) return
       logger.info(`Gravação descartada${reason ? ` (${reason})` : ''}: ${s.folder}`)
       leaveRecordingUi()
-      deps.windows.setMainMinimized(false)
+      // Primeiro o disco, depois a janela: "a janela voltou" passa a significar "não sobrou nada da gravação".
       await discardSession(s)
+      deps.windows.setMainMinimized(false)
       session = null
       setStatus('idle')
     },
