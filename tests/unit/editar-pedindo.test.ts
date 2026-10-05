@@ -110,7 +110,7 @@ describe('editar pedindo: aplicar as operações', () => {
     expect(r.summary).toMatch(/^Cortei 2 trechos \(−\d+(,\d)? s\), adicionei 1 zoom e troquei o título\.$/)
     expect(r.project.title).toBe('Agendaí em 3 minutos')
     expect(r.project.zooms).toHaveLength(1)
-    expect(r.project.zooms[0]).toMatchObject({ origin: 'manual', scale: 1.7 })
+    expect(r.project.zooms[0]).toMatchObject({ origin: 'manual', scale: 1.5 })
   })
 
   it('operação inválida é RECUSADA com o motivo e as válidas valem; nada é aplicado pela metade', () => {
@@ -166,14 +166,14 @@ describe('editar pedindo: aplicar as operações', () => {
     expect(back.removedMs).toBeLessThan(0)
   })
 
-  it('zoom: escala fora de 1,1–4 é recusada; outro zoom em cima do mesmo trecho não cabe; no vertical o padrão é 1,4×', () => {
+  it('zoom: escala fora de 1,1–4 é recusada; outro zoom em cima do mesmo trecho não cabe; o padrão é 1,5× no 16:9 e 1,35× no vertical', () => {
     const [from, to] = sentenceRange(demo, 12, 12)
     expect(plan([{ op: 'zoom', from, to, scale: 5 }]).refused[0]!.why).toBe('a escala 5 está fora de 1.1 a 4')
     const twice = plan([{ op: 'zoom', from, to }, { op: 'zoom', from, to }])
     expect(twice.applied).toHaveLength(1)
     expect(twice.refused[0]!.why).toMatch(/o zoom não cabe ali/)
     const v = planAiEdit({ project: project(), words: demo.words, durationMs, format: 'vertical', ops: [{ op: 'zoom', from, to }] })
-    expect(v.project.zooms[0]!.scale).toBe(1.4)
+    expect(v.project.zooms[0]!.scale).toBe(1.35)
   })
 
   it('layout: só os do formato aberto, e os que mostram a câmera exigem câmera no projeto', () => {
@@ -212,12 +212,17 @@ describe('editar pedindo: aplicar as operações', () => {
     expect(plan([{ op: 'clip', title: 'X', ranges: [[0, 1], [2, 3], [4, 5], [6, 7]] }]).refused[0]!.why).toMatch(/^faltam dados/)
   })
 
-  it('legenda: estilo traz as medidas dele; estilo inexistente, palavras por linha fora de 1–5 e "nada a mudar" são recusados', () => {
+  it('legenda: estilo traz as medidas dele no formato aberto; estilo inexistente, palavras por linha fora do máximo do formato e "nada a mudar" são recusados', () => {
     const ok = plan([{ op: 'captions', enabled: true, style: 'clean', wordsPerLine: 3 }])
     expect(ok.project.captions).toMatchObject({ enabled: true, style: 'clean', wordsPerLine: 3, box: true })
     expect(ok.summary).toBe('Mudei a legenda.')
+    // no 16:9 o estilo traz 5 palavras numa linha; no vertical, 2 e sem caixa
+    expect(plan([{ op: 'captions', enabled: true, style: 'natural' }]).project.captions).toMatchObject({ style: 'natural', wordsPerLine: 5, box: true })
+    const v = planAiEdit({ project: project(), words: demo.words, durationMs, format: 'vertical', ops: [{ op: 'captions', enabled: true, style: 'karaoke' }] })
+    expect(v.project.captions).toMatchObject({ style: 'karaoke', wordsPerLine: 2, box: false })
+    expect(planAiEdit({ project: project(), words: demo.words, durationMs, format: 'vertical', ops: [{ op: 'captions', wordsPerLine: 4 }] }).refused[0]!.why).toBe('palavras por linha vai de 1 a 3')
     expect(plan([{ op: 'captions', style: 'neon' }]).refused[0]!.why).toBe('o estilo de legenda "neon" não existe')
-    expect(plan([{ op: 'captions', wordsPerLine: 9 }]).refused[0]!.why).toBe('palavras por linha vai de 1 a 5')
+    expect(plan([{ op: 'captions', wordsPerLine: 9 }]).refused[0]!.why).toBe('palavras por linha vai de 1 a 6')
     expect(plan([{ op: 'captions' }]).refused[0]!.why).toBe('não diz o que mudar na legenda')
     expect(plan([{ op: 'captions', enabled: false }]).refused[0]!.why).toBe('a legenda já está assim')
   })

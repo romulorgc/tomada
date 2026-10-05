@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HOOK_MS, projectForFormat } from '@shared/vertical'
+import { HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, projectForFormat } from '@shared/vertical'
 import { createProject } from '@shared/project'
 import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, evaluateScene, prepareEvents, type FormatSpec } from '@shared/scene'
 import type { CursorSample, Project, Word } from '@shared/types'
@@ -99,7 +99,43 @@ describe('a legenda dentro da cena (a mesma evaluateScene da prévia e da export
     expect(v.style.style).toBe('highlight')
     expect(v.style.safeY).not.toBeNull() // só o vertical tem a caixa segura
     expect(h.style.safeY).toBeNull()
-    expect(v.style.fontPx).toBeCloseTo(92 * 1.2, 6)
+    expect(v.style.fontPx).toBeCloseTo(80 * 1.2, 6) // o Destaque do vertical: corpo de 80 px × o tamanho escolhido
+  })
+
+  it('a posição padrão da legenda vem do LAYOUT: 70% (V-A), a emenda tela/câmera em 50% (V-B), 71% (tela na largura)', () => {
+    const caps = { enabled: true, style: 'natural' as const, wordsPerLine: 2, box: false }
+    const at = (layout: 'screen-focus' | 'stack' | 'screen-wide' | 'camera', extra: Record<string, unknown> = {}) =>
+      sceneAt(doc({ vertical: { layout, layouts: [], zooms: [], captions: { ...caps, ...extra } } }), 1000, VERTICAL_1080).captions!.style.centerY
+    expect(at('screen-focus')).toBeCloseTo(0.7 * 1920, 6)
+    expect(at('camera')).toBeCloseTo(0.7 * 1920, 6)
+    expect(at('stack')).toBeCloseTo(960, 6)
+    expect(at('screen-wide')).toBeCloseTo(0.71 * 1920, 6)
+    // o que a pessoa escolheu manda mais que o layout
+    expect(at('stack', { positionY: 0.8 })).toBeCloseTo(0.8 * 1920, 6)
+    expect(at('stack', { position: 'top' })).toBeCloseTo(0.22 * 1920, 6)
+    // o 16:9 não muda com o layout: y 94%
+    expect(sceneAt(doc({ captions: { ...on.captions, style: 'natural', box: true } }), 1000, HORIZONTAL_1080).captions!.style.centerY).toBeCloseTo(0.94 * 1080, 6)
+  })
+
+  it('na troca de layout a legenda desliza junto (sem salto no meio de uma página)', () => {
+    const d = doc({
+      vertical: { layout: 'screen-focus', layouts: [{ id: 'l1', start: 500, end: 9000, layout: 'stack' }], zooms: [], captions: { enabled: true, style: 'natural', wordsPerLine: 2, box: false } }
+    })
+    const ys = [400, 500, 600, 700, 800, 900, 1000].map((t) => sceneAt(d, t, VERTICAL_1080).captions!.style.centerY)
+    expect(ys[0]).toBeCloseTo(0.7 * 1920, 3) // antes da troca
+    expect(ys[ys.length - 1]).toBeLessThan(ys[0]!) // sobe para a emenda
+    for (let k = 1; k < ys.length; k++) expect(ys[k]!).toBeLessThanOrEqual(ys[k - 1]! + 1e-9) // nunca volta
+    for (const y of ys.slice(2, 5)) {
+      expect(y).toBeLessThan(0.7 * 1920 - 1) // no meio da troca a legenda está a caminho,
+      expect(y).toBeGreaterThan(960 + 1) // e ainda não chegou: nunca um salto de uma vez
+    }
+  })
+
+  it('a palavra falada em destaque vem ligada no vertical e se desliga pela visão do formato', () => {
+    const on1 = doc({ vertical: { layout: 'screen-focus', layouts: [], zooms: [], captions: { enabled: true, style: 'natural' } } })
+    expect(sceneAt(on1, 1000, VERTICAL_1080).captions!.style.active.mode).toBe('color')
+    const off = doc({ vertical: { layout: 'screen-focus', layouts: [], zooms: [], captions: { enabled: true, style: 'natural', highlightWord: false } } })
+    expect(sceneAt(off, 1000, VERTICAL_1080).captions!.style.active.mode).toBe('none')
   })
 
   it('a chave identifica trilha + página (o cache de layout do texto não mistura páginas)', () => {
@@ -112,20 +148,43 @@ describe('a legenda dentro da cena (a mesma evaluateScene da prévia e da export
 describe('o título de gancho do vertical', () => {
   const withHook = doc({ vertical: { layout: 'screen-focus', layouts: [], zooms: [], hook: '  Grave sua tela em 1 clique  ' } })
 
-  it('aparece só nos 2 primeiros segundos de SAÍDA, com o texto aparado', () => {
-    expect(HOOK_MS).toBe(2000)
+  it('aparece nos 4 primeiros segundos de SAÍDA (E1: fica ≥ 4 s), com o texto aparado', () => {
+    expect(HOOK_MS).toBe(4000)
     const early = sceneAt(withHook, 500, VERTICAL_1080).hook!
     expect(early.text).toBe('Grave sua tela em 1 clique')
     expect(early.alpha).toBeGreaterThan(0)
     expect(sceneAt(withHook, 1000, VERTICAL_1080).hook!.alpha).toBe(1)
-    expect(sceneAt(withHook, 2100, VERTICAL_1080).hook).toBeNull()
+    expect(sceneAt(withHook, 3000, VERTICAL_1080).hook!.alpha).toBe(1) // ainda lá, e inteiro, aos 3 s
+    expect(sceneAt(withHook, 3900, VERTICAL_1080).hook!.alpha).toBeLessThan(1) // o fade de saída
+    expect(sceneAt(withHook, 4100, VERTICAL_1080).hook).toBeNull()
     expect(sceneAt(withHook, 9000, VERTICAL_1080).hook).toBeNull()
   })
 
   it('o tempo do gancho é o de SAÍDA: cortar o começo traz o gancho para o que sobrou do começo', () => {
     const cutStart = doc({ vertical: withHook.vertical!, cuts: [{ id: 'c1', start: 0, end: 3000, reason: 'manual', enabled: true }] })
     expect(sceneAt(cutStart, 3500, VERTICAL_1080).hook).not.toBeNull() // saída = 500 ms
-    expect(sceneAt(cutStart, 5500, VERTICAL_1080).hook).toBeNull() // saída = 2500 ms
+    expect(sceneAt(cutStart, 6500, VERTICAL_1080).hook).not.toBeNull() // saída = 3500 ms
+    expect(sceneAt(cutStart, 7500, VERTICAL_1080).hook).toBeNull() // saída = 4500 ms
+  })
+
+  it('o gancho e a bolha da câmera NUNCA se sobrepõem: com o gancho na tela a bolha fica abaixo dele, e volta quando ele sai', () => {
+    const bubble = (t: number, v = withHook.vertical!) => sceneAt(doc({ vertical: v }), t, VERTICAL_1080).camera!.dest
+    const hookBottom = HOOK_BAND.bottom
+    for (const t of [700, 1500, 3000]) expect(bubble(t).y, `t=${t}`).toBeGreaterThanOrEqual(HOOK_CLEAR_Y - 1)
+    expect(bubble(1500).y).toBeGreaterThanOrEqual(hookBottom) // abaixo da faixa inteira do gancho
+    expect(bubble(6000).y).toBeCloseTo(270, 0) // sem o gancho a bolha volta ao canto da caixa segura
+    // a descida acompanha o fade: nada de salto de uma vez
+    const path = [0, 50, 100, 150, 300].map((t) => bubble(t).y)
+    expect(path[0]).toBeCloseTo(270, 0)
+    for (let k = 1; k < path.length; k++) expect(path[k]!).toBeGreaterThanOrEqual(path[k - 1]! - 1e-9)
+    // com a bolha em outro canto (embaixo) o gancho não a toca: ela fica onde estava
+    const bottom = { ...withHook.vertical!, camera: { corner: 'bottom-right' as const } }
+    expect(bubble(1500, bottom).y).toBe(bubble(6000, bottom).y)
+    // no V-B a câmera é metade do quadro: não se mexe; sem gancho, nada se mexe
+    const stack = { ...withHook.vertical!, layout: 'stack' as const }
+    expect(bubble(1500, stack)).toEqual(bubble(6000, stack))
+    const noHook = { layout: 'screen-focus' as const, layouts: [], zooms: [] }
+    expect(bubble(1500, noHook).y).toBeCloseTo(270, 0)
   })
 
   it('não existe no 16:9, nem sem texto', () => {
@@ -134,10 +193,12 @@ describe('o título de gancho do vertical', () => {
     expect(sceneAt(doc(), 500, VERTICAL_1080).hook).toBeNull()
   })
 
-  it('fica na faixa y 280–440 e na fonte Anton', () => {
+  it('fica na faixa de centro y 15% (288 px), com a maiúscula de 46 px, e na fonte Anton', () => {
     const h = sceneAt(withHook, 1000, VERTICAL_1080).hook!
-    expect(h.style.bandTop).toBe(280)
-    expect(h.style.bandBottom).toBe(440)
+    expect(h.style.bandTop).toBe(228)
+    expect(h.style.bandBottom).toBe(348)
+    expect((h.style.bandTop + h.style.bandBottom) / 2 / 1920).toBeCloseTo(0.15, 6)
+    expect(h.style.fontPx).toBe(54) // Anton: a maiúscula é 0,859 do corpo = 46 px
     expect(h.style.fontFamily).toContain('Tomada Anton')
   })
 })

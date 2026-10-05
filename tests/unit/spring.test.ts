@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { CAMERA_SPRING, CURSOR_SPRING, dampingRatio, naturalFrequency, step, stepMany, type SpringParams } from '@shared/spring'
+import {
+  CAMERA_SPRING,
+  CURSOR_SPRING,
+  ZOOM_MOTION_MS,
+  ZOOM_SCALE_SPRING,
+  dampingRatio,
+  naturalFrequency,
+  riseTimeSeconds,
+  springWithRiseTime,
+  step,
+  stepMany,
+  type SpringParams
+} from '@shared/spring'
 
 const DT = 1 / 60
 const critical: SpringParams = { k: 200, c: 2 * Math.sqrt(200 * 2.25), m: 2.25 }
@@ -126,5 +138,30 @@ describe('mola analítica', () => {
     expect(() => step(0, 0, 1, { k: 0, c: 1, m: 1 }, DT)).toThrow(RangeError)
     expect(() => step(0, 0, 1, { k: 1, c: -1, m: 1 }, DT)).toThrow(RangeError)
     expect(() => step(0, 0, 1, { k: 1, c: 1, m: 0 }, DT)).toThrow(RangeError)
+  })
+})
+
+describe('a mola da escala do zoom (movimento medido nos vídeos reais, E1)', () => {
+  it('chega a 95% em 1,0 s no 16:9 e em 0,6 s no vertical', () => {
+    expect(riseTimeSeconds(ZOOM_SCALE_SPRING.horizontal) * 1000).toBeCloseTo(ZOOM_MOTION_MS.horizontal, -1)
+    expect(riseTimeSeconds(ZOOM_SCALE_SPRING.vertical) * 1000).toBeCloseTo(ZOOM_MOTION_MS.vertical, -1)
+    expect(ZOOM_MOTION_MS).toEqual({ horizontal: 1000, vertical: 600 })
+  })
+
+  it('só o tempo muda: o amortecimento (a forma do movimento) é o mesmo da mola da câmera', () => {
+    for (const p of [ZOOM_SCALE_SPRING.horizontal, ZOOM_SCALE_SPRING.vertical]) {
+      expect(dampingRatio(p)).toBeCloseTo(dampingRatio(CAMERA_SPRING), 9)
+      expect(p.m).toBe(CAMERA_SPRING.m)
+    }
+    expect(naturalFrequency(ZOOM_SCALE_SPRING.horizontal)).toBeLessThan(naturalFrequency(ZOOM_SCALE_SPRING.vertical))
+    expect(naturalFrequency(ZOOM_SCALE_SPRING.vertical)).toBeLessThan(naturalFrequency(CAMERA_SPRING))
+  })
+
+  it('springWithRiseTime(base, tempo da própria base) devolve a mesma mola; e converge para o alvo', () => {
+    const same = springWithRiseTime(CAMERA_SPRING, riseTimeSeconds(CAMERA_SPRING) * 1000)
+    expect(same.k).toBeCloseTo(CAMERA_SPRING.k, 6)
+    expect(same.c).toBeCloseTo(CAMERA_SPRING.c, 6)
+    const end = stepMany({ x: 0, v: 0 }, 1, ZOOM_SCALE_SPRING.horizontal, DT, 60 * 8)
+    expect(end.x).toBeCloseTo(1, 4)
   })
 })

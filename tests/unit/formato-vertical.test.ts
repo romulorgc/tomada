@@ -2,13 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { processCursor, type CursorGrid } from '@shared/cursor'
 import { createEditorStore } from '@shared/editor-store'
 import { createProject, parseProject, serializeProject } from '@shared/project'
-import { DEFAULT_VERTICAL_ZOOM_PRESET, VERTICAL_ZOOM_SCALE, ZOOM_PRESETS, zoomPresetFor } from '@shared/zoom'
+import { DEFAULT_VERTICAL_ZOOM_PRESET, VERTICAL_ZOOM_MAX_PER_MIN, VERTICAL_ZOOM_SCALE, ZOOM_PRESETS, zoomPresetFor } from '@shared/zoom'
+import { keptRanges } from '@shared/timeline'
 import {
   FORMAT_CAPTION_KEYS,
+  MIN_DWELL_MS,
   QUIET_MIN_MS,
   VERTICAL_BUBBLE_SIZE,
   VERTICAL_CAPTION_DEFAULTS,
   autoVerticalLayouts,
+  enforceMinDwell,
   ensureVertical,
   mergeFormatView,
   projectForFormat,
@@ -54,14 +57,14 @@ describe('projectForFormat: a visão de cada formato', () => {
     expect(projectForFormat(d, 'horizontal')).toBe(d)
   })
 
-  it('o vertical sem edição própria parte do padrão: V-A, sem zoom, bolha 250 px no canto superior esquerdo, legenda Destaque ligada', () => {
+  it('o vertical sem edição própria parte do padrão: V-A, sem zoom, bolha 250 px no canto superior esquerdo, legenda Natural em caixa mista ligada', () => {
     const v = projectForFormat(doc(), 'vertical')
     expect(v.zooms).toEqual([])
     expect(v.layouts).toEqual([])
     expect(v.style.defaultLayout).toBe('screen-focus')
     expect(v.style.camera.corner).toBe('top-left')
     expect(v.style.camera.size).toBeCloseTo(VERTICAL_BUBBLE_SIZE, 9)
-    expect(v.captions).toMatchObject({ enabled: true, style: 'highlight', wordsPerLine: 3, position: 'bottom', box: false })
+    expect(v.captions).toMatchObject({ enabled: true, style: 'natural', wordsPerLine: 2, position: 'bottom', box: false })
     expect(v.zoomPreset).toBeUndefined()
   })
 
@@ -151,8 +154,8 @@ describe('projectForFormat: a visão de cada formato', () => {
   })
 
   it('os campos de legenda de cada formato são os esperados (as cores ficam de fora)', () => {
-    expect([...FORMAT_CAPTION_KEYS]).toEqual(['enabled', 'style', 'wordsPerLine', 'position', 'box', 'size', 'positionY', 'uppercase'])
-    expect(VERTICAL_CAPTION_DEFAULTS).toEqual({ enabled: true, style: 'highlight', wordsPerLine: 3, position: 'bottom', box: false })
+    expect([...FORMAT_CAPTION_KEYS]).toEqual(['enabled', 'style', 'wordsPerLine', 'position', 'box', 'size', 'positionY', 'uppercase', 'highlightWord'])
+    expect(VERTICAL_CAPTION_DEFAULTS).toEqual({ enabled: true, style: 'natural', wordsPerLine: 2, position: 'bottom', box: false })
   })
 })
 
@@ -196,15 +199,19 @@ describe('o documento no disco: legendas e edição vertical', () => {
   })
 })
 
-describe('zoom do vertical: presets de 1,2 a 1,4×', () => {
-  it('o Intenso é o padrão do vertical e as escalas são menores que as do 16:9', () => {
-    expect(DEFAULT_VERTICAL_ZOOM_PRESET).toBe('intense')
-    expect(VERTICAL_ZOOM_SCALE).toEqual({ subtle: 1.2, moderate: 1.3, intense: 1.4 })
-    const h = zoomPresetFor('horizontal', 'intense')
-    const v = zoomPresetFor('vertical', 'intense')
-    expect(h).toEqual(ZOOM_PRESETS.intense)
-    expect(v.scale).toBe(1.4)
-    expect(v.lead).toBe(h.lead) // só a escala muda
+describe('zoom do vertical: presets de 1,2 a 1,5× (E1: mediana 1,2× [1,1–1,4])', () => {
+  it('o Moderado é o padrão do vertical (1,35×, até 3 por minuto) e as escalas são menores que as do 16:9', () => {
+    expect(DEFAULT_VERTICAL_ZOOM_PRESET).toBe('moderate')
+    expect(VERTICAL_ZOOM_SCALE).toEqual({ subtle: 1.2, moderate: 1.35, intense: 1.5 })
+    expect(VERTICAL_ZOOM_MAX_PER_MIN[DEFAULT_VERTICAL_ZOOM_PRESET]).toBe(3)
+    const h = zoomPresetFor('horizontal', 'moderate')
+    const v = zoomPresetFor('vertical', 'moderate')
+    expect(h).toEqual(ZOOM_PRESETS.moderate)
+    expect(v.scale).toBe(1.35)
+    expect(v.maxPerMin).toBe(3)
+    expect(v.scale).toBeLessThan(h.scale)
+    expect(v.maxPerMin).toBeLessThan(h.maxPerMin)
+    expect(v.lead).toBe(h.lead) // só a escala e o teto mudam
     expect(v.hold).toBe(h.hold)
   })
 })
@@ -226,28 +233,101 @@ describe('escolha automática de layout do vertical', () => {
     expect(l).toEqual([{ id: 'layout-v1', start: 0, end: D, layout: 'stack' }])
   })
 
-  it('clique abre atividade: o V-B começa 500 ms depois da atividade e termina 400 ms antes da próxima', () => {
-    // clique em 5000: atividade [4700, 6500]; clique em 20000: atividade [19700, 21500]; tela quieta entre as duas
-    const l = autoVerticalLayouts(input({ clicks: [click(5000), click(20_000)] }))
-    expect(l.map((s) => [s.start, s.end])).toEqual([[0, 4700 - 400], [6500 + 500, 19_700 - 400], [21_500 + 500, D]])
+  /** Digitação de `from` a `to` (uma tecla a cada 500 ms): a tela fica em atividade de `from` a `to + 1000`. */
+  const typing = (from: number, to: number): { t: number }[] => Array.from({ length: Math.floor((to - from) / 500) + 1 }, (_, k) => ({ t: from + k * 500 }))
+
+  it('atividade longa abre o V-A: o V-B começa 500 ms depois da atividade e termina 400 ms antes da próxima', () => {
+    // digitando de 8000 a 15000: atividade [8000, 16000]; a tela fica quieta antes e depois, e cada trecho dura mais que 6 s
+    const l = autoVerticalLayouts(input({ keys: typing(8000, 15_000) }))
+    expect(l.map((s) => [s.start, s.end])).toEqual([[0, 8000 - 400], [16_000 + 500, D]])
     expect(l.every((s) => s.layout === 'stack')).toBe(true)
-    expect(l.map((s) => s.id)).toEqual(['layout-v1', 'layout-v2', 'layout-v3'])
+    expect(l.map((s) => s.id)).toEqual(['layout-v1', 'layout-v2'])
   })
 
-  it('quieto por menos de 2 s não vira V-B (o layout não pisca)', () => {
-    expect(QUIET_MIN_MS).toBe(2000)
+  it('cliques soltos (1,8 s de atividade cada) NÃO piscam o layout: a folga é curta demais e some', () => {
+    const l = autoVerticalLayouts(input({ clicks: [click(5000), click(20_000)] }))
+    expect(l).toEqual([{ id: 'layout-v1', start: 0, end: D, layout: 'stack' }])
+  })
+
+  it('quieto por menos de 3 s não vira V-B (histerese: entrar pede mais que sair)', () => {
+    expect(QUIET_MIN_MS).toBe(3000)
     // cliques a cada 3,5 s: cada pausa de tela é de ~1,7 s
     const clicks = Array.from({ length: 8 }, (_, k) => click(2000 + k * 3500))
     const l = autoVerticalLayouts(input({ clicks, durationMs: 30_000 }))
-    expect(l.filter((s) => s.start > 2000 && s.end < 26_000)).toEqual([])
+    expect(l).toEqual([])
   })
 
-  it('dois V-B separados por menos de 1,5 s viram um só', () => {
-    // atividade curta no meio: dois silêncios de tela separados só pela atividade (~1,8 s de janela de clique)
-    const l = autoVerticalLayouts(input({ keys: [{ t: 12_000 }] })) // atividade [12000, 13000]
-    expect(l).toHaveLength(2) // 13000+500 − (12000−400) = 1,9 s de intervalo: acima de 1,5, não funde
-    const closer = autoVerticalLayouts(input({ keys: [{ t: 12_000 }, { t: 12_600 }] }))
-    expect(closer.length).toBeLessThanOrEqual(2)
+  it('PERMANÊNCIA MÍNIMA: um V-A curto entre dois V-B é absorvido; um V-B curto no meio do V-A some', () => {
+    expect(MIN_DWELL_MS).toBe(6000)
+    // atividade curta no meio de uma fala longa: o V-A (~1,9 s) não dura 6 s, então o V-B continua
+    const short = autoVerticalLayouts(input({ keys: [{ t: 12_000 }] })) // atividade [12000, 13000]
+    expect(short).toEqual([{ id: 'layout-v1', start: 0, end: D, layout: 'stack' }])
+    // pausa de 4 s (≥ 3 s: candidata) no meio de uma atividade contínua: o V-B de 4 s não dura 6 s e some
+    const busy = [...typing(0, 8000), ...typing(12_500, 30_000)] // atividade [0, 9000] e [12500, 31000]; quieto [9000, 12500] = 3,5 s
+    expect(autoVerticalLayouts(input({ keys: busy }))).toEqual([])
+  })
+
+  it('PERMANÊNCIA MÍNIMA em qualquer entrada: nenhum trecho, de nenhum dos dois layouts, dura menos de 6 s (tempo de saída)', () => {
+    // 120 s com atividade em rajadas de tamanhos variados, determinístico
+    const total = 120_000
+    const keys: { t: number }[] = []
+    let t = 4000
+    let k = 0
+    while (t < total - 3000) {
+      const burst = 1500 + ((k * 2791) % 9000) // rajadas de 1,5 a 10,5 s
+      keys.push(...typing(t, t + burst))
+      t += burst + 2500 + ((k * 4673) % 11_000) // e folgas de 2,5 a 13,5 s
+      k++
+    }
+    const kept = keptRanges(total, [
+      { start: 30_000, end: 41_000, enabled: true },
+      { start: 70_000, end: 72_500, enabled: true }
+    ])
+    for (const withKept of [false, true]) {
+      const l = autoVerticalLayouts(input({ durationMs: total, keys, cursor: grid(total), speech: [{ start: 0, end: total }], ...(withKept ? { kept } : {}) }))
+      const bounds: { start: number; end: number; on: boolean }[] = []
+      let at = 0
+      for (const s of l) {
+        if (s.start > at) bounds.push({ start: at, end: s.start, on: false })
+        bounds.push({ start: s.start, end: s.end, on: true })
+        at = s.end
+      }
+      if (at < total) bounds.push({ start: at, end: total, on: false })
+      expect(bounds.length, 'a entrada tem de produzir trocas para o teste valer').toBeGreaterThan(2)
+      for (const b of bounds) {
+        const seen = withKept ? keptRanges(total, [{ start: 30_000, end: 41_000, enabled: true }, { start: 70_000, end: 72_500, enabled: true }]).reduce((sum, r) => sum + Math.max(0, Math.min(b.end, r.end) - Math.max(b.start, r.start)), 0) : b.end - b.start
+        expect(seen, `${b.on ? 'V-B' : 'V-A'} de ${b.start} a ${b.end} (kept: ${withKept})`).toBeGreaterThanOrEqual(MIN_DWELL_MS)
+      }
+    }
+  })
+
+  it('a permanência conta o tempo de SAÍDA: um V-B de 8 s com 4 s cortados dentro vale 4 s e some', () => {
+    const keys = [...typing(0, 8000), ...typing(18_000, 28_000)] // atividade [0, 9000] e [18000, 29000]; quieto [9000, 18000]
+    const noCuts = autoVerticalLayouts(input({ keys }))
+    expect(noCuts).toHaveLength(1)
+    expect(noCuts[0]).toMatchObject({ start: 9500, end: 17_600 }) // 8,1 s de V-B
+    const kept = keptRanges(D, [{ start: 11_000, end: 15_000, enabled: true }]) // 4 s cortados DENTRO do V-B
+    expect(autoVerticalLayouts(input({ keys, kept }))).toEqual([])
+  })
+
+  it('enforceMinDwell: o mais curto troca de estado e se junta aos vizinhos; termina sempre; empate pelo mais cedo', () => {
+    const runs = (...r: [number, number, boolean][]) => r.map(([start, end, on]) => ({ start, end, on }))
+    // folga curta entre dois V-B: tudo vira V-B
+    expect(enforceMinDwell(runs([0, 10_000, true], [10_000, 13_000, false], [13_000, 30_000, true]), 6000)).toEqual(runs([0, 30_000, true]))
+    // V-B curto no meio do V-A: tudo vira V-A
+    expect(enforceMinDwell(runs([0, 10_000, false], [10_000, 13_000, true], [13_000, 30_000, false]), 6000)).toEqual(runs([0, 30_000, false]))
+    // já cumpre: não muda nada (e não mexe no que recebeu)
+    const ok = runs([0, 7000, true], [7000, 14_000, false], [14_000, 30_000, true])
+    expect(enforceMinDwell(ok, 6000)).toEqual(ok)
+    // a ponta curta se junta ao vizinho
+    expect(enforceMinDwell(runs([0, 3000, false], [3000, 30_000, true]), 6000)).toEqual(runs([0, 30_000, true]))
+    // um trecho só (ou nenhum) devolve como está, mesmo curto
+    expect(enforceMinDwell(runs([0, 2000, true]), 6000)).toEqual(runs([0, 2000, true]))
+    expect(enforceMinDwell([], 6000)).toEqual([])
+    // todos curtos: termina e sobra um só
+    expect(enforceMinDwell(runs([0, 2000, true], [2000, 4000, false], [4000, 6000, true], [6000, 8000, false]), 6000)).toHaveLength(1)
+    // com o tempo de saída: o trecho de 8 s com 5 s cortados vale 3 s
+    expect(enforceMinDwell(runs([0, 20_000, false], [20_000, 28_000, true], [28_000, 40_000, false]), 6000, keptRanges(40_000, [{ start: 21_000, end: 26_000, enabled: true }]))).toEqual(runs([0, 40_000, false]))
   })
 
   it('o cursor andando conta como atividade; parado, não', () => {
@@ -300,13 +380,13 @@ describe('ensureVertical: entrar no 9:16 pela primeira vez', () => {
   const D = 30_000
   const data = { clicks: [click(5000), click(6500), click(20_000)], keys: [], grid: grid(D) }
 
-  it('gera zooms Intenso de vertical (1,4×) e layouts pela atividade, e marca o preset', () => {
+  it('gera zooms do padrão do vertical (Moderado, 1,35×) e layouts pela atividade, e marca o preset', () => {
     const d = doc()
     const next = ensureVertical(d, data, { durationMs: D, words: speech(0, D) })
     expect(next).not.toBe(d)
-    expect(next.vertical?.zoomPreset).toBe('intense')
+    expect(next.vertical?.zoomPreset).toBe('moderate')
     expect(next.vertical!.zooms.length).toBeGreaterThan(0)
-    expect(next.vertical!.zooms.every((z) => z.scale === 1.4 && z.origin === 'auto' && z.focus === 'auto')).toBe(true)
+    expect(next.vertical!.zooms.every((z) => z.scale === 1.35 && z.origin === 'auto' && z.focus === 'auto')).toBe(true)
     expect(next.vertical!.layouts.length).toBeGreaterThan(0)
     expect(next.vertical!.layout).toBe('screen-focus')
     expect(next.zooms).toEqual(d.zooms) // o 16:9 não é tocado

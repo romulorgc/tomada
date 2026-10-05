@@ -52,7 +52,7 @@ export type LayoutKind =
   | 'side-by-side' // tela e câmera lado a lado (horizontal)
   | 'screen' // só tela
   | 'camera' // só câmera
-  | 'stack' // vertical V-B: câmera em cima, recorte da tela embaixo
+  | 'stack' // vertical V-B: tela em cima, câmera embaixo (ou o contrário, com `VerticalEdit.cameraTop`)
   | 'screen-focus' // vertical V-A: recorte da tela ocupa tudo (segue o cursor), câmera em bolha
   | 'screen-wide' // vertical V-C: a tela inteira na largura, fundo = o mesmo vídeo desfocado e escurecido
 
@@ -118,6 +118,8 @@ export type Style = {
   defaultLayout: LayoutKind
   camera: CameraStyle
   cursor: CursorStyle
+  /** Só na VISÃO do vertical (vem de `VerticalEdit.cameraTop`): no V-B a câmera fica em cima e a tela embaixo. Nunca é gravada aqui. */
+  stackCameraTop?: boolean
 }
 
 /** Intensidade do zoom automático. */
@@ -133,7 +135,7 @@ export type CaptionStyleId = 'natural' | 'highlight' | 'clean' | 'karaoke'
 export type CaptionStyle = {
   enabled: boolean
   style: CaptionStyleId
-  /** Palavras por linha (a legenda tem até 2 linhas). */
+  /** Palavras por linha. A legenda é de UMA linha (a segunda só existe se as palavras não cabem na largura): 2 no vertical, 5 no 16:9. */
   wordsPerLine: number
   /** Onde fica quando `positionY` não foi escolhido. */
   position: 'bottom' | 'center' | 'top'
@@ -149,6 +151,8 @@ export type CaptionStyle = {
   positionY?: number
   /** Maiúsculas; ausente = o padrão do estilo (só o Destaque usa). */
   uppercase?: boolean
+  /** A palavra falada acesa (na cor de destaque); ausente = ligada. A pessoa pode desligar. */
+  highlightWord?: boolean
 }
 
 export type ClipFormat = 'vertical' | 'horizontal'
@@ -169,10 +173,12 @@ export type VerticalEdit = {
   zoomPreset?: ZoomPresetId | 'off'
   /** Bolha da câmera no vertical: posição na CAIXA SEGURA e tamanho (fração do lado menor, 250 px = 0,2315). */
   camera?: { corner?: Corner; size?: number }
-  /** Título de gancho (aparece nos 2 primeiros segundos de saída). Vazio = nenhum. */
+  /** V-B com a câmera EM CIMA e a tela embaixo (o padrão é a tela em cima e a câmera embaixo, o de 6 dos 10 canais medidos). */
+  cameraTop?: boolean
+  /** Título de gancho (aparece nos 4 primeiros segundos de saída). Vazio = nenhum. */
   hook?: string
   /** Legenda só do vertical (o resto, como as cores, vale para os dois formatos). */
-  captions?: Partial<Pick<CaptionStyle, 'enabled' | 'style' | 'wordsPerLine' | 'position' | 'box' | 'size' | 'positionY' | 'uppercase'>>
+  captions?: Partial<Pick<CaptionStyle, 'enabled' | 'style' | 'wordsPerLine' | 'position' | 'box' | 'size' | 'positionY' | 'uppercase' | 'highlightWord'>>
 }
 
 /** As três notas de um corte (0-100): gancho nos 3 primeiros segundos, fluxo (começo, meio e fim) e valor para quem assiste. */

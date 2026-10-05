@@ -3,17 +3,22 @@ import { processCursor, type CursorGrid } from '@shared/cursor'
 import {
   DEAD_ZONE,
   MAX_ZOOM_SCALE,
+  VERTICAL_ZOOM_MAX_PER_MIN,
+  ZOOM_CAP_WINDOW_MS,
   ZOOM_PRESETS,
   computeCameraPath,
   findDwells,
   findTypingBursts,
   generateAutoZooms,
   isSweeping,
+  limitPerMinute,
   mergeAutoZooms,
   sampleCameraPath,
   visibleRect,
+  zoomPresetFor,
   type CameraPath
 } from '@shared/zoom'
+import { ZOOM_MOTION_MS, ZOOM_SCALE_SPRING } from '@shared/spring'
 import { cropView } from '@shared/vertical'
 import type { ClickEvent, CursorSample, KeyEvent, Zoom } from '@shared/types'
 
@@ -50,31 +55,37 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
     }
   })
 
-  it('a tabela do projeto está em ms', () => {
-    expect(ZOOM_PRESETS.subtle).toEqual({ lead: 600, hold: 2000, mergeGap: 2500, scale: 1.4, minGap: 2500 })
-    expect(ZOOM_PRESETS.moderate).toEqual({ lead: 500, hold: 1400, mergeGap: 1800, scale: 1.7, minGap: 1800 })
-    expect(ZOOM_PRESETS.intense).toEqual({ lead: 400, hold: 900, mergeGap: 1200, scale: 2.0, minGap: 1200 })
+  it('a tabela está em ms e vem dos vídeos reais medidos (E1): 1,5×, intervalo mínimo de 6 s no padrão, teto de 5 por minuto', () => {
+    expect(ZOOM_PRESETS.subtle).toEqual({ lead: 800, hold: 2000, mergeGap: 6000, scale: 1.3, minGap: 8000, maxPerMin: 3 })
+    expect(ZOOM_PRESETS.moderate).toEqual({ lead: 600, hold: 1500, mergeGap: 6000, scale: 1.5, minGap: 6000, maxPerMin: 5 })
+    expect(ZOOM_PRESETS.intense).toEqual({ lead: 500, hold: 1200, mergeGap: 3500, scale: 1.8, minGap: 3500, maxPerMin: 8 })
+    // o Sutil < Moderado < Intenso em escala, em frequência e na pressa
+    expect(ZOOM_PRESETS.subtle.scale).toBeLessThan(ZOOM_PRESETS.moderate.scale)
+    expect(ZOOM_PRESETS.moderate.scale).toBeLessThan(ZOOM_PRESETS.intense.scale)
+    expect(ZOOM_PRESETS.subtle.maxPerMin).toBeLessThan(ZOOM_PRESETS.moderate.maxPerMin)
+    expect(ZOOM_PRESETS.moderate.maxPerMin).toBeLessThan(ZOOM_PRESETS.intense.maxPerMin)
+    expect(ZOOM_PRESETS.moderate.minGap).toBeGreaterThan(ZOOM_PRESETS.intense.minGap)
   })
 
-  it('fusão: janelas separadas por menos que o intervalo viram um zoom só (moderado: 1,8 s)', () => {
-    // janelas [4500,6400] e [N-500, N+1400]: intervalo = N − 500 − 6400
-    const merged = generateAutoZooms({ clicks: [click(5000), click(8600)], keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
+  it('fusão: janelas separadas por menos que o intervalo viram um zoom só (moderado: 6 s)', () => {
+    // janelas [4400,6500] e [N-600, N+1500]: intervalo = N − 600 − 6500
+    const merged = generateAutoZooms({ clicks: [click(5000), click(12_000)], keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
     expect(merged).toHaveLength(1)
-    expect(merged[0]).toMatchObject({ start: 4500, end: 10_000 })
-    const apart = generateAutoZooms({ clicks: [click(5000), click(8700)], keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
-    expect(apart).toHaveLength(2) // intervalo exatamente 1800: não funde
-    expect(apart[1]).toMatchObject({ start: 8200, end: 10_100 })
+    expect(merged[0]).toMatchObject({ start: 4400, end: 13_500 })
+    const apart = generateAutoZooms({ clicks: [click(5000), click(13_100)], keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
+    expect(apart).toHaveLength(2) // intervalo exatamente 6000: não funde
+    expect(apart[1]).toMatchObject({ start: 12_500, end: 14_600 })
   })
 
   it('cadeia de cliques vira um único segmento que segue o cursor', () => {
     const clicks = [5000, 6500, 8000, 9500].map((t) => click(t))
     const z = generateAutoZooms({ clicks, keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
     expect(z).toHaveLength(1)
-    expect(z[0]).toMatchObject({ start: 4500, end: 10_900, focus: 'auto' })
+    expect(z[0]).toMatchObject({ start: 4400, end: 11_000, focus: 'auto' })
   })
 
   it('intervalo mínimo entre zooms: o que passa de mergeGap mas fica abaixo de minGap também funde', () => {
-    const preset = { lead: 500, hold: 1400, mergeGap: 500, scale: 1.7, minGap: 3000 }
+    const preset = { lead: 500, hold: 1400, mergeGap: 500, scale: 1.7, minGap: 3000, maxPerMin: 99 }
     const z = generateAutoZooms({ clicks: [click(5000), click(9800)], keys: [], cursor: grid, duration: 60_000, preset })
     expect(z).toHaveLength(1) // intervalo 2900 < 3000
     const far = generateAutoZooms({ clicks: [click(5000), click(10_300)], keys: [], cursor: grid, duration: 60_000, preset })
@@ -93,14 +104,14 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
     const keys = keysAt(30_000, 8, 140)
     const z = generateAutoZooms({ clicks: [click(10_000, 0.25, 0.7)], keys, cursor: grid, duration: 60_000, preset: 'moderate' })
     expect(z).toHaveLength(2)
-    expect(z[1]).toMatchObject({ start: 29_500, end: 30_980 + 1400, focus: { x: 0.25, y: 0.7 } })
+    expect(z[1]).toMatchObject({ start: 29_400, end: 30_980 + 1500, focus: { x: 0.25, y: 0.7 } })
   })
 
   it('digitação logo depois de um clique funde com ele (o foco passa a seguir o cursor)', () => {
     const z = generateAutoZooms({ clicks: [click(29_000, 0.4, 0.4)], keys: keysAt(30_000, 6, 200), cursor: grid, duration: 60_000, preset: 'moderate' })
     expect(z).toHaveLength(1)
     expect(z[0]!.focus).toBe('auto')
-    expect(z[0]!.start).toBe(28_500)
+    expect(z[0]!.start).toBe(28_400)
   })
 
   it('poucas teclas ou muito espaçadas não são rajada', () => {
@@ -137,7 +148,7 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
 
     const withClick = generateAutoZooms({ clicks: [click(8000, 0.8, 0.2)], keys: [], cursor: grid2, duration: 10_000, preset: 'moderate' })
     expect(withClick).toHaveLength(1)
-    expect(withClick[0]!.start).toBe(7500) // só o zoom do clique; o dwell não entra
+    expect(withClick[0]!.start).toBe(7400) // só o zoom do clique; o dwell não entra
   })
 
   it('dwell mede 450–2600 ms, raio 0,02, e ignora o cursor estacionado desde o começo', () => {
@@ -168,6 +179,44 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
     const merged = mergeAutoZooms([manual, ...z], generateAutoZooms({ clicks: [click(50_000)], keys: [], cursor: grid, duration: 60_000, preset: 'subtle' }))
     expect(merged.map((m) => m.origin)).toEqual(['manual', 'auto'])
     expect(merged[0]).toEqual(manual)
+  })
+
+  it('TETO por minuto: em nenhuma janela de 60 s começam mais zooms que o teto do preset', () => {
+    // um clique a cada 10 s durante 4 min: sem o teto seriam 24 zooms (as janelas ficam 7,9 s separadas, acima do intervalo mínimo)
+    const clicks = Array.from({ length: 24 }, (_, k) => click(5000 + k * 10_000))
+    const long = still(0.5, 0.5, 250_000)
+    for (const id of ['subtle', 'moderate', 'intense'] as const) {
+      const cap = ZOOM_PRESETS[id].maxPerMin
+      const z = generateAutoZooms({ clicks, keys: [], cursor: long, duration: 250_000, preset: id })
+      expect(z.length, id).toBeGreaterThan(0)
+      for (let i = 0; i + cap < z.length; i++) expect(z[i + cap]!.start - z[i]!.start, `${id}: janela a partir do zoom ${i}`).toBeGreaterThanOrEqual(ZOOM_CAP_WINDOW_MS)
+    }
+    const moderate = generateAutoZooms({ clicks, keys: [], cursor: long, duration: 250_000, preset: 'moderate' })
+    expect(moderate.length).toBeLessThan(24) // o teto tirou alguns dos 24 cliques
+    expect(moderate.length).toBeGreaterThanOrEqual(15) // mas não esvaziou: ~5 por minuto
+  })
+
+  it('o teto do vertical é 3 por minuto no padrão (2 no Sutil, 5 no Intenso) e a escala é 1,35×', () => {
+    expect(VERTICAL_ZOOM_MAX_PER_MIN).toEqual({ subtle: 2, moderate: 3, intense: 5 })
+    const v = zoomPresetFor('vertical', 'moderate')
+    expect(v).toMatchObject({ scale: 1.35, maxPerMin: 3, lead: ZOOM_PRESETS.moderate.lead, hold: ZOOM_PRESETS.moderate.hold })
+    const clicks = Array.from({ length: 12 }, (_, k) => click(5000 + k * 10_000))
+    const z = generateAutoZooms({ clicks, keys: [], cursor: still(0.5, 0.5, 130_000), duration: 130_000, preset: v })
+    expect(z.every((x) => x.scale === 1.35)).toBe(true)
+    for (let i = 0; i + 3 < z.length; i++) expect(z[i + 3]!.start - z[i]!.start).toBeGreaterThanOrEqual(ZOOM_CAP_WINDOW_MS)
+    expect(z.length).toBeLessThanOrEqual(9) // 130 s = 3 janelas de 60 s a 3 por janela, no máximo
+  })
+
+  it('limitPerMinute: sai o zoom de MENOS peso; no empate, o mais curto e depois o mais tardio; sem teto não limita', () => {
+    const w = (start: number, end: number, hits: number) => ({ start, end, hits })
+    const three = [w(0, 3000, 1), w(10_000, 13_000, 4), w(20_000, 23_000, 1)]
+    expect(limitPerMinute(three, 2)).toEqual([w(0, 3000, 1), w(10_000, 13_000, 4)]) // empate de peso: sai o mais tardio
+    expect(limitPerMinute([w(0, 3000, 1), w(10_000, 12_000, 1), w(20_000, 23_000, 3)], 2)).toEqual([w(0, 3000, 1), w(20_000, 23_000, 3)]) // peso igual: sai o mais curto
+    expect(limitPerMinute([w(0, 3000, 2), w(10_000, 13_000, 1), w(20_000, 23_000, 5)], 2)).toEqual([w(0, 3000, 2), w(20_000, 23_000, 5)]) // sai o mais leve
+    expect(limitPerMinute(three, 3)).toEqual(three)
+    for (const none of [0, Infinity, NaN, -1]) expect(limitPerMinute(three, none)).toEqual(three)
+    // zooms a 60 s de distância não contam na mesma janela
+    expect(limitPerMinute([w(0, 3000, 1), w(60_000, 63_000, 1)], 1)).toHaveLength(2)
   })
 
   it('duração zero ou sem eventos não gera zoom', () => {
@@ -254,6 +303,27 @@ describe('computeCameraPath', () => {
       if (path.t[i]! < 4000) expect(path.scale[i]!).toBeGreaterThanOrEqual(path.scale[i - 1]! - 1e-6)
     }
     expect(maxAbs2nd(path.scale)).toBeLessThan(0.03)
+  })
+
+  it('o MOVIMENTO do zoom dura 1,0 s no 16:9 e 0,6 s no vertical (E1): a escala chega a 95% nesse tempo', () => {
+    const tt95 = (spring?: Parameters<typeof computeCameraPath>[2]['scaleSpring']): number => {
+      const path = computeCameraPath({ zooms: [zoom(2000, 9000, 2)] }, still(0.5, 0.5, 10_000), { durationMs: 10_000, ...(spring ? { scaleSpring: spring } : {}) })
+      const i = path.t.findIndex((t, k) => t >= 2000 && path.scale[k]! >= 1.95)
+      return path.t[i]! - 2000
+    }
+    expect(Math.abs(tt95(ZOOM_SCALE_SPRING.horizontal) - ZOOM_MOTION_MS.horizontal)).toBeLessThanOrEqual(25) // passo de 16,7 ms
+    expect(Math.abs(tt95(ZOOM_SCALE_SPRING.vertical) - ZOOM_MOTION_MS.vertical)).toBeLessThanOrEqual(25)
+    expect(tt95()).toBeLessThan(600) // a mola padrão da câmera continua rápida (o foco segue o cursor)
+    expect(tt95(ZOOM_SCALE_SPRING.vertical)).toBeLessThan(tt95(ZOOM_SCALE_SPRING.horizontal))
+  })
+
+  it('o movimento mais lento não derruba o resto: segue sem degrau de velocidade e determinístico', () => {
+    const o = { durationMs: 20_000, scaleSpring: ZOOM_SCALE_SPRING.horizontal }
+    const zs = [zoom(2000, 5000), zoom(8000, 9500, 1.5), zoom(9800, 12_000, 1.5)]
+    const a = computeCameraPath({ zooms: zs }, wander(20_000), o)
+    expect(computeCameraPath({ zooms: zs }, wander(20_000), o)).toEqual(a)
+    expect(maxAbs2nd(a.scale)).toBeLessThan(0.03)
+    expect(Math.max(...a.scale)).toBeLessThanOrEqual(1.7 + 1e-9)
   })
 
   it('a câmera assenta em ~0,4 s: 95% da escala em menos de 0,6 s', () => {

@@ -4,8 +4,8 @@
  * não deixam buraco nem pausa falsa, e o texto corrigido na aba Texto (`wordFixes`) vale. Código puro: sem DOM, sem Node.
  *
  * O que a legenda MOSTRA (páginas) e o que o arquivo SRT/VTT diz (legendas) são segmentações diferentes de propósito:
- * a página é desenho (2 linhas × 3 palavras, a palavra falada acesa); a legenda de arquivo segue a convenção de
- * legenda (até 2 linhas de 42 caracteres, 1 a 6 s).
+ * a página é desenho (UMA linha de 2 palavras no vertical e de 5 no 16:9, a palavra falada acesa); a legenda de arquivo segue a
+ * convenção de legenda (até 2 linhas de 42 caracteres, 1 a 6 s).
  */
 import { struckWords } from './text-edit'
 import { keptRanges, sourceToOutput } from './timeline'
@@ -62,8 +62,10 @@ const SOFT_BREAK = /[,;:]["')\]]*$/u
 // ---------------------------------------------------------------------------
 // Páginas (o que o motor desenha)
 
-/** Quantas linhas uma página tem no máximo (todos os estilos). */
+/** O desenho aceita até 2 linhas, mas só quando as palavras de uma página não cabem na largura (o padrão é UMA linha). */
 export const CAPTION_MAX_LINES = 2
+/** Linhas por página: uma página tem `palavras por linha` palavras (E1: 1 linha × 2 palavras no vertical, 1 × 5 no 16:9). */
+export const CAPTION_PAGE_LINES = 1
 /** Pausa (ms, no tempo de saída) que fecha uma página. */
 export const PAGE_PAUSE_MS = 450
 /** A página aparece um pouco antes da primeira palavra e fica um pouco depois da última. */
@@ -101,19 +103,100 @@ export function shownText(text: string, style: CaptionStyleId): string {
   return cleaned === '' ? text : cleaned
 }
 
-export type CaptionPageOptions = { style: CaptionStyleId; wordsPerLine: number }
+export type CaptionPageOptions = { style: CaptionStyleId; wordsPerLine: number; /** Linhas por página (padrão 1). */ lines?: number }
 
-/** Quantas palavras cabem numa página: palavras por linha × linhas. */
-export function wordsPerPage(wordsPerLine: number): number {
-  return Math.max(1, Math.round(wordsPerLine)) * CAPTION_MAX_LINES
+/** Quantas palavras cabem numa página: palavras por linha × linhas por página (1). */
+export function wordsPerPage(wordsPerLine: number, lines = CAPTION_PAGE_LINES): number {
+  return Math.max(1, Math.round(wordsPerLine)) * Math.max(1, Math.round(lines))
 }
 
 /**
- * Quebra as palavras em páginas: fim de frase, pausa maior que 450 ms (no tempo de SAÍDA: o corte já tirou o silêncio) e
- * o limite de palavras (palavras por linha × 2). Vírgula e dois-pontos quebram quando a página já passou da metade.
+ * Palavras de LIGAÇÃO (artigos, preposições e conjunções curtas): uma página nunca termina numa delas, porque deixa a ideia
+ * pendurada ("ELE NÃO DEIXA E" / "HORÁRIO PARA"). A palavra vai para a página seguinte, junto do que ela liga. A lista do pedido da
+ * R1 (e, o, a, os, as, de, da, do, em, no, na, para, por, se, que, um, uma, com) mais as formas da mesma família.
+ */
+export const LINK_WORDS: ReadonlySet<string> = new Set([
+  'e', 'o', 'a', 'os', 'as', 'de', 'da', 'do', 'das', 'dos', 'em', 'no', 'na', 'nos', 'nas', 'para', 'pra', 'pro', 'por', 'se', 'que',
+  'um', 'uma', 'uns', 'umas', 'com', 'ao', 'aos', 'à', 'às', 'num', 'numa', 'pelo', 'pela', 'ou', 'mas', 'nem'
+])
+
+/** A palavra (sem pontuação nas pontas, em minúsculas) é de ligação, e NÃO termina em pontuação (uma vírgula já é uma parada natural)? */
+export function isDanglingLink(text: string): boolean {
+  if (SENTENCE_END.test(text) || SOFT_BREAK.test(text)) return false
+  const bare = text.toLocaleLowerCase('pt-BR').replace(/[^\p{L}]/gu, '')
+  return LINK_WORDS.has(bare)
+}
+
+/** Quantas palavras uma página pode ter além do limite quando é preciso para não terminar numa ligação. */
+const MAX_OVERFLOW = 3
+
+/** Custos da quebra de página (menor é melhor): a ordem de grandeza diz o que pesa mais. */
+const BREAK_COST = {
+  /** A página termina numa palavra de ligação. */
+  dangling: 100,
+  /** Uma palavra sozinha numa página (quando a frase tem mais de uma). */
+  lone: 30,
+  /** Cada palavra além do limite de palavras por página. */
+  over: 6,
+  /** Cada palavra a menos que o limite (páginas parelhas são melhores), ao quadrado. */
+  under: 1.2,
+  /** Bônus por quebrar depois de vírgula, ponto e vírgula ou dois-pontos. */
+  punctuation: 10,
+  /** Bônus por quebrar numa pausa: até isto, a 40 ms por ponto. */
+  pauseMax: 10
+} as const
+
+/**
+ * Divide UMA frase (já sem pausa longa nem fim de frase no meio) em páginas de até `limit` palavras. Uma página pode passar do
+ * limite em até 3 palavras, mas só quando é o jeito de NÃO terminar numa ligação ("DE E O / SERVIÇO" vira "DE E O SERVIÇO": as
+ * palavras de ligação são curtas e cabem na linha). Programação dinâmica pelo menor custo: prefere quebrar em pontuação e em pausa,
+ * nunca termina numa palavra de ligação (junta com a seguinte), evita palavra solta e prefere páginas parelhas (7 palavras com
+ * limite 4 = 4 + 3, nunca 6 + 1). `limit` 1 é "uma palavra de cada vez": nada a decidir.
+ */
+export function splitPhrase(phrase: readonly CaptionWord[], limit: number): CaptionWord[][] {
+  const n = phrase.length
+  if (n === 0) return []
+  if (limit <= 1) return phrase.map((w) => [w])
+  const longest = limit + MAX_OVERFLOW
+  if (n <= limit) return [phrase.slice()]
+
+  const cost = new Array<number>(n + 1).fill(Number.POSITIVE_INFINITY)
+  const from = new Array<number>(n + 1).fill(-1)
+  cost[0] = 0
+  for (let i = 1; i <= n; i++) {
+    for (let size = Math.min(longest, i); size >= 1; size--) {
+      const j = i - size
+      if (cost[j] === Number.POSITIVE_INFINITY) continue
+      const last = phrase[i - 1]!
+      let c = cost[j]!
+      if (size > limit) c += (size - limit) * BREAK_COST.over
+      else c += (limit - size) * (limit - size) * BREAK_COST.under
+      if (size === 1) c += BREAK_COST.lone
+      if (i < n) {
+        if (isDanglingLink(last.text)) c += BREAK_COST.dangling
+        if (SOFT_BREAK.test(last.text)) c -= BREAK_COST.punctuation
+        const pause = Math.max(0, phrase[i]!.start - last.end)
+        c -= Math.min(BREAK_COST.pauseMax, pause / 40)
+      }
+      // empate: a página maior (menos páginas) ganha: o laço testa do maior `size` para o menor e só troca por custo menor
+      if (c < cost[i]! - 1e-9) {
+        cost[i] = c
+        from[i] = j
+      }
+    }
+  }
+  const groups: CaptionWord[][] = []
+  for (let i = n; i > 0; i = from[i]!) groups.unshift(phrase.slice(from[i]!, i))
+  return groups
+}
+
+/**
+ * Quebra as palavras em páginas: fim de frase e pausa maior que 450 ms (no tempo de SAÍDA: o corte já tirou o silêncio) fecham
+ * uma frase; a frase maior que o limite de palavras por página é dividida por `splitPhrase` (em pontuação e em pausa, sem terminar
+ * em artigo, preposição ou conjunção curta, sem palavra solta).
  */
 export function buildCaptionPages(words: readonly CaptionWord[], opts: CaptionPageOptions): CaptionPage[] {
-  const limit = wordsPerPage(opts.wordsPerLine)
+  const limit = wordsPerPage(opts.wordsPerLine, opts.lines)
 
   // 1. frases: fim de frase e pausa longa fecham uma frase
   const phrases: CaptionWord[][] = []
@@ -129,31 +212,8 @@ export function buildCaptionPages(words: readonly CaptionWord[], opts: CaptionPa
     }
   }
 
-  // 2. frase maior que o limite: partes IGUAIS (7 palavras = 4 + 3, nunca 6 + 1), com a emenda puxada para a vírgula mais perto
-  const groups: CaptionWord[][] = []
-  for (const phrase of phrases) {
-    const n = Math.ceil(phrase.length / limit)
-    if (n <= 1) {
-      groups.push(phrase)
-      continue
-    }
-    const size = Math.ceil(phrase.length / n)
-    let from = 0
-    for (let part = 0; part < n && from < phrase.length; part++) {
-      let to = part === n - 1 ? phrase.length : Math.min(phrase.length, from + size)
-      if (part < n - 1) {
-        for (const d of [0, -1, 1]) {
-          const cut = to + d
-          if (cut > from && cut < phrase.length && cut - from <= limit && phrase.length - cut <= limit * (n - part - 1) && SOFT_BREAK.test(phrase[cut - 1]!.text)) {
-            to = cut
-            break
-          }
-        }
-      }
-      groups.push(phrase.slice(from, to))
-      from = to
-    }
-  }
+  // 2. frase maior que o limite: páginas parelhas, quebradas em pontuação e em pausa, nunca numa palavra de ligação
+  const groups: CaptionWord[][] = phrases.flatMap((phrase) => splitPhrase(phrase, limit))
 
   const pages: CaptionPage[] = []
   let prevEnd = 0

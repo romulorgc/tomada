@@ -22,7 +22,8 @@ import { coverCrop, cameraBoxAspect, cameraRadius, cornerFractions, styleUnit } 
 import { keptRanges, outputDuration, sourceToOutput } from './timeline'
 import type { Background, ClickEvent, CursorSample, KeyEvent, LayoutKind, Project, Range, Rect, Size, Style, Word } from './types'
 import { GRID_HZ } from './cursor'
-import { HOOK_BAND, HOOK_MS, STACK_CAMERA, STACK_SCREEN, VERTICAL_W, WIDE_BOX, cropView, layoutFollow, safeBoxFor, type View } from './vertical'
+import { HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
+import { ZOOM_SCALE_SPRING } from './spring'
 import { computeCameraPath, sampleCameraPath, visibleRect, type CameraPath } from './zoom'
 import { fitRect } from './geometry'
 
@@ -166,7 +167,7 @@ export function deriveProject(project: Project, data: CursorData, format: Format
   const mainKey = resolveLayout(project.style.defaultLayout, hasScreen, hasCamera, format.kind)
   if (format.kind === 'horizontal') {
     const view = { w: 1, h: 1 }
-    paths.main = { view, path: computeCameraPath(project, data.grid, { durationMs, view, sourceAspect }) }
+    paths.main = { view, path: computeCameraPath(project, data.grid, { durationMs, view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.horizontal }) }
   } else {
     const keys = new Set<string>([mainKey])
     for (const pt of layoutPoints) keys.add(resolveLayout(pt.layout, hasScreen, hasCamera, format.kind))
@@ -177,7 +178,7 @@ export function deriveProject(project: Project, data: CursorData, format: Format
         continue
       }
       const zooms = project.zooms.map((z) => ({ ...z, scale: 1 + (z.scale - 1) * f.gain }))
-      paths[key] = { view: f.view, path: computeCameraPath({ zooms }, data.grid, { durationMs, view: f.view, sourceAspect }) }
+      paths[key] = { view: f.view, path: computeCameraPath({ zooms }, data.grid, { durationMs, view: f.view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.vertical }) }
     }
   }
   const main = paths.main ?? paths[mainKey] ?? Object.values(paths)[0] ?? { view: { w: 1, h: 1 }, path: TRIVIAL_PATH }
@@ -269,14 +270,16 @@ export function layoutGeometry(
   }
 
   if (L === 'stack') {
-    // vertical V-B: câmera em y 270-850, recorte da tela em y 850-1440 (as duas de borda a borda, sem cantos)
+    // vertical V-B SEM barras: a tela em cima (y 0-960) e a câmera embaixo (y 960-1920), de ponta a ponta e sem cantos; com
+    // `stackCameraTop` as duas trocam de lugar
     const k = format.w / VERTICAL_W
     const sc = (r: { x: number; y: number; w: number; h: number }): Rect => snap({ x: r.x * k, y: r.y * k, w: r.w * k, h: r.h * k })
-    return { screen: sources.screen ? sc(STACK_SCREEN) : null, camera: sources.camera ? { rect: sc(STACK_CAMERA), radius: 0 } : null }
+    const halves = stackRects(style.stackCameraTop === true)
+    return { screen: sources.screen ? sc(halves.screen) : null, camera: sources.camera ? { rect: sc(halves.camera), radius: 0 } : null }
   }
 
   if (L === 'screen-wide') {
-    // vertical V-C: a tela inteira na largura (1080×608, centro em y 660); o fundo é o mesmo vídeo desfocado
+    // vertical V-C: o vídeo 16:9 com 94% da largura e o centro em y 50%; o fundo é o mesmo vídeo desfocado
     const k = format.w / VERTICAL_W
     const box: Rect = { x: WIDE_BOX.x * k, y: WIDE_BOX.y * k, w: WIDE_BOX.w * k, h: WIDE_BOX.h * k }
     return { screen: sources.screen ? snap(fitRect(sources.screen, box)) : null, camera: sources.camera ? bubbleVertical(style, format, zoomProgress) : null }
@@ -594,7 +597,10 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
     if (derived.captions) {
       const m = captionAt(derived.captions, outT)
       if (m) {
-        const rs = resolveCaptionStyle(project.captions, format)
+        // no vertical a posição padrão vem do layout (V-B: a emenda tela/câmera; tela na largura: 71%; senão 70%) e acompanha a
+        // troca de layout, para a legenda não dar um salto no meio de uma página
+        const autoY = vertical ? lerp(verticalCaptionY(prevKey), verticalCaptionY(curKey), e) : undefined
+        const rs = resolveCaptionStyle(project.captions, format, autoY)
         captions = {
           key: `${derived.captions.id}:${m.page.id}`,
           style: rs,
@@ -609,6 +615,18 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
     if (hookText !== '' && outT < HOOK_MS) {
       const alpha = Math.min(clamp01(outT / 150), clamp01((HOOK_MS - outT) / 300))
       hook = { text: hookText, alpha, style: resolveHookStyle(format, HOOK_BAND) }
+    }
+  }
+
+  // O gancho e a bolha da câmera nunca se sobrepõem: enquanto o gancho está na tela a bolha desce para abaixo dele (a descida
+  // acompanha o fade do gancho, então não há salto). Só as bolhas (V-A e V-C): no V-B a câmera é metade do quadro e o gancho fica
+  // por cima dela, e no "só câmera" não há bolha.
+  if (hook && camera && vertical && (curKey === 'screen-focus' || curKey === 'screen-wide')) {
+    const k = format.w / VERTICAL_W
+    const clearY = HOOK_CLEAR_Y * k
+    const top = camera.dest.y
+    if (top < clearY && top + camera.dest.h > HOOK_BAND.top * k) {
+      camera.dest = { ...camera.dest, y: lerp(top, clearY, hook.alpha) }
     }
   }
 

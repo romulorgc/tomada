@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  LINK_WORDS,
   PAGE_HOLD_MS,
   PAGE_LEAD_MS,
   POP_AMOUNT,
@@ -10,9 +11,11 @@ import {
   captionAt,
   captionWords,
   formatCueTime,
+  isDanglingLink,
   pageAlpha,
   popScale,
   shownText,
+  splitPhrase,
   toSrt,
   toVtt,
   wordsPerPage,
@@ -86,10 +89,11 @@ describe('captionWords: as palavras da legenda no tempo de saída', () => {
 describe('buildCaptionPages: quebra em páginas', () => {
   const opts = { style: 'natural' as const, wordsPerLine: 3 }
 
-  it('o limite é palavras por linha × 2 linhas', () => {
-    expect(wordsPerPage(3)).toBe(6)
-    expect(wordsPerPage(1)).toBe(2)
-    expect(wordsPerPage(0)).toBe(2) // nunca zero
+  it('o limite é palavras por linha × linhas por página (uma linha por padrão)', () => {
+    expect(wordsPerPage(3)).toBe(3)
+    expect(wordsPerPage(1)).toBe(1)
+    expect(wordsPerPage(0)).toBe(1) // nunca zero
+    expect(wordsPerPage(3, 2)).toBe(6)
   })
 
   it('fim de frase fecha a página', () => {
@@ -107,16 +111,29 @@ describe('buildCaptionPages: quebra em páginas', () => {
     expect(pages.map((p) => p.words.length)).toEqual([2, 1])
   })
 
-  it('frase longa vira partes IGUAIS: 7 palavras = 4 + 3, nunca 6 + 1', () => {
-    const pages = buildCaptionPages(cw(['a', 'b', 'c', 'd', 'e', 'f', 'g']), opts)
-    expect(pages.map((p) => p.words.length)).toEqual([4, 3])
+  it('frase longa vira páginas PARELHAS (7 palavras com limite 3 = nenhuma página solta), nunca 3 + 3 + 1', () => {
+    const sizes = buildCaptionPages(cw(['a', 'b', 'c', 'd', 'e', 'f', 'g']), opts).map((p) => p.words.length)
+    expect(sizes.reduce((a, b) => a + b, 0)).toBe(7)
+    expect(Math.min(...sizes)).toBeGreaterThanOrEqual(2)
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(3)
   })
 
-  it('a vírgula puxa a emenda para ela quando está ao lado do ponto de partida', () => {
+  it('quebra em PONTUAÇÃO: a página fecha na vírgula quando ela está ao lado do ponto de partida', () => {
     const pages = buildCaptionPages(cw(['a', 'b', 'c', 'd,', 'e', 'f', 'g']), opts)
-    expect(pages.map((p) => p.words.map((w) => w.text).join(' '))).toEqual(['a b c d,', 'e f g'])
+    const lasts = pages.map((p) => p.words[p.words.length - 1]!.text)
+    expect(lasts).toContain('d,')
     const early = buildCaptionPages(cw(['a', 'b', 'c,', 'd', 'e', 'f', 'g']), opts)
-    expect(early.map((p) => p.words.length)).toEqual([3, 4]) // vírgula uma palavra antes da metade: puxa
+    expect(early.map((p) => p.words[p.words.length - 1]!.text)).toContain('c,')
+  })
+
+  it('quebra em PAUSA: a emenda cai onde a pessoa para, mesmo longe do meio', () => {
+    // seis palavras, limite 4: sem pausa seria 3 + 3; com 400 ms de pausa depois da segunda a página fecha ali (2 + 4)
+    const w: CaptionWord[] = ['x1', 'x2', 'x3', 'x4', 'x5', 'x6'].map((text, k) => {
+      const start = k * 400 + (k >= 2 ? 400 : 0)
+      return { i: k, text, start, end: start + 360 }
+    })
+    const pages = buildCaptionPages(w, { style: 'natural', wordsPerLine: 4 })
+    expect(pages.map((p) => p.words.map((x) => x.text).join(' '))).toEqual(['x1 x2', 'x3 x4 x5 x6'])
   })
 
   it('a página entra 60 ms antes da primeira palavra e fica 320 ms depois da última, sem passar da seguinte', () => {
@@ -141,7 +158,7 @@ describe('buildCaptionPages: quebra em páginas', () => {
     for (let k = 0; k < pages.length; k++) {
       expect(pages[k]!.end).toBeGreaterThan(pages[k]!.start)
       if (k > 0) expect(pages[k]!.start).toBeGreaterThanOrEqual(pages[k - 1]!.end)
-      expect(pages[k]!.words.length).toBeLessThanOrEqual(wordsPerPage(2))
+      expect(pages[k]!.words.length).toBeLessThanOrEqual(wordsPerPage(2) + 3) // além do limite só para não deixar ligação pendurada
     }
     expect(pages.flatMap((p) => p.words).length).toBe(80) // nenhuma palavra se perde
   })
@@ -156,6 +173,76 @@ describe('buildCaptionPages: quebra em páginas', () => {
     expect(shownText('...', 'highlight')).toBe('...') // não deixa a palavra vazia
     const p = buildCaptionPages(cw(['Olá,', 'pessoal.']), { style: 'highlight', wordsPerLine: 3 })
     expect(p[0]!.words.map((w) => w.shown)).toEqual(['Olá', 'pessoal'])
+  })
+})
+
+describe('quebra de página: nunca termina em palavra de ligação, junta com a seguinte, evita palavra solta (nota §2 da R1)', () => {
+  const texts = (pages: { words: { text: string }[] }[]): string[] => pages.map((p) => p.words.map((w) => w.text).join(' '))
+  const opts2 = { style: 'natural' as const, wordsPerLine: 2 }
+
+  it('a lista de ligação do pedido está toda lá', () => {
+    for (const w of ['e', 'o', 'a', 'os', 'as', 'de', 'da', 'do', 'em', 'no', 'na', 'para', 'por', 'se', 'que', 'um', 'uma', 'com']) {
+      expect(LINK_WORDS.has(w), w).toBe(true)
+      expect(isDanglingLink(w), w).toBe(true)
+    }
+    expect(isDanglingLink('Que')).toBe(true) // caixa não importa
+    expect(isDanglingLink('serviço')).toBe(false)
+    expect(isDanglingLink('de,')).toBe(false) // com vírgula já é uma parada natural
+    expect(isDanglingLink('e.')).toBe(false)
+  })
+
+  it('"DE E O / SERVIÇO": a ligação vai para a página seguinte, o "serviço" não fica sozinho', () => {
+    const pages = buildCaptionPages(cw(['cuida', 'do', 'preço', 'de', 'e', 'o', 'serviço']), opts2)
+    const t = texts(pages)
+    for (const page of t.slice(0, -1)) expect(isDanglingLink(page.split(' ').pop()!), page).toBe(false)
+    expect(t[t.length - 1]!.split(' ').length).toBeGreaterThanOrEqual(2) // a última página não é "serviço" sozinha
+  })
+
+  it('"ELE NÃO DEIXA E": a conjunção abre a página seguinte', () => {
+    const pages = buildCaptionPages(cw(['ele', 'não', 'deixa', 'e', 'depois', 'muda']), opts2)
+    const t = texts(pages)
+    expect(t.some((p) => p.endsWith(' e') || p === 'e')).toBe(false)
+    expect(t.join(' ')).toBe('ele não deixa e depois muda') // nenhuma palavra se perde nem muda de lugar
+  })
+
+  it('"HORÁRIO PARA / OUTRO DIA SE": preposição e "se" não fecham página', () => {
+    const pages = buildCaptionPages(cw(['marca', 'o', 'horário', 'para', 'outro', 'dia', 'se', 'precisar', 'mesmo']), opts2)
+    const t = texts(pages)
+    for (const page of t.slice(0, -1)) expect(isDanglingLink(page.split(' ').pop()!), page).toBe(false)
+  })
+
+  it('em fala corrida longa nenhuma página (menos a última de cada frase) termina em ligação, em nenhum limite de 2 a 5', () => {
+    const base = 'a gente vai cuidar do cadastro e do pagamento para que o cliente receba um aviso com a data do horário se quiser mudar por outro dia e em seguida'.split(' ')
+    for (const wpl of [2, 3, 4, 5]) {
+      const long = Array.from({ length: 4 }, () => base).flat().map((t, k) => (k % base.length === base.length - 1 ? t + '.' : t))
+      const pages = buildCaptionPages(cw(long), { style: 'natural', wordsPerLine: wpl })
+      pages.forEach((p, k) => {
+        const last = p.words[p.words.length - 1]!.text
+        const sentenceEnd = /[.!?…]$/u.test(last)
+        if (!sentenceEnd && k < pages.length - 1) expect(isDanglingLink(last), `wpl ${wpl}: página "${p.words.map((w) => w.text).join(' ')}"`).toBe(false)
+        expect(p.words.length).toBeLessThanOrEqual(wpl + 3)
+      })
+      expect(pages.flatMap((p) => p.words).length).toBe(long.length)
+    }
+  })
+
+  it('palavra solta só existe quando a frase é de uma palavra (ou a pessoa pediu uma por vez)', () => {
+    const pages = buildCaptionPages(cw(['agora', 'vamos', 'ver', 'isto', 'aqui']), opts2)
+    expect(pages.every((p) => p.words.length >= 2)).toBe(true)
+    const solo = buildCaptionPages(cw(['Pronto.']), opts2)
+    expect(texts(solo)).toEqual(['Pronto.'])
+    const oneByOne = buildCaptionPages(cw(['de', 'e', 'o']), { style: 'natural', wordsPerLine: 1 })
+    expect(texts(oneByOne)).toEqual(['de', 'e', 'o']) // limite 1: nada a decidir
+  })
+
+  it('splitPhrase: uma frase que cabe fica inteira; vazia dá nada; o resultado cobre todas as palavras em ordem', () => {
+    expect(splitPhrase([], 3)).toEqual([])
+    const w = cw(['um', 'dois', 'três'])
+    expect(splitPhrase(w, 3)).toEqual([w])
+    const longer = cw(Array.from({ length: 11 }, (_, k) => `p${k}`))
+    const groups = splitPhrase(longer, 3)
+    expect(groups.flat().map((x) => x.text)).toEqual(longer.map((x) => x.text))
+    expect(groups.every((g) => g.length >= 2 && g.length <= 4)).toBe(true)
   })
 })
 

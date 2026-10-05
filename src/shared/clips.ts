@@ -9,7 +9,7 @@
  * limpeza do projeto (silêncios e muletas dentro dele) e a edição do vertical (layout, legenda, zoom).
  */
 import { z } from 'zod'
-import { CAPTION_STYLE_DEFAULTS } from './caption-style'
+import { captionStyleDefaults } from './caption-style'
 import { formatDuration, formatSpan } from './format'
 import { nextSegId } from './segments'
 import {
@@ -583,7 +583,7 @@ export function clipDocument(doc: Project, clip: Pick<Clip, 'ranges' | 'hook' | 
   if (hook !== '') vertical.hook = hook
   else delete vertical.hook
   if (clip.captionStyle) {
-    vertical.captions = { ...base.captions, enabled: true, style: clip.captionStyle, ...CAPTION_STYLE_DEFAULTS[clip.captionStyle] }
+    vertical.captions = { ...base.captions, enabled: true, style: clip.captionStyle, ...captionStyleDefaults(clip.captionStyle, 'vertical') }
   }
   return { ...doc, cuts, vertical }
 }

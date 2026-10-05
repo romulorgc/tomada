@@ -5,6 +5,7 @@
  */
 import type { CursorData, FormatSpec } from './scene'
 import type { CursorGrid } from './cursor'
+import { keptRanges } from './timeline'
 import { generateAutoZooms, zoomPresetFor, DEFAULT_VERTICAL_ZOOM_PRESET } from './zoom'
 import type { CaptionStyle, ClickEvent, Corner, KeyEvent, LayoutKind, LayoutSeg, Project, Range, Size, VerticalEdit, Word } from './types'
 
@@ -36,20 +37,54 @@ export function safeBoxFor(format: Pick<FormatSpec, 'w'>): { x: number; y: numbe
 // ---------------------------------------------------------------------------
 // Medidas dos layouts (px num quadro de 1080×1920; o chamador escala)
 
-/** V-B "Câmera + tela": câmera em y 270-850 e o recorte da tela em y 850-1440. */
-export const STACK_CAMERA = { x: 0, y: 270, w: 1080, h: 580 } as const
-export const STACK_SCREEN = { x: 0, y: 850, w: 1080, h: 590 } as const
-/** V-C "Tela na largura": a tela cabe nesta caixa (1080×608, centro em y 660). */
-export const WIDE_BOX = { x: 0, y: 356, w: 1080, h: 608 } as const
+/**
+ * V-B "Tela + câmera" SEM BARRAS (estudo E1, 05/10/2026: nos vídeos reais a tela ocupa 48% [44-61] da altura e a câmera 50%
+ * [38-50], de ponta a ponta, 0-100%): a tela em cima (y 0-960) e a câmera embaixo (y 960-1920). A opção "câmera em cima"
+ * (`Style.stackCameraTop`) troca as duas de lugar. A emenda fica a meio do quadro.
+ */
+export const STACK_SPLIT = 960
+export const STACK_SCREEN = { x: 0, y: 0, w: 1080, h: STACK_SPLIT } as const
+export const STACK_CAMERA = { x: 0, y: STACK_SPLIT, w: 1080, h: VERTICAL_H - STACK_SPLIT } as const
+/** As duas metades do V-B (px de um quadro de 1080×1920), na ordem pedida. */
+export function stackRects(cameraTop = false): { screen: { x: number; y: number; w: number; h: number }; camera: { x: number; y: number; w: number; h: number } } {
+  return cameraTop
+    ? { screen: { x: 0, y: VERTICAL_H - STACK_SCREEN.h, w: 1080, h: STACK_SCREEN.h }, camera: { x: 0, y: 0, w: 1080, h: STACK_CAMERA.h } }
+    : { screen: { ...STACK_SCREEN }, camera: { ...STACK_CAMERA } }
+}
+/** V-C "Tela na largura": o vídeo 16:9 com 94% da largura e centro em y 50% (1016×572, y 674-1246). */
+export const WIDE_BOX = { x: 32, y: 674, w: 1016, h: 572 } as const
 /** Bolha da câmera no vertical: 250 px (220-280) no canto da caixa segura. */
 export const VERTICAL_BUBBLE_SIZE = 250 / 1080
 export const VERTICAL_BUBBLE_CORNER: Corner = 'top-left'
-/** O título de gancho mora em y 280-440 e aparece nos 2 primeiros segundos de SAÍDA. */
-export const HOOK_BAND = { top: 280, bottom: 440 } as const
-export const HOOK_MS = 2000
+/**
+ * O título de gancho: maiúscula de 46 px (Anton de 54 px), centro em y 15% (288 px) e fica ≥ 4 s de SAÍDA (E1: 44 px [41-48],
+ * y 14,7% [11-29], e em 3 de 3 canais com título fixo ele fica o vídeo todo). A faixa dá folga para duas linhas.
+ */
+export const HOOK_CENTER_Y = 288
+export const HOOK_BAND = { top: HOOK_CENTER_Y - 60, bottom: HOOK_CENTER_Y + 60 } as const
+export const HOOK_MS = 4000
+/** Enquanto o gancho está na tela a bolha da câmera fica abaixo dele (os dois nunca se sobrepõem). */
+export const HOOK_CLEAR_Y = HOOK_BAND.bottom + 16
 
 /** O V-B mostra, com escala 1, esta fração da ALTURA da tela (2× numa tela de 1080 px). */
 export const STACK_VIEW_HEIGHT = STACK_SCREEN.h / 2 / 1080
+
+/** Centro vertical padrão da legenda no vertical: y 70% (E1: 70,3% [58,7-77,9]); na tela na largura, 71%. */
+export const CAPTION_Y_VERTICAL = 0.7
+export const CAPTION_Y_WIDE = 0.71
+
+/**
+ * Onde a legenda do vertical fica (fração da altura) em cada layout, quando a pessoa não escolheu uma posição: em 70% (≈ y 1344);
+ * na tela na largura, 71%; no V-B, na EMENDA tela/câmera quando ela cai entre 45% e 70% (3 de 5 canais com essa estrutura).
+ */
+export function verticalCaptionY(layout: LayoutKind): number {
+  if (layout === 'screen-wide') return CAPTION_Y_WIDE
+  if (layout === 'stack') {
+    const seam = STACK_SPLIT / VERTICAL_H
+    return seam >= 0.45 && seam <= CAPTION_Y_VERTICAL ? seam : CAPTION_Y_VERTICAL
+  }
+  return CAPTION_Y_VERTICAL
+}
 
 /** Layouts verticais (os que o formato 9:16 entende). */
 export const VERTICAL_LAYOUTS: readonly LayoutKind[] = ['screen-focus', 'stack', 'screen-wide', 'camera']
@@ -93,17 +128,21 @@ export function layoutFollow(layout: LayoutKind, format: Pick<FormatSpec, 'kind'
 // ---------------------------------------------------------------------------
 // A edição do vertical dentro do documento (visão do formato)
 
-/** Estilo de legenda de partida do vertical (Destaque, 3 palavras por linha, ligada). */
+/**
+ * Estilo de legenda de partida do vertical (estudo E1: 72% das legendas brasileiras são em caixa mista, sem caixa atrás, e uma
+ * linha de 2 palavras [1-3]): Natural em caixa mista, sem caixa, 1 linha × 2 palavras, a palavra falada em destaque (a pessoa
+ * desliga), ligada.
+ */
 export const VERTICAL_CAPTION_DEFAULTS: Required<Pick<CaptionStyle, 'enabled' | 'style' | 'wordsPerLine' | 'position' | 'box'>> = {
   enabled: true,
-  style: 'highlight',
-  wordsPerLine: 3,
+  style: 'natural',
+  wordsPerLine: 2,
   position: 'bottom',
   box: false
 }
 
 /** Os campos de legenda que cada formato tem só para si (as cores valem para os dois). */
-export const FORMAT_CAPTION_KEYS = ['enabled', 'style', 'wordsPerLine', 'position', 'box', 'size', 'positionY', 'uppercase'] as const
+export const FORMAT_CAPTION_KEYS = ['enabled', 'style', 'wordsPerLine', 'position', 'box', 'size', 'positionY', 'uppercase', 'highlightWord'] as const
 
 export function defaultVerticalEdit(): VerticalEdit {
   return { layout: 'screen-focus', layouts: [], zooms: [] }
@@ -137,7 +176,9 @@ export function projectForFormat(doc: Project, kind: FormatSpec['kind']): Projec
     style: {
       ...doc.style,
       defaultLayout: v?.layout ?? 'screen-focus',
-      camera: { ...doc.style.camera, corner: v?.camera?.corner ?? VERTICAL_BUBBLE_CORNER, size: v?.camera?.size ?? VERTICAL_BUBBLE_SIZE }
+      camera: { ...doc.style.camera, corner: v?.camera?.corner ?? VERTICAL_BUBBLE_CORNER, size: v?.camera?.size ?? VERTICAL_BUBBLE_SIZE },
+      // "câmera em cima" é do vertical: o 16:9 nunca a vê (o `mergeFormatView` a devolve ao `project.vertical`)
+      ...(v?.cameraTop ? { stackCameraTop: true } : {})
     },
     captions
   }
@@ -149,7 +190,8 @@ export function projectForFormat(doc: Project, kind: FormatSpec['kind']): Projec
 /** Devolve ao documento o que a visão de um formato mudou (o inverso de `projectForFormat`). */
 export function mergeFormatView(doc: Project, view: Project, kind: FormatSpec['kind']): Project {
   if (kind === 'horizontal') return view
-  const { zooms, layouts, zoomPreset, vertical: viewVertical, captions, style, ...rest } = view
+  const { zooms, layouts, zoomPreset, vertical: viewVertical, captions, style: viewStyle, ...rest } = view
+  const { stackCameraTop, ...style } = viewStyle
   const base = doc.vertical ?? defaultVerticalEdit()
   const vertical: VerticalEdit = {
     ...base,
@@ -159,6 +201,8 @@ export function mergeFormatView(doc: Project, view: Project, kind: FormatSpec['k
     camera: { corner: style.camera.corner, size: style.camera.size },
     captions: perFormatCaptions(captions)
   }
+  if (stackCameraTop) vertical.cameraTop = true
+  else delete vertical.cameraTop
   if (zoomPreset !== undefined) vertical.zoomPreset = zoomPreset
   else delete vertical.zoomPreset
   const hook = viewVertical?.hook
@@ -184,14 +228,20 @@ export function mergeFormatView(doc: Project, view: Project, kind: FormatSpec['k
 // ---------------------------------------------------------------------------
 // Escolha automática de layout por atividade
 
-/** Fala sem atividade de tela por pelo menos isto (ms) → câmera + tela (V-B). */
-export const QUIET_MIN_MS = 2000
+/**
+ * HISTERESE: para ENTRAR no V-B a fala precisa ficar sem atividade de tela por pelo menos isto (ms); para SAIR basta a próxima
+ * atividade. Entrar pede mais que sair, senão uma pausa de 2 s qualquer faria o layout piscar.
+ */
+export const QUIET_MIN_MS = 3000
+/**
+ * PERMANÊNCIA MÍNIMA (ms): nenhum layout fica menos que isto na tela antes de trocar (nota de conferência da R1: a troca a cada
+ * poucos segundos incomodava). Medido no tempo de SAÍDA (o que o espectador vê, já sem os trechos cortados). Nos vídeos reais
+ * há um corte a cada ~10 s (5,7 por minuto, E1) e a troca de layout não pode ser mais frequente que isso.
+ */
+export const MIN_DWELL_MS = 6000
 /** O V-B começa um pouco depois da última atividade e termina antes da próxima (a tela já está em foco no clique). */
 const QUIET_ENTER_DELAY_MS = 500
 const QUIET_EXIT_LEAD_MS = 400
-const MIN_STACK_MS = 1000
-/** Dois V-B separados por menos que isto viram um só (sem piscar o layout). */
-const MERGE_STACK_GAP_MS = 1500
 /** Cursor que andou mais que isto (normalizado) em 100 ms está em atividade. */
 const MOVE_DISTANCE = 0.02
 /** Pelo menos esta fração do silêncio de tela precisa ter fala para valer como "explicando". */
@@ -205,6 +255,8 @@ export type ActivityInput = {
   cursor: CursorGrid
   /** Onde há fala (ms de origem). `null` = não há transcrição: supõe-se que há fala o tempo todo. */
   speech: readonly Range[] | null
+  /** Os trechos que ficam no vídeo (sem os cortes). A permanência mínima conta só o que se vê; ausente = a gravação inteira. */
+  kept?: readonly Range[]
 }
 
 /** Onde há fala: as palavras de verdade, unidas quando a pausa entre elas é curta. */
@@ -254,9 +306,56 @@ const overlapMs = (a: Range, ranges: readonly Range[]): number => {
   return sum
 }
 
+/** Um trecho contínuo da gravação num só estado: `on` = no V-B, senão no layout padrão. */
+export type LayoutRun = { start: number; end: number; on: boolean }
+
+/** Os V-B candidatos viram uma linha do tempo de `[0, total]` que alterna "fora" e "no V-B". */
+function layoutRuns(stacks: readonly Range[], total: number): LayoutRun[] {
+  const runs: LayoutRun[] = []
+  let at = 0
+  for (const s of stacks) {
+    if (s.start > at) runs.push({ start: at, end: s.start, on: false })
+    runs.push({ start: s.start, end: s.end, on: true })
+    at = s.end
+  }
+  if (at < total) runs.push({ start: at, end: total, on: false })
+  return runs
+}
+
 /**
- * Trechos de layout próprios do vertical: fala SEM atividade de tela por ≥ 2 s → V-B (câmera + tela); atividade → V-A (o
- * layout padrão, sem trecho). Sem câmera não há V-B: devolve vazio.
+ * PERMANÊNCIA MÍNIMA: enquanto algum trecho dura menos que `minMs` (contando só o que fica no vídeo, `kept`), o MAIS CURTO troca
+ * de estado e se junta aos vizinhos (uma folga curta entre dois V-B some; um V-B curto demais some). Empate: o mais cedo. Cada
+ * volta tira pelo menos um trecho, então termina; sobra um trecho só quando nada mais pode ser juntado.
+ */
+export function enforceMinDwell(runs: readonly LayoutRun[], minMs: number, kept?: readonly Range[]): LayoutRun[] {
+  let list: LayoutRun[] = runs.map((r) => ({ ...r }))
+  for (;;) {
+    if (list.length <= 1) return list
+    let pick = -1
+    let pickLen = Number.POSITIVE_INFINITY
+    list.forEach((r, i) => {
+      const len = kept ? overlapMs(r, kept) : r.end - r.start
+      if (len < minMs && len < pickLen) {
+        pick = i
+        pickLen = len
+      }
+    })
+    if (pick < 0) return list
+    list[pick]!.on = !list[pick]!.on
+    const merged: LayoutRun[] = []
+    for (const r of list) {
+      const last = merged[merged.length - 1]
+      if (last && last.on === r.on) last.end = r.end
+      else merged.push({ ...r })
+    }
+    list = merged
+  }
+}
+
+/**
+ * Trechos de layout próprios do vertical: fala SEM atividade de tela por ≥ 3 s → V-B (tela + câmera); atividade → V-A (o layout
+ * padrão, sem trecho). Nenhum layout fica menos de 6 s na tela (`MIN_DWELL_MS`, no tempo de saída). Sem câmera não há V-B:
+ * devolve vazio.
  */
 export function autoVerticalLayouts(input: ActivityInput): LayoutSeg[] {
   if (!input.hasCamera || !(input.durationMs > 0)) return []
@@ -275,19 +374,16 @@ export function autoVerticalLayouts(input: ActivityInput): LayoutSeg[] {
     if (input.speech !== null && overlapMs(q, input.speech) < (q.end - q.start) * SPEECH_SHARE) continue
     const start = q.start <= 0 ? 0 : q.start + QUIET_ENTER_DELAY_MS
     const end = q.end >= input.durationMs ? input.durationMs : q.end - QUIET_EXIT_LEAD_MS
-    if (end - start >= MIN_STACK_MS) stacks.push({ start: Math.round(start), end: Math.round(end) })
+    if (end > start) stacks.push({ start: Math.round(start), end: Math.round(end) })
   }
-  const merged: Range[] = []
-  for (const s of stacks) {
-    const last = merged[merged.length - 1]
-    if (last && s.start - last.end < MERGE_STACK_GAP_MS) last.end = s.end
-    else merged.push({ ...s })
-  }
-  return merged.map((r, i) => ({ id: `layout-v${i + 1}`, start: r.start, end: r.end, layout: 'stack' as const }))
+  const runs = enforceMinDwell(layoutRuns(stacks, input.durationMs), MIN_DWELL_MS, input.kept)
+  return runs
+    .filter((r) => r.on)
+    .map((r, i) => ({ id: `layout-v${i + 1}`, start: Math.round(r.start), end: Math.round(r.end), layout: 'stack' as const }))
 }
 
 /**
- * Entrar no 9:16 pela primeira vez: zooms do preset Intenso (escala de vertical) e layouts escolhidos pela atividade.
+ * Entrar no 9:16 pela primeira vez: zooms do preset padrão do vertical (escala e teto de vertical) e layouts escolhidos pela atividade.
  * Se o vertical já foi editado ou gerado, devolve o mesmo documento. "Nunca gerado" = sem edição vertical, ou com ela vazia e sem
  * preset (um ajuste de legenda no 9:16 antes da geração cria o bloco vazio). Chamar com `history: false` no editor.
  */
@@ -308,7 +404,8 @@ export function ensureVertical(
     clicks: data.clicks,
     keys: data.keys,
     cursor: data.grid,
-    speech: speechRanges(opts.words)
+    speech: speechRanges(opts.words),
+    kept: keptRanges(opts.durationMs, project.cuts)
   })
   return { ...project, vertical: { ...v, layout: v?.layout ?? 'screen-focus', layouts, zooms, ...(hasEvents ? { zoomPreset: DEFAULT_VERTICAL_ZOOM_PRESET } : {}) } }
 }

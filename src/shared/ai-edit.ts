@@ -9,7 +9,7 @@
  * plano pede confirmação antes de aplicar.
  */
 import { z } from 'zod'
-import { CAPTION_STYLE_DEFAULTS, CAPTION_STYLE_IDS } from './caption-style'
+import { CAPTION_STYLE_IDS, captionStyleDefaults, maxWordsPerLine } from './caption-style'
 import { limitHook, limitTitle, mergeSuggestedClips, validateClips } from './clips'
 import { createLayoutSeg, createZoom, ZOOM_SCALE_MAX, ZOOM_SCALE_MIN } from './edits'
 import { formatDuration, formatSpan } from './format'
@@ -18,7 +18,7 @@ import { buildSentences } from './sentences'
 import { restoreWords, wordCutRange } from './text-edit'
 import { keptRanges, outputDuration } from './timeline'
 import type { CaptionStyleId, Cut, LayoutKind, Project, Word } from './types'
-import { VERTICAL_ZOOM_SCALE } from './zoom'
+import { DEFAULT_VERTICAL_ZOOM_PRESET, DEFAULT_ZOOM_PRESET, VERTICAL_ZOOM_SCALE, ZOOM_PRESETS } from './zoom'
 
 /** Passou disto do vídeo (depois dos cortes de agora), a interface pede confirmação. */
 export const EDIT_CONFIRM_FRACTION = 0.2
@@ -75,7 +75,7 @@ export function editSystem(format: EditFormat, hasCamera: boolean): string {
     screen: 'só a tela',
     camera: 'só a câmera',
     'screen-focus': 'tela em foco que segue o cursor',
-    stack: 'câmera em cima e tela embaixo',
+    stack: 'tela e câmera empilhadas, de ponta a ponta',
     'screen-wide': 'tela inteira na largura'
   }
   return `Você é o assistente de edição de um editor de vídeo de tela (demonstrações de programas narradas). A pessoa escreve um pedido em português e você devolve OPERAÇÕES que o programa aplica ao projeto dela.
@@ -85,10 +85,10 @@ A transcrição vem em linhas "início–fim · atividade na tela · [n]palavra 
 OPERAÇÕES (cada uma é um objeto em "ops")
 {"op":"cut","from":N,"to":M,"reason":"..."}     corta as palavras de N a M (a imagem e o som desse trecho saem do vídeo)
 {"op":"restore","from":N,"to":M}                 devolve ao vídeo as palavras de N a M que estavam cortadas
-{"op":"zoom","from":N,"to":M,"scale":1.7}        zoom no trecho (scale de 1.1 a 4; omita para o padrão)
+{"op":"zoom","from":N,"to":M,"scale":1.5}        zoom no trecho (scale de 1.1 a 4; omita para o padrão)
 {"op":"layout","from":N,"to":M,"layout":"..."}   troca o layout do trecho. Valores: ${layouts.map((l) => `"${l}" (${names[l]})`).join(', ')}
 {"op":"clip","title":"...","hook":"...","ranges":[[N,M]]}   cria um corte vertical para TikTok, Reels e Shorts (de 30 a 60 s; começa no início e termina no fim de frases; até 3 trechos em ordem)
-{"op":"captions","enabled":true,"style":"highlight|natural|clean|karaoke","wordsPerLine":3}   liga, desliga ou muda a legenda (todos os campos são opcionais)
+{"op":"captions","enabled":true,"style":"highlight|natural|clean|karaoke","wordsPerLine":2}   liga, desliga ou muda a legenda (todos os campos são opcionais)
 {"op":"title","text":"..."}                       muda o título do projeto
 
 COMO RESPONDER
@@ -255,7 +255,7 @@ export function planAiEdit(input: PlanInput): AiEditPlan {
   let cutMs = 0
   let restoredMs = 0
   const layoutsAllowed = format === 'vertical' ? VERTICAL_LAYOUT_VALUES : HORIZONTAL_LAYOUT_VALUES
-  const zoomDefault = format === 'vertical' ? VERTICAL_ZOOM_SCALE.intense : 1.7
+  const zoomDefault = format === 'vertical' ? VERTICAL_ZOOM_SCALE[DEFAULT_VERTICAL_ZOOM_PRESET] : ZOOM_PRESETS[DEFAULT_ZOOM_PRESET].scale
 
   const refuse = (index: number, op: string, why: string): void => {
     refused.push({ index, op, why })
@@ -356,10 +356,11 @@ export function planAiEdit(input: PlanInput): AiEditPlan {
         if (op.style !== undefined) {
           if (!(CAPTION_STYLE_IDS as readonly string[]).includes(op.style)) return refuse(index, 'captions', `o estilo de legenda "${op.style.slice(0, 30)}" não existe`)
           const style = op.style as CaptionStyleId
-          Object.assign(patch, { style, ...CAPTION_STYLE_DEFAULTS[style] })
+          Object.assign(patch, { style, ...captionStyleDefaults(style, format) })
         }
         if (op.wordsPerLine !== undefined) {
-          if (op.wordsPerLine < 1 || op.wordsPerLine > 5) return refuse(index, 'captions', 'palavras por linha vai de 1 a 5')
+          const maxWords = maxWordsPerLine(format)
+          if (op.wordsPerLine < 1 || op.wordsPerLine > maxWords) return refuse(index, 'captions', `palavras por linha vai de 1 a ${maxWords}`)
           patch.wordsPerLine = op.wordsPerLine
         }
         if (Object.keys(patch).length === 0) return refuse(index, 'captions', 'não diz o que mudar na legenda')

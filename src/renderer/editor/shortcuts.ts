@@ -66,14 +66,14 @@ export function useEditorShortcuts(ops: EditorOps, enabled: boolean): void {
           if (e.repeat) return
           // um botão que ficou com o foco ativaria com a barra de espaço: o foco sai dele
           if ((e.target as HTMLElement | null)?.tagName === 'BUTTON') (e.target as HTMLElement).blur()
-          engine.toggle()
+          engine.toggle('key:Space')
           return
         case 'KeyJ':
         case 'KeyK':
         case 'KeyL':
           e.preventDefault()
           if (e.repeat) return
-          engine.shuttle(e.code === 'KeyJ' ? 'J' : e.code === 'KeyK' ? 'K' : 'L')
+          engine.shuttle(e.code === 'KeyJ' ? 'J' : e.code === 'KeyK' ? 'K' : 'L', `key:${e.code}`)
           return
         case 'ArrowLeft':
         case 'ArrowRight': {

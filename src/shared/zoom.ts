@@ -23,30 +23,42 @@ export type ZoomPreset = {
   scale: number
   /** Intervalo mínimo entre dois zooms: menos que isto vira um só. */
   minGap: number
+  /** Teto de zooms por minuto: em qualquer janela de 60 s não começam mais que isto (ficam os de mais peso). */
+  maxPerMin: number
 }
 
+/**
+ * Presets do 16:9, recalibrados pelos vídeos reais medidos (estudo E1, 05/10/2026: escala 1,5× [1,2-1,8], movimento 1,0 s,
+ * mediana de 2 zooms por minuto e p75 de 5; zoom por clique em demonstração de tela passa disso). O Moderado (padrão) é o
+ * centro da faixa medida; o Sutil fica abaixo dele e o Intenso no alto da faixa. O movimento de 1,0 s é o da mola da escala
+ * (`ZOOM_SCALE_SPRING`), por isso o `lead` é maior que o de antes: o zoom precisa de ~1 s para chegar.
+ */
 export const ZOOM_PRESETS: Record<ZoomPresetId, ZoomPreset> = {
-  subtle: { lead: 600, hold: 2000, mergeGap: 2500, scale: 1.4, minGap: 2500 },
-  moderate: { lead: 500, hold: 1400, mergeGap: 1800, scale: 1.7, minGap: 1800 },
-  intense: { lead: 400, hold: 900, mergeGap: 1200, scale: 2.0, minGap: 1200 }
+  subtle: { lead: 800, hold: 2000, mergeGap: 6000, scale: 1.3, minGap: 8000, maxPerMin: 3 },
+  moderate: { lead: 600, hold: 1500, mergeGap: 6000, scale: 1.5, minGap: 6000, maxPerMin: 5 },
+  intense: { lead: 500, hold: 1200, mergeGap: 3500, scale: 1.8, minGap: 3500, maxPerMin: 8 }
 }
 
 /** Padrão do horizontal 16:9. */
 export const DEFAULT_ZOOM_PRESET: ZoomPresetId = 'moderate'
 
-/** Padrão do vertical 9:16: o Intenso, com escala de vertical (ver `zoomPresetFor`). */
-export const DEFAULT_VERTICAL_ZOOM_PRESET: ZoomPresetId = 'intense'
+/** Padrão do vertical 9:16: o Moderado, com a escala e o teto de vertical (ver `zoomPresetFor`). */
+export const DEFAULT_VERTICAL_ZOOM_PRESET: ZoomPresetId = 'moderate'
 
 /**
  * Escala do zoom por preset NO VERTICAL. O recorte 9:16 já parte de ~1,78× (a altura inteira da tela), então os zooms de
- * clique são só um reforço: 1,3-1,5×, em vez dos 1,4-2× do 16:9. Os tempos (lead, hold, fusão) são os mesmos.
+ * clique são só um reforço: nos vídeos reais a mediana é 1,2× [1,1-1,4] (estudo E1) e o padrão do Tomada, 1,35×, fica no
+ * meio da faixa de 1,3-1,4×. Os tempos (lead, hold, fusão) são os do 16:9; o movimento é de 0,6 s (`ZOOM_SCALE_SPRING`).
  */
-export const VERTICAL_ZOOM_SCALE: Record<ZoomPresetId, number> = { subtle: 1.2, moderate: 1.3, intense: 1.4 }
+export const VERTICAL_ZOOM_SCALE: Record<ZoomPresetId, number> = { subtle: 1.2, moderate: 1.35, intense: 1.5 }
 
-/** O preset de um formato: no vertical, os tempos do preset com a escala de vertical. */
+/** Teto de zooms por minuto no vertical: 3 no padrão (p75 do grupo com apresentador: 3,2; a mediana geral é de 0 a 1). */
+export const VERTICAL_ZOOM_MAX_PER_MIN: Record<ZoomPresetId, number> = { subtle: 2, moderate: 3, intense: 5 }
+
+/** O preset de um formato: no vertical, os tempos do preset com a escala e o teto de vertical. */
 export function zoomPresetFor(kind: 'horizontal' | 'vertical', id: ZoomPresetId): ZoomPreset {
   const base = ZOOM_PRESETS[id]
-  return kind === 'vertical' ? { ...base, scale: VERTICAL_ZOOM_SCALE[id] } : base
+  return kind === 'vertical' ? { ...base, scale: VERTICAL_ZOOM_SCALE[id], maxPerMin: VERTICAL_ZOOM_MAX_PER_MIN[id] } : base
 }
 
 /** Rajada de digitação: pelo menos 3 teclas com intervalos menores que isto. */
@@ -83,7 +95,14 @@ export type AutoZoomInput = {
   preset: ZoomPresetId | ZoomPreset
 }
 
-type Win = { start: number; end: number; focus: 'auto' | { x: number; y: number }; click: boolean }
+type Win = {
+  start: number
+  end: number
+  focus: 'auto' | { x: number; y: number }
+  click: boolean
+  /** Quantos cliques e rajadas formam este zoom: o peso dele no teto por minuto. */
+  hits: number
+}
 
 /** Rajadas de digitação: [{first, last}] em ms. */
 export function findTypingBursts(keys: readonly KeyEvent[]): { first: number; last: number }[] {
@@ -137,6 +156,7 @@ function mergeWindows(wins: Win[], gap: number): Win[] {
     const last = out[out.length - 1]
     if (last && w.start - last.end < gap) {
       last.end = Math.max(last.end, w.end)
+      last.hits += w.hits
       // com cliques no grupo o foco segue o cursor; senão fica o ponto do primeiro
       if (w.click && !last.click) {
         last.focus = 'auto'
@@ -171,7 +191,7 @@ export function generateAutoZooms(input: AutoZoomInput): Zoom[] {
   const clicks = input.clicks.filter((c) => !c.out && Number.isFinite(c.t) && c.t >= 0).sort((a, b) => a.t - b.t)
   const wins: Win[] = []
 
-  for (const c of clicks) wins.push({ start: c.t - preset.lead, end: c.t + preset.hold, focus: 'auto', click: true })
+  for (const c of clicks) wins.push({ start: c.t - preset.lead, end: c.t + preset.hold, focus: 'auto', click: true, hits: 1 })
 
   for (const burst of findTypingBursts(input.keys)) {
     let anchor: { x: number; y: number } | null = null
@@ -180,7 +200,7 @@ export function generateAutoZooms(input: AutoZoomInput): Zoom[] {
       else break
     }
     const focus = anchor ?? sampleGrid(input.cursor, burst.first)
-    wins.push({ start: burst.first - preset.lead, end: burst.last + preset.hold, focus: { x: focus.x, y: focus.y }, click: false })
+    wins.push({ start: burst.first - preset.lead, end: burst.last + preset.hold, focus: { x: focus.x, y: focus.y }, click: false, hits: 1 })
   }
 
   if (clicks.length === 0) {
@@ -189,7 +209,8 @@ export function generateAutoZooms(input: AutoZoomInput): Zoom[] {
         start: d.start - preset.lead * 0.5,
         end: d.end + preset.hold * 0.25,
         focus: { x: d.x, y: d.y },
-        click: false
+        click: false,
+        hits: 1
       })
     }
   }
@@ -197,11 +218,17 @@ export function generateAutoZooms(input: AutoZoomInput): Zoom[] {
   let merged = mergeWindows(wins, preset.mergeGap)
   merged = mergeWindows(merged, preset.minGap)
 
-  const zooms: Zoom[] = []
+  // recorta na gravação, descarta o que é curto demais e aplica o teto de zooms por minuto
+  const fitted: Win[] = []
   for (const w of merged) {
     const start = Math.max(0, w.start)
     const end = Math.min(duration, w.end)
-    if (end - start < MIN_ZOOM_MS) continue
+    if (end - start >= MIN_ZOOM_MS) fitted.push({ ...w, start, end })
+  }
+  const zooms: Zoom[] = []
+  for (const w of limitPerMinute(fitted, preset.maxPerMin)) {
+    const start = w.start
+    const end = w.end
     zooms.push({
       id: `zoom-auto-${zooms.length + 1}`,
       start: Math.round(start),
@@ -212,6 +239,40 @@ export function generateAutoZooms(input: AutoZoomInput): Zoom[] {
     })
   }
   return zooms
+}
+
+/** Janela deslizante do teto de zooms (ms). */
+export const ZOOM_CAP_WINDOW_MS = 60_000
+
+/**
+ * O teto de zooms por minuto: em qualquer janela de 60 s não começam mais que `cap` zooms. Se uma janela passa do teto, sai o
+ * zoom de MENOS peso (poucos cliques); empate: o mais curto e, se ainda empatar, o mais tardio. Repete até nenhuma janela passar
+ * do teto. `cap` ausente, menor que 1 ou infinito não limita nada.
+ */
+export function limitPerMinute<T extends { start: number; end: number; hits: number }>(zooms: readonly T[], cap: number): T[] {
+  const list = [...zooms]
+  if (!(cap >= 1) || !Number.isFinite(cap)) return list
+  const n = Math.floor(cap)
+  for (;;) {
+    let bad = -1
+    for (let i = 0; i + n < list.length; i++) {
+      if (list[i + n]!.start - list[i]!.start < ZOOM_CAP_WINDOW_MS) {
+        bad = i
+        break
+      }
+    }
+    if (bad < 0) return list
+    // entre os `n + 1` zooms desta janela, sai o mais fraco; no empate, o mais curto; se ainda empatar, o mais tardio
+    let drop = bad
+    for (let k = bad + 1; k <= bad + n; k++) {
+      const a = list[k]!
+      const b = list[drop]!
+      const lenA = a.end - a.start
+      const lenB = b.end - b.start
+      if (a.hits < b.hits || (a.hits === b.hits && lenA <= lenB)) drop = k
+    }
+    list.splice(drop, 1)
+  }
 }
 
 /** Troca os zooms automáticos pelos de `preset`, mantendo os manuais. */
@@ -244,7 +305,10 @@ export type CameraPathOptions = {
   view?: { w: number; h: number }
   /** Largura/altura da fonte, para medir "varrida" em larguras de tela (padrão 16/9). */
   sourceAspect?: number
+  /** A mola do CENTRO do foco (e da escala, se `scaleSpring` faltar). */
   spring?: SpringParams
+  /** A mola da ESCALA: dá o tempo do movimento do zoom (1,0 s no 16:9, 0,6 s no vertical). Padrão: a mesma do centro. */
+  scaleSpring?: SpringParams
   lookaheadMs?: number
 }
 
@@ -268,6 +332,7 @@ export function computeCameraPath(
   opts: CameraPathOptions
 ): CameraPath {
   const spring = opts.spring ?? CAMERA_SPRING
+  const scaleSpring = opts.scaleSpring ?? spring
   const view = opts.view ?? { w: 1, h: 1 }
   const aspect = opts.sourceAspect && opts.sourceAspect > 0 ? opts.sourceAspect : 16 / 9
   const lookahead = opts.lookaheadMs ?? LOOKAHEAD_MS
@@ -361,7 +426,7 @@ export function computeCameraPath(
       sCx = { x: tcx, v: 0 }
       sCy = { x: tcy, v: 0 }
     } else if (i > 0) {
-      sScale = springStep(sScale.x, sScale.v, targetScale, spring, dt)
+      sScale = springStep(sScale.x, sScale.v, targetScale, scaleSpring, dt)
       sCx = springStep(sCx.x, sCx.v, tcx, spring, dt)
       sCy = springStep(sCy.x, sCy.v, tcy, spring, dt)
     }

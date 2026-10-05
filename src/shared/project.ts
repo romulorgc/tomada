@@ -44,7 +44,7 @@ export function defaultCaptions(): CaptionStyle {
   return {
     enabled: false,
     style: 'natural',
-    wordsPerLine: 4,
+    wordsPerLine: 5,
     position: 'bottom',
     box: true,
     highlightColor: '#FFD93D'
@@ -172,7 +172,8 @@ const captionStyleSchema = z.looseObject({
   textColor: z.string().optional(),
   size: z.number().optional(),
   positionY: z.number().optional(),
-  uppercase: z.boolean().optional()
+  uppercase: z.boolean().optional(),
+  highlightWord: z.boolean().optional()
 })
 
 const verticalSchema = z.looseObject({
@@ -182,6 +183,7 @@ const verticalSchema = z.looseObject({
   zoomPreset: z.enum(['subtle', 'moderate', 'intense', 'off']).optional(),
   camera: z.looseObject({ corner: cornerSchema.optional(), size: z.number().optional() }).optional(),
   hook: z.string().optional(),
+  cameraTop: z.boolean().optional(),
   captions: z
     .looseObject({
       enabled: z.boolean().optional(),
@@ -191,7 +193,8 @@ const verticalSchema = z.looseObject({
       box: z.boolean().optional(),
       size: z.number().optional(),
       positionY: z.number().optional(),
-      uppercase: z.boolean().optional()
+      uppercase: z.boolean().optional(),
+      highlightWord: z.boolean().optional()
     })
     .optional()
 })

@@ -99,3 +99,45 @@ export async function outputMs(page: Page): Promise<number> {
 export async function previewShot(page: Page): Promise<Buffer> {
   return page.getByTestId('preview-canvas').screenshot({ type: 'png' })
 }
+
+/** A reprodução da prévia agora (o botão de tocar diz; o canvas guarda quantos pedidos de tocar já houve e de onde veio o último). */
+export async function playState(page: Page): Promise<{ playing: boolean; playCount: number; playSource: string }> {
+  const playing = (await page.getByTestId('play-toggle').getAttribute('data-playing')) === 'true'
+  const canvas = page.getByTestId('preview-canvas')
+  return { playing, playCount: Number((await canvas.getAttribute('data-play-count')) ?? '0'), playSource: (await canvas.getAttribute('data-play-source')) ?? '' }
+}
+
+/**
+ * Leva a prévia, PARADA, ao instante `ms` de saída (sem cortes saída = origem; `ms` múltiplo de 1 s) de um jeito que não depende
+ * do estado de antes: `Home` (que também PAUSA) e um Shift+→ por segundo (cada um anda 1 s a partir de onde está). Confere que parou
+ * em `ms` e que a prévia não está tocando; se estiver (uma tecla que não é do teste chegou à janela no meio do caminho), pausa e
+ * refaz, até 4 vezes, anotando em `strays` o que viu, com a origem do pedido, em vez de falhar por um relógio que andou sozinho.
+ * Esta prévia só toca quando alguém pede (Espaço, J/K/L ou o botão): qualquer pedido que o teste não fez é anotado.
+ */
+export async function seekPausedTo(page: Page, ms: number, strays: string[] = []): Promise<void> {
+  const canvas = page.getByTestId('preview-canvas')
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    await page.keyboard.press('Home')
+    for (let n = 0; n < ms / 1000; n++) await page.keyboard.press('Shift+ArrowRight')
+    const settled = await expect
+      .poll(async () => Number(await canvas.getAttribute('data-source-ms')), { timeout: 3000 })
+      .toBeCloseTo(ms, 0)
+      .then(
+        () => true,
+        () => false
+      )
+    if (settled) {
+      await expect(canvas).toHaveAttribute('data-ready', 'true', { timeout: 15_000 })
+      await page.waitForTimeout(250) // o quadro novo do <video> chega e é desenhado
+      const st = await playState(page)
+      if (!st.playing) {
+        if (st.playCount > 0) strays.push(`${st.playCount} pedido(s) de tocar que o teste não fez (o último veio de "${st.playSource}"); a prévia já estava parada`)
+        return
+      }
+    }
+    const st = await playState(page)
+    strays.push(`tentativa ${attempt}: a prévia estava tocando (pedidos de tocar: ${st.playCount}, o último veio de "${st.playSource || 'nenhum'}")`)
+    if (st.playing) await page.getByTestId('play-toggle').click()
+  }
+  throw new Error(`A prévia não ficou parada em ${ms} ms depois de 4 tentativas: ${JSON.stringify(await playState(page))}; ${strays.join('; ')}`)
+}

@@ -186,15 +186,15 @@ export const ptBR = {
       presets: { off: 'Desligado', subtle: 'Sutil', moderate: 'Moderado', intense: 'Intenso' },
       presetHelp: {
         off: 'Sem zoom nos cliques.',
-        subtle: 'Aproxima pouco (1,4×) e devagar.',
-        moderate: 'O equilíbrio para a maioria dos vídeos (1,7×).',
-        intense: 'Aproxima muito (2×) e rápido, bom para telas pequenas.'
+        subtle: 'Aproxima pouco (1,3×) e raramente: até 3 por minuto.',
+        moderate: 'Como nos vídeos publicados (1,5×, até 5 por minuto, um movimento de 1 s).',
+        intense: 'Aproxima mais (1,8×) e com mais frequência, bom para telas pequenas: até 8 por minuto.'
       },
       presetHelpVertical: {
         off: 'Sem zoom nos cliques: só o recorte que segue o cursor.',
-        subtle: 'Reforça pouco (1,2×) sobre o recorte que segue o cursor.',
-        moderate: 'Reforça (1,3×) sobre o recorte que segue o cursor.',
-        intense: 'Reforça bem (1,4×) e rápido: o texto da tela fica legível no celular.'
+        subtle: 'Reforça pouco (1,2×) sobre o recorte que segue o cursor: até 2 por minuto.',
+        moderate: 'Reforça (1,35×) como nos vídeos publicados: até 3 por minuto, um movimento de 0,6 s.',
+        intense: 'Reforça bem (1,5×) e com mais frequência: o texto da tela fica legível no celular. Até 5 por minuto.'
       },
       count: (n: number): string => (n === 0 ? 'Nenhum zoom' : n === 1 ? '1 zoom' : `${n} zooms`),
       countDetail: (auto: number, manual: number): string => `${auto} automático${auto === 1 ? '' : 's'}, ${manual} manual${manual === 1 ? '' : 'is'}`,
@@ -235,7 +235,7 @@ export const ptBR = {
       },
       optionHints: {
         'screen-focus': 'A tela recortada em tela cheia, seguindo o cursor, com a câmera numa bolha.',
-        stack: 'A câmera em cima e o recorte da tela embaixo, seguindo o cursor.',
+        stack: 'A tela em cima e a câmera embaixo, metade e metade, de ponta a ponta. A tela segue o cursor.',
         'screen-wide': 'A tela inteira na largura, com o mesmo vídeo desfocado ao fundo. Para telas de letra grande.',
         camera: 'Só a câmera, em tela cheia.'
       },
@@ -243,13 +243,15 @@ export const ptBR = {
         video: 'Layout do vídeo vertical',
         videoHelp: 'Vale para todo o vídeo, menos nos trechos da trilha Layout.',
         auto: 'Escolher pelo que acontece',
-        autoHelp: 'Fala sem nada acontecendo na tela por 2 s ou mais vira "Câmera + tela". O resto fica no recorte do cursor.',
+        autoHelp: 'Fala sem nada acontecendo na tela por 3 s ou mais vira "Câmera + tela". O resto fica no recorte do cursor. Nenhum layout fica menos de 6 s na tela antes de trocar.',
+        cameraTop: 'Câmera em cima',
+        cameraTopHint: 'No "Câmera + tela", põe a câmera em cima e a tela embaixo. O padrão é a tela em cima.',
         autoWarn: (n: number): string => (n === 1 ? 'Isto substitui o trecho de layout do vertical.' : `Isto substitui os ${n} trechos de layout do vertical.`),
         autoConfirm: 'Substituir',
         autoCancel: 'Cancelar',
         autoDone: (n: number): string => (n === 0 ? 'Nada pediu a câmera: o vídeo todo ficou no recorte do cursor.' : n === 1 ? '1 trecho com câmera + tela.' : `${n} trechos com câmera + tela.`),
         hook: 'Título de gancho',
-        hookHelp: 'Aparece nos 2 primeiros segundos, no alto do vídeo vertical. Diga o resultado em poucas palavras.',
+        hookHelp: 'Aparece nos 4 primeiros segundos, no alto do vídeo vertical (a bolha da câmera desce enquanto ele está na tela). Diga o resultado em poucas palavras.',
         hookPlaceholder: 'Ex.: Grave sua tela em 1 clique',
         hookCount: (n: number, max: number): string => `${n} de ${max}`
       },
@@ -273,7 +275,7 @@ export const ptBR = {
       style: 'Estilo',
       styles: {
         highlight: { name: 'Destaque', hint: 'Letra pesada, caixa-alta, a palavra falada acesa' },
-        natural: { name: 'Natural', hint: 'Frase discreta numa caixa, embaixo' },
+        natural: { name: 'Natural', hint: 'Letra em caixa mista, sem caixa atrás no vertical; caixa escura no 16:9' },
         clean: { name: 'Limpa', hint: 'Caixa branca, texto escuro' },
         karaoke: { name: 'Karaokê', hint: 'A frase inteira, a palavra acesa avança' }
       },
@@ -284,6 +286,11 @@ export const ptBR = {
       positionTop: 'No alto',
       positionBottom: 'Embaixo',
       wordsPerLine: 'Palavras por linha',
+      positionAuto: 'Posição automática: 70% do alto e, no "Câmera + tela", na emenda das duas. Mexer no controle fixa a posição.',
+      positionManual: 'Posição fixa, escolhida por você.',
+      positionBack: 'Voltar ao automático',
+      highlightWord: 'Palavra falada em destaque',
+      highlightWordHint: 'A palavra que está sendo dita acende na cor de destaque. A Limpa mostra o que ainda não foi dito apagado.',
       uppercase: 'Maiúsculas',
       box: 'Caixa atrás do texto',
       colors: 'Cores',

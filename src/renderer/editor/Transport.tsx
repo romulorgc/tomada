@@ -88,7 +88,7 @@ export function Transport() {
             aria-keyshortcuts="Space"
             data-testid="play-toggle"
             data-playing={playing}
-            onClick={() => engine()?.toggle()}
+            onClick={() => engine()?.toggle('button')}
           >
             {playing ? <PauseIcon size={18} /> : <PlayIcon size={18} />}
           </button>

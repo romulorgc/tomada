@@ -302,10 +302,16 @@ export class PreviewEngine {
   }
 
   // --- transporte ------------------------------------------------------------------------------------
-  /** Toca para a frente (ou para trás, com taxa negativa). */
-  play(rate = 1): void {
+  /**
+   * Toca para a frente (ou para trás, com taxa negativa). `source` diz DE ONDE veio o pedido (`key:Space`, `key:KeyL`, `button`…):
+   * fica em `data-play-source` do canvas, com a contagem em `data-play-count`. A prévia nunca começa sozinha, só por um destes
+   * pedidos; se alguma vez tocar "sem ninguém pedir" (era o sintoma de um teste intermitente), o canvas diz quem pediu.
+   */
+  play(rate = 1, source = 'api'): void {
     const d = this.derived
     if (!d || d.kept.length === 0) return
+    this.o.canvas.dataset.playSource = source
+    this.o.canvas.dataset.playCount = String(Number(this.o.canvas.dataset.playCount ?? '0') + 1)
     this.setError(null)
     if (rate > 0 && this.outputMs >= rangesLength(d.kept) - 40) this.seekSource(outputToSource(0, d.kept))
     this.rate = rate
@@ -360,16 +366,16 @@ export class PreviewEngine {
     this.publish(true)
   }
 
-  toggle(): void {
+  toggle(source = 'api'): void {
     if (this.playing) this.pause()
-    else this.play(1)
+    else this.play(1, source)
   }
 
   /** J/K/L estilo ilha de edição. */
-  shuttle(key: 'J' | 'K' | 'L'): void {
+  shuttle(key: 'J' | 'K' | 'L', source = 'api'): void {
     const next = shuttleRate(this.currentRate, key)
     if (next === 0) this.pause()
-    else this.play(next)
+    else this.play(next, source)
   }
 
   seekSource(ms: number): void {

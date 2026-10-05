@@ -108,3 +108,34 @@ export function stepMany(state: SpringState, target: number, p: SpringParams, dt
   for (let i = 0; i < n; i++) s = step(s.x, s.v, target, p, dt)
   return s
 }
+
+/**
+ * Duração do MOVIMENTO do zoom (ms), medida em vídeos reais (estudo E1, 05/10/2026): 1,0 s [0,5-1,2] no 16:9 e 0,6 s
+ * [0,4-1,1] no vertical. Aqui é o tempo que a ESCALA leva para chegar a 95% do caminho.
+ */
+export const ZOOM_MOTION_MS = { horizontal: 1000, vertical: 600 } as const
+
+/** Quanto tempo (s) uma mola, saindo do repouso, leva para chegar a `fraction` do alvo (passos de 1 ms). */
+export function riseTimeSeconds(p: SpringParams, fraction = 0.95): number {
+  let s: SpringState = { x: 0, v: 0 }
+  for (let i = 1; i <= 20_000; i++) {
+    s = step(s.x, s.v, 1, p, 0.001)
+    if (s.x >= fraction) return i / 1000
+  }
+  return Number.POSITIVE_INFINITY
+}
+
+/**
+ * A mola de `base` com o tempo esticado ou encolhido para chegar a 95% em `ms`. Mudar a frequência por `s` (k·s², c·s, mesma
+ * massa) só escala o eixo do tempo: o amortecimento ζ, e por isso a forma do movimento, continuam os mesmos.
+ */
+export function springWithRiseTime(base: SpringParams, ms: number): SpringParams {
+  const s = riseTimeSeconds(base) / (ms / 1000)
+  return { k: base.k * s * s, c: base.c * s, m: base.m }
+}
+
+/** A mola da ESCALA do zoom em cada formato. O centro do foco segue o cursor com a `CAMERA_SPRING` (rápida): o cursor nunca sai do quadro. */
+export const ZOOM_SCALE_SPRING: Record<'horizontal' | 'vertical', SpringParams> = {
+  horizontal: springWithRiseTime(CAMERA_SPRING, ZOOM_MOTION_MS.horizontal),
+  vertical: springWithRiseTime(CAMERA_SPRING, ZOOM_MOTION_MS.vertical)
+}

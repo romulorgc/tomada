@@ -1,16 +1,19 @@
 /**
- * COMO cada estilo de legenda se desenha (M4a): fonte, tamanho, contorno, cores, caixa, onde fica. Valores de partida da
- * pesquisa (R12 §1.2 e §7: Hormozi/"Autoridade", caixa/karaokê, clean; JSON2Video, Creatomate e Shotstack) e do projeto:
+ * COMO cada estilo de legenda se desenha: fonte, tamanho, contorno, cores, caixa, onde fica. Os números vêm dos 115 vídeos
+ * publicados que o estudo E1 mediu (05/10/2026, `estudo/videos-referencia-2026-10-05.md`), não mais de blogs. No vertical:
  *
- *  - Destaque (vertical): Montserrat ExtraBold, MAIÚSCULAS, 72-96 px, contorno preto de 8-12 px, a palavra falada em
- *    #FFD93D com "pop", no máximo 2 linhas × 3 palavras, bloco centrado em y ≈ 1150-1300;
- *  - Natural (16:9): Inter, frase discreta numa caixa escura, embaixo;
- *  - Limpa: caixa branca e texto escuro; as palavras ainda não ditas ficam apagadas;
- *  - Karaokê: frase inteira numa caixa, a palavra falada ganha uma pílula e a acesa avança.
+ *  - Destaque: Montserrat ExtraBold em CAIXA ALTA, maiúscula de 58 px (corpo de 80), contorno de ~5 px, a palavra falada em
+ *    #FFD93D com "pop" (E1: 58 [54-61] px, n = 21);
+ *  - Natural (o padrão do pt-BR): Inter SemiBold em caixa mista, branco com contorno fino, SEM caixa atrás, maiúscula de 46 px
+ *    (corpo de 63; E1: 46 [41-57] px, n = 34; 72% das legendas brasileiras são em caixa mista);
+ *  - Limpa: caixa branca e texto escuro; as palavras ainda não ditas ficam apagadas (corpo de 63);
+ *  - Karaokê: Montserrat Bold, a palavra falada ganha uma pílula (corpo de 66);
+ *  - todos: uma linha de 2 palavras [1-3], bloco de no máximo 660 px, centro em y 70% (E1: 70,3% [58,7-77,9]).
  *
- * Tamanhos em px "de 1080" (o lado menor do quadro; `unit` escala para a prévia e a exportação). Código puro.
+ * No 16:9 (n = 4, confiança baixa): maiúscula de 26 px (corpo de 36), centro em y 94%, 1 linha de 5 palavras numa caixa escura
+ * translúcida. Tamanhos em px "de 1080" (o lado menor do quadro; `unit` escala para a prévia e a exportação). Código puro.
  */
-import { SAFE_BOX } from './vertical'
+import { CAPTION_Y_VERTICAL, SAFE_BOX } from './vertical'
 import type { FormatSpec } from './scene'
 import type { CaptionStyle, CaptionStyleId } from './types'
 
@@ -85,40 +88,40 @@ const SPECS: Record<CaptionStyleId, Spec> = {
   natural: {
     font: 'inter',
     weight: 600,
-    v: 54,
-    h: 46,
+    v: 63,
+    h: 36,
     lineHeight: 1.28,
     uppercase: false,
-    outline: { v: 5, h: 4 },
+    outline: { v: 5, h: 3 },
     shadow: false,
     color: '#FFFFFF',
-    active: { mode: 'none', textColor: '#FFFFFF', pop: 0 },
+    active: { mode: 'color', textColor: '#FFFFFF', pop: 0.06 },
     upcomingAlpha: 1,
-    width: { v: 800, h: 0.68 },
+    width: { v: 660, h: 0.68 },
     box: { color: 'rgba(10,12,16,0.62)', padX: 0.55, padY: 0.3, radius: 0.42 },
     boxOptional: true
   },
   highlight: {
     font: 'montserrat',
     weight: 800,
-    v: 92,
-    h: 74,
+    v: 80,
+    h: 58,
     lineHeight: 1.1,
     uppercase: true,
-    outline: { v: 10, h: 8 },
+    outline: { v: 5, h: 4 },
     shadow: true,
     color: '#FFFFFF',
     active: { mode: 'color', textColor: '#FFFFFF', pop: 0.08 },
     upcomingAlpha: 1,
-    width: { v: 800, h: 0.62 },
+    width: { v: 660, h: 0.62 },
     box: null,
     boxOptional: false
   },
   clean: {
     font: 'inter',
     weight: 700,
-    v: 56,
-    h: 46,
+    v: 63,
+    h: 36,
     lineHeight: 1.28,
     uppercase: false,
     outline: { v: 0, h: 0 },
@@ -126,23 +129,23 @@ const SPECS: Record<CaptionStyleId, Spec> = {
     color: DARK,
     active: { mode: 'none', textColor: DARK, pop: 0 },
     upcomingAlpha: 0.38,
-    width: { v: 800, h: 0.62 },
+    width: { v: 660, h: 0.62 },
     box: { color: 'rgba(255,255,255,0.97)', padX: 0.62, padY: 0.36, radius: 0.46 },
     boxOptional: false
   },
   karaoke: {
     font: 'montserrat',
     weight: 700,
-    v: 62,
-    h: 50,
+    v: 66,
+    h: 39,
     lineHeight: 1.34,
     uppercase: false,
-    outline: { v: 6, h: 5 },
+    outline: { v: 5, h: 4 },
     shadow: false,
     color: '#FFFFFF',
     active: { mode: 'pill', textColor: DARK, pop: 0.06 },
     upcomingAlpha: 1,
-    width: { v: 800, h: 0.7 },
+    width: { v: 660, h: 0.7 },
     box: { color: 'rgba(10,12,16,0.66)', padX: 0.5, padY: 0.3, radius: 0.4 },
     boxOptional: true
   }
@@ -150,18 +153,25 @@ const SPECS: Record<CaptionStyleId, Spec> = {
 
 export const CAPTION_STYLE_IDS: readonly CaptionStyleId[] = ['highlight', 'natural', 'clean', 'karaoke']
 
-/** O que cada estilo traz de partida quando é escolhido: palavras por linha e se tem caixa (a aba Legendas e o estilo de um corte). */
-export const CAPTION_STYLE_DEFAULTS: Record<CaptionStyleId, { wordsPerLine: number; box: boolean }> = {
-  highlight: { wordsPerLine: 3, box: false },
-  natural: { wordsPerLine: 4, box: true },
-  clean: { wordsPerLine: 4, box: true },
-  karaoke: { wordsPerLine: 4, box: true }
+/**
+ * O que cada estilo traz de partida quando é escolhido, por formato: palavras por linha e se tem caixa (a aba Legendas, o estilo
+ * de um corte e o pedido de "editar pedindo"). No vertical, 2 palavras numa linha e SEM caixa atrás (E1: 1 × 2 [1-3]; caixa em 7 de 17
+ * canais); no 16:9, 5 palavras numa linha (E1: 5 [4-6]) e, nos estilos que a aceitam, a caixa escura translúcida.
+ */
+export function captionStyleDefaults(style: CaptionStyleId, kind: FormatSpec['kind']): { wordsPerLine: number; box: boolean } {
+  if (kind === 'vertical') return { wordsPerLine: 2, box: false }
+  return { wordsPerLine: 5, box: style !== 'highlight' }
 }
 
-/** Centro vertical padrão do bloco (fração da altura): no vertical em y ≈ 1225 de 1920; no 16:9 embaixo. */
+/** Palavras por linha que o controle aceita: no vertical de 1 a 3 (a faixa medida), no 16:9 de 1 a 6. */
+export function maxWordsPerLine(kind: FormatSpec['kind']): number {
+  return kind === 'vertical' ? 3 : 6
+}
+
+/** Centro vertical padrão do bloco (fração da altura): no vertical y 70% (≈ 1344 de 1920, E1); no 16:9 y 94% (E1, n = 4). */
 export function defaultCaptionY(position: CaptionStyle['position'], kind: FormatSpec['kind']): number {
-  if (kind === 'vertical') return position === 'top' ? 0.22 : position === 'center' ? 0.5 : 1225 / 1920
-  return position === 'top' ? 0.12 : position === 'center' ? 0.5 : 0.885
+  if (kind === 'vertical') return position === 'top' ? 0.22 : position === 'center' ? 0.5 : CAPTION_Y_VERTICAL
+  return position === 'top' ? 0.12 : position === 'center' ? 0.5 : 0.94
 }
 
 export const CAPTION_SIZE_MIN = 0.6
@@ -179,13 +189,18 @@ export function inkMarginY(outlinePx: number, fontPx: number): number {
   return outlinePx > 0 ? outlinePx + fontPx * 0.14 : 0
 }
 
-export function resolveCaptionStyle(cs: CaptionStyle, format: Pick<FormatSpec, 'kind' | 'w' | 'h'>): CaptionRenderStyle {
+/**
+ * O estilo resolvido para o formato. `autoY` é o centro vertical que o LAYOUT pede (fração da altura: no V-B a emenda tela/câmera,
+ * na tela na largura 71%…): vale só quando a pessoa não escolheu a posição (`positionY`) nem pôs a legenda no alto ou no meio.
+ */
+export function resolveCaptionStyle(cs: CaptionStyle, format: Pick<FormatSpec, 'kind' | 'w' | 'h'>, autoY?: number): CaptionRenderStyle {
   const spec = SPECS[cs.style]
   const vertical = format.kind === 'vertical'
   const unit = Math.min(format.w, format.h) / 1080
   const size = clamp(Number.isFinite(cs.size) ? (cs.size as number) : 1, CAPTION_SIZE_MIN, CAPTION_SIZE_MAX)
   const fontPx = (vertical ? spec.v : spec.h) * size * unit
-  const y = clamp(Number.isFinite(cs.positionY) ? (cs.positionY as number) : defaultCaptionY(cs.position, format.kind), 0.04, 0.96)
+  const fallbackY = autoY !== undefined && vertical && cs.position === 'bottom' ? autoY : defaultCaptionY(cs.position, format.kind)
+  const y = clamp(Number.isFinite(cs.positionY) ? (cs.positionY as number) : fallbackY, 0.04, 0.96)
   const showBox = spec.box !== null && (!spec.boxOptional || cs.box)
   // com a caixa por trás o texto já tem fundo; sem ela, o texto claro precisa do contorno para não sumir em cima da tela
   const outlinePx = showBox ? 0 : (vertical ? spec.outline.v : spec.outline.h) * size * unit
@@ -202,7 +217,11 @@ export function resolveCaptionStyle(cs: CaptionStyle, format: Pick<FormatSpec, '
     outlineColor: '#000000',
     shadow: spec.shadow,
     color: cs.textColor ?? spec.color,
-    active: { mode: spec.active.mode, color: cs.highlightColor, textColor: spec.active.textColor, pop: spec.active.pop },
+    // a palavra falada acesa vem ligada (E1: em cor própria em 5 de 17 canais); a pessoa a desliga
+    active:
+      cs.highlightWord === false
+        ? { mode: 'none', color: cs.highlightColor, textColor: spec.active.textColor, pop: 0 }
+        : { mode: spec.active.mode, color: cs.highlightColor, textColor: spec.active.textColor, pop: spec.active.pop },
     upcomingAlpha: spec.upcomingAlpha,
     // o contorno e a sombra saem do texto: a largura do texto desconta a margem de tinta (a TINTA fica dentro da caixa segura)
     maxWidth: (vertical ? spec.width.v * unit : format.w * spec.width.h) - 2 * inkMarginX(outlinePx, fontPx),
@@ -216,6 +235,10 @@ export function resolveCaptionStyle(cs: CaptionStyle, format: Pick<FormatSpec, '
 
 // ---------------------------------------------------------------------------
 // Título de gancho (vertical)
+
+/** O gancho: o Anton de 54 px tem a maiúscula de 46 px (a maiúscula do Anton é 0,859 do corpo; E1: 44 px [41-48]). */
+export const HOOK_FONT_PX = 54
+export const HOOK_OUTLINE_PX = 4
 
 export type HookRenderStyle = {
   fontFamily: string
@@ -238,13 +261,13 @@ export function resolveHookStyle(format: Pick<FormatSpec, 'w' | 'h'>, band: { to
   return {
     fontFamily: FONT.anton,
     fontWeight: 400,
-    fontPx: 100 * unit,
-    minFontPx: 44 * unit,
+    fontPx: HOOK_FONT_PX * unit,
+    minFontPx: 42 * unit,
     lineHeight: 1,
     color: '#FFFFFF',
-    outlinePx: 9 * unit,
+    outlinePx: HOOK_OUTLINE_PX * unit,
     outlineColor: '#000000',
-    maxWidth: (800 - 2 * (9 + 100 * 0.025)) * unit,
+    maxWidth: (800 - 2 * (HOOK_OUTLINE_PX + HOOK_FONT_PX * 0.025)) * unit,
     centerX: format.w / 2,
     bandTop: band.top * unit,
     bandBottom: band.bottom * unit

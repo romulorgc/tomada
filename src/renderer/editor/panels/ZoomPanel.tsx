@@ -5,7 +5,7 @@
 import { useState } from 'react'
 import { formatSpan, formatTimecode } from '@shared/format'
 import { regenerateZooms, setZoomFocus, setZoomScale, zoomCounts, ZOOM_SCALE_MAX, ZOOM_SCALE_MIN } from '@shared/edits'
-import { generateAutoZooms, zoomPresetFor } from '@shared/zoom'
+import { DEFAULT_VERTICAL_ZOOM_PRESET, DEFAULT_ZOOM_PRESET, generateAutoZooms, zoomPresetFor } from '@shared/zoom'
 import type { Project, ZoomPresetId } from '@shared/types'
 import { ZoomInIcon } from '../../components/Icons'
 import { t } from '../../i18n/pt-BR'
@@ -33,13 +33,13 @@ export function ZoomPanel() {
 
   const generate = (p: Choice): void => {
     if (!cursorData) return
-    // no vertical os tempos são os do preset e a escala é a de vertical (1,2-1,4×): o recorte já parte de ~1,78×
+    // no vertical os tempos são os do preset e a escala e o teto por minuto são os de vertical (1,2-1,5×): o recorte já parte de ~1,78×
     const auto = p === 'off' ? [] : generateAutoZooms({ clicks: cursorData.clicks, keys: cursorData.keys, cursor: cursorData.grid, duration: durationMs, preset: zoomPresetFor(format, p) })
     store.getState().change((doc) => regenerateZooms(doc, p, auto))
     setConfirming(false)
   }
 
-  const fallback: ZoomPresetId = format === 'vertical' ? 'intense' : 'moderate'
+  const fallback: ZoomPresetId = format === 'vertical' ? DEFAULT_VERTICAL_ZOOM_PRESET : DEFAULT_ZOOM_PRESET
   const regenerate = (): void => {
     if (counts.auto > 0) setConfirming(true)
     else generate(preset && preset !== 'off' ? preset : fallback)

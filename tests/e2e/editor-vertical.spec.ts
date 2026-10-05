@@ -9,7 +9,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { frameRgb, imageToRgb, probeJson, rgbDiff } from '../helpers/media'
 import { editProject, exportsDirOf } from './export-helpers'
 import { EXAMPLE_FOLDER, launchTomada, shot, type Session } from './helpers'
-import { openEditor, previewShot, readSaved, waitSaved } from './editor-helpers'
+import { openEditor, previewShot, readSaved, seekPausedTo, waitSaved } from './editor-helpers'
 
 let s: Session | undefined
 test.afterEach(async () => {
@@ -25,12 +25,9 @@ const frame = (page: Page) => page.getByTestId('preview-frame')
 const canvasSize = (page: Page): Promise<{ w: number; h: number }> =>
   page.getByTestId('preview-canvas').evaluate((c) => ({ w: (c as HTMLCanvasElement).width, h: (c as HTMLCanvasElement).height }))
 
-/** Anda a reprodução de `fromMs` a `toMs` em toques de Shift+→ (1 s cada; sem cortes saída = origem). */
-async function stepTo(page: Page, fromMs: number, toMs: number): Promise<void> {
-  for (let n = 0; n < (toMs - fromMs) / 1000; n++) await page.keyboard.press('Shift+ArrowRight')
-  await expect.poll(async () => Number(await page.getByTestId('preview-canvas').getAttribute('data-source-ms')), { timeout: 15_000 }).toBeCloseTo(toMs, 0)
-  await expect(page.getByTestId('preview-canvas')).toHaveAttribute('data-ready', 'true', { timeout: 15_000 })
-  await page.waitForTimeout(300) // o quadro novo do <video> chega e é desenhado
+/** Leva a reprodução PARADA a `toMs` (Home e Shift+→, 1 s cada; sem cortes saída = origem): não depende de onde ela estava antes. */
+async function stepTo(page: Page, _fromMs: number, toMs: number): Promise<void> {
+  await seekPausedTo(page, toMs)
 }
 
 /** Pixels do amarelo de destaque (#FFD93D ±30) na prévia reduzida. */
@@ -48,7 +45,7 @@ async function openVertical(session: Session): Promise<void> {
   await expect(session.page.getByTestId('preview-canvas')).toHaveAttribute('data-ready', 'true', { timeout: 15_000 })
 }
 
-test('alternar 9:16: o canvas fica em pé, o vertical ganha edição PRÓPRIA (zooms 1,4×) e o 16:9 não muda; layout, desfazer e volta', async () => {
+test('alternar 9:16: o canvas fica em pé, o vertical ganha edição PRÓPRIA (zooms 1,35×) e o 16:9 não muda; layout, desfazer e volta', async () => {
   test.setTimeout(180_000)
   s = await launchTomada()
   const { page } = s
@@ -56,7 +53,7 @@ test('alternar 9:16: o canvas fica em pé, o vertical ganha edição PRÓPRIA (z
   await expect(frame(page)).toHaveAttribute('data-format', 'horizontal')
   await expect(page.getByTestId('ratio-16-9')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('safe-guide')).toHaveCount(0) // as zonas são só do vertical
-  await expect.poll(() => readSaved(s!).zooms.length, { timeout: 10_000 }).toBe(3) // o 16:9 gerou os dele ao abrir
+  await expect.poll(() => readSaved(s!).zooms.length, { timeout: 10_000 }).toBe(1) // o 16:9 gerou os dele ao abrir
   const horizontalBefore = readSaved(s)
   const wide = await canvasSize(page)
   expect(wide.w).toBeGreaterThan(wide.h)
@@ -71,18 +68,18 @@ test('alternar 9:16: o canvas fica em pé, o vertical ganha edição PRÓPRIA (z
   expect(tall.h / tall.w).toBeCloseTo(16 / 9, 1) // o canvas acompanha o tamanho da janela, arredondado
   await shot(page, '61-editor-9x16')
 
-  // a primeira vez no 9:16 gera zooms de vertical (Intenso, 1,4×) e grava, sem tocar nos do 16:9
-  await expect.poll(() => readSaved(s!).vertical?.zoomPreset, { timeout: 10_000 }).toBe('intense')
+  // a primeira vez no 9:16 gera zooms de vertical (Moderado, 1,35×, até 3 por minuto) e grava, sem tocar nos do 16:9
+  await expect.poll(() => readSaved(s!).vertical?.zoomPreset, { timeout: 10_000 }).toBe('moderate')
   const saved = readSaved(s)
   expect(saved.vertical!.zooms.length).toBeGreaterThan(0)
-  expect(saved.vertical!.zooms.every((z) => z.scale === 1.4 && z.origin === 'auto')).toBe(true)
+  expect(saved.vertical!.zooms.every((z) => z.scale === 1.35 && z.origin === 'auto')).toBe(true)
   expect(saved.zooms).toEqual(horizontalBefore.zooms)
   expect(saved.zoomPreset).toBe('moderate')
   expect(saved.style.defaultLayout).toBe(horizontalBefore.style.defaultLayout)
 
   // a aba Zoom do vertical mostra o preset do vertical e os zooms dele
   await page.getByTestId('tab-zoom').click()
-  await expect(page.getByTestId('zoom-intense')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('zoom-moderate')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('zoom-count')).toHaveText(`${saved.vertical!.zooms.length} ${saved.vertical!.zooms.length === 1 ? 'zoom' : 'zooms'}`)
 
   // layouts do vertical: V-A, V-B, V-C e só a câmera
@@ -107,12 +104,12 @@ test('alternar 9:16: o canvas fica em pé, o vertical ganha edição PRÓPRIA (z
   await expect(page.getByTestId('layout-bubble')).toBeVisible()
   await expect(page.getByTestId('layout-stack')).toHaveCount(0)
   await page.getByTestId('tab-zoom').click()
-  await expect(page.getByTestId('zoom-count')).toHaveText('3 zooms')
+  await expect(page.getByTestId('zoom-count')).toHaveText('1 zoom')
   await expect(page.getByTestId('zoom-moderate')).toHaveAttribute('aria-pressed', 'true')
   await waitSaved(s)
 })
 
-test('legendas no 9:16: Destaque de partida, estilos e ajustes do vertical sem mexer na legenda do 16:9, e a legenda aparece na prévia', async () => {
+test('legendas no 9:16: Natural (caixa mista) de partida, estilos e ajustes do vertical sem mexer na legenda do 16:9, e a legenda aparece na prévia', async () => {
   test.setTimeout(180_000)
   s = await launchTomada()
   const { page } = s
@@ -121,7 +118,8 @@ test('legendas no 9:16: Destaque de partida, estilos e ajustes do vertical sem m
   await page.getByTestId('tab-captions').click()
   await expect(page.getByTestId('captions-panel')).toBeVisible()
   await expect(page.getByTestId('captions-show')).toHaveAttribute('aria-checked', 'true') // o vertical já vem com legenda
-  await expect(page.getByTestId('caption-style-highlight')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('caption-style-natural')).toHaveAttribute('aria-pressed', 'true') // E1: 72% das legendas brasileiras são em caixa mista
+  await expect(page.getByTestId('captions-words')).toHaveValue('2') // uma linha de 2 palavras
   for (const id of ['highlight', 'natural', 'clean', 'karaoke']) await expect(page.getByTestId(`caption-style-${id}`)).toBeVisible()
   await expect(page.getByTestId('captions-format-note')).toContainText(/vertical/i)
   await page.waitForTimeout(500) // as amostras dos cartões desenham quando as fontes carregam
@@ -135,7 +133,7 @@ test('legendas no 9:16: Destaque de partida, estilos e ajustes do vertical sem m
   await page.waitForTimeout(300)
   const without = yellowPixels(await previewShot(page))
   console.log(`prévia 9:16 em 3 s: pixels amarelos com legenda ${withCaption}, sem ${without}`)
-  expect(withCaption - without).toBeGreaterThan(300)
+  expect(withCaption - without).toBeGreaterThan(40)
   await page.getByTestId('captions-show').click()
   await expect(page.getByTestId('captions-show')).toHaveAttribute('aria-checked', 'true')
 
@@ -143,10 +141,10 @@ test('legendas no 9:16: Destaque de partida, estilos e ajustes do vertical sem m
   await page.getByTestId('caption-style-clean').click()
   await expect(page.getByTestId('caption-style-clean')).toHaveAttribute('aria-pressed', 'true')
   await page.getByTestId('captions-size').fill('1.3')
-  await page.getByTestId('captions-words').fill('2')
+  await page.getByTestId('captions-words').fill('3')
   await expect.poll(() => readSaved(s!).vertical?.captions?.style, { timeout: 10_000 }).toBe('clean')
   await expect.poll(() => readSaved(s!).vertical?.captions?.size, { timeout: 10_000 }).toBe(1.3)
-  await expect.poll(() => readSaved(s!).vertical?.captions?.wordsPerLine, { timeout: 10_000 }).toBe(2)
+  await expect.poll(() => readSaved(s!).vertical?.captions?.wordsPerLine, { timeout: 10_000 }).toBe(3)
   const doc = readSaved(s)
   expect(doc.captions).toEqual(captions16) // a legenda do 16:9 não mudou (no projeto de exemplo é o Karaokê, desligada)
   await shot(page, '64-legenda-clean-vertical')
@@ -160,6 +158,51 @@ test('legendas no 9:16: Destaque de partida, estilos e ajustes do vertical sem m
   await expect.poll(() => readSaved(s!).captions.enabled, { timeout: 10_000 }).toBe(true)
   expect(readSaved(s).vertical?.captions?.style).toBe('clean') // e o vertical segue como estava
   await shot(page, '65-legenda-karaoke-16x9')
+})
+
+test('o usuário ajusta o que o automático escolheu: câmera em cima, palavra em destaque, posição da legenda e palavras por linha (cada formato com o seu)', async () => {
+  test.setTimeout(180_000)
+  s = await launchTomada()
+  const { page } = s
+  await openVertical(s)
+  const before16 = readSaved(s)
+
+  // câmera em cima: opção do V-B, só do vertical
+  await page.getByTestId('tab-layout').click()
+  await expect(page.getByTestId('layout-camera-top')).toHaveAttribute('aria-checked', 'false')
+  await page.getByTestId('layout-camera-top').click()
+  await expect(page.getByTestId('layout-camera-top')).toHaveAttribute('aria-checked', 'true')
+  await expect.poll(() => readSaved(s!).vertical?.cameraTop, { timeout: 10_000 }).toBe(true)
+  expect(JSON.stringify(readSaved(s).style)).not.toContain('stackCameraTop') // a visão do vertical nunca vaza para o estilo do 16:9
+  expect(readSaved(s).style).toEqual(before16.style)
+  await page.getByTestId('layout-camera-top').click()
+  await expect.poll(() => readSaved(s!).vertical?.cameraTop, { timeout: 10_000 }).toBeUndefined()
+
+  // a palavra falada em destaque vem ligada e se desliga; a legenda do 16:9 não muda
+  await page.getByTestId('tab-captions').click()
+  await expect(page.getByTestId('captions-highlight-word')).toHaveAttribute('aria-checked', 'true')
+  await page.getByTestId('captions-highlight-word').click()
+  await expect.poll(() => readSaved(s!).vertical?.captions?.highlightWord, { timeout: 10_000 }).toBe(false)
+  expect(readSaved(s).captions).toEqual(before16.captions)
+
+  // palavras por linha: no máximo 3 no vertical
+  await expect(page.getByTestId('captions-words')).toHaveAttribute('max', '3')
+
+  // posição: automática (acompanha o layout) até a pessoa mexer; "voltar ao automático" desfaz
+  await expect(page.getByTestId('captions-position-note')).toContainText('automática')
+  await page.getByTestId('captions-position').fill('0.5')
+  await expect.poll(() => readSaved(s!).vertical?.captions?.positionY, { timeout: 10_000 }).toBe(0.5)
+  await expect(page.getByTestId('captions-position-note')).toContainText('fixa')
+  await page.getByTestId('captions-position-auto').click()
+  await expect.poll(() => readSaved(s!).vertical?.captions?.positionY, { timeout: 10_000 }).toBeUndefined()
+  await expect(page.getByTestId('captions-position-note')).toContainText('automática')
+
+  // o 16:9 tem os padrões dele: até 6 palavras por linha, e o destaque dele continua ligado
+  await page.getByTestId('ratio-16-9').click()
+  await expect(page.getByTestId('captions-words')).toHaveAttribute('max', '6')
+  await expect(page.getByTestId('captions-highlight-word')).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByTestId('captions-position-note')).toHaveCount(0) // a posição automática por layout é do vertical
+  await waitSaved(s)
 })
 
 test('SRT e VTT pela aba Legendas: arquivo em exports/ no tempo certo, nunca sobrescreve, e o caminho aparece', async () => {
@@ -262,7 +305,7 @@ test('PRÉVIA = EXPORTAÇÃO no 9:16: cada quadro da prévia se parece com o SEU
   s = await launchTomada()
   const { page } = s
   await openVertical(s)
-  await expect.poll(() => readSaved(s!).vertical?.zoomPreset, { timeout: 10_000 }).toBe('intense')
+  await expect.poll(() => readSaved(s!).vertical?.zoomPreset, { timeout: 10_000 }).toBe('moderate')
   const times = [3000, 5000, 8000, 11_000, 12_000, 15_000]
   const preview: Uint8Array[] = []
   let at = 0

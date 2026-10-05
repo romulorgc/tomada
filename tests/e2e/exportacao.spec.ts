@@ -15,6 +15,7 @@ import { ensureLongProject, LONG_CUT_COUNT, LONG_CUT_MS, LONG_FOLDER, LONG_MS } 
 import { audioPcm, frameRgb, imageToRgb, lumaSeries, onsets, probeJson, rgbDiff } from '../helpers/media'
 import { EXAMPLE_FOLDER, launchTomada, ROOT, SCREENS_DIR, shot, type Session } from './helpers'
 import { editProject, exportProject, FLASH_FOLDER, listExports, listTexts, listVideos, seedFlashProject } from './export-helpers'
+import { playState, seekPausedTo } from './editor-helpers'
 
 let s: Session | undefined
 test.afterEach(async () => {
@@ -200,20 +201,35 @@ test('PRÉVIA = EXPORTAÇÃO: o quadro da prévia e o do arquivo exportado, no m
   await expect(page.getByTestId('preview-canvas')).toHaveAttribute('data-ready', 'true', { timeout: 15_000 })
   // ao abrir sem zooms, o editor gera os do preset moderado e grava no project.json
   await page.getByTestId('tab-zoom').click()
-  await expect(page.getByTestId('zoom-count')).toHaveText('3 zooms')
+  await expect(page.getByTestId('zoom-count')).toHaveText('1 zoom')
   const file = join(s.projects, EXAMPLE_FOLDER, 'project.json')
   await expect.poll(() => (JSON.parse(readFileSync(file, 'utf8')) as Project).zoomPreset, { timeout: 10_000 }).toBe('moderate')
 
+  // INTERMITENTE (05/10): falhou 1× na bateria completa (a prévia "tocando" em 17,3 s, com "Pausar" visível, quando o teste esperava
+  // a cabeça PARADA em 3 s) e nunca em ~20 execuções isoladas. A auditoria do código mostrou que a prévia só toca quando alguém pede
+  // (Espaço, J/K/L ou o botão; nenhum código a faz tocar sozinha), então a CAUSA MAIS PROVÁVEL (inferida, não observada) é uma
+  // tecla que não era do teste chegando à janela de teste, que fica em primeiro plano, no meio da bateria. O teste andava com
+  // Shift+→ RELATIVO ao lugar onde a cabeça estava e dependia de ela estar parada. Agora cada instante é buscado por
+  // `seekPausedTo` (Home, que também pausa, e Shift+→; confere que parou e refaz se a prévia tocou), e a prova abaixo reproduz o
+  // defeito de propósito: uma tecla Espaço ANTES da busca e outra NO MEIO dela. A origem de cada pedido de tocar fica em
+  // `data-play-source` do canvas, para a próxima falha dizer quem pediu.
+  const strays: string[] = []
+  await page.keyboard.press('Space') // a tecla perdida de antes
+  await expect.poll(async () => (await playState(page)).playing, { timeout: 5000 }).toBe(true)
+  await seekPausedTo(page, 8000, strays)
+  expect(strays.join('; ')).toContain('key:Space') // o canvas disse quem pediu para tocar
+  // a tecla perdida NO MEIO da busca: um Espaço que chega 30 ms depois de a busca começar
+  await page.evaluate(() => {
+    setTimeout(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true })), 30)
+  })
+  await seekPausedTo(page, 3000, strays)
+  expect((await playState(page)).playing).toBe(false)
+  await expect(page.getByTestId('preview-canvas')).toHaveAttribute('data-source-ms', /^3000/)
+
   const times = [3000, 8000, 14_000] // dentro de um zoom e logo depois de um clique (ripple visível)
   const preview: Uint8Array[] = []
-  let at = 0
   for (const t of times) {
-    // Shift+→ anda exatamente 1 s de saída (sem cortes, saída = origem): 3 s, depois +5 s, depois +6 s
-    for (let n = 0; n < (t - at) / 1000; n++) await page.keyboard.press('Shift+ArrowRight')
-    at = t
-    await expect.poll(async () => Number(await page.getByTestId('preview-canvas').getAttribute('data-source-ms')), { timeout: 15_000 }).toBeCloseTo(t, 0)
-    await expect(page.getByTestId('preview-canvas')).toHaveAttribute('data-ready', 'true', { timeout: 15_000 })
-    await page.waitForTimeout(250) // deixa o quadro novo do <video> chegar e ser desenhado
+    await seekPausedTo(page, t, strays)
     // o canvas fica "contaminado" pelo vídeo do protocolo tomada-media (sem CORS): não dá para ler os pixels
     // por script, então a prévia é fotografada pelo Chromium (o que o usuário vê) e reduzida com média de área
     preview.push(imageToRgb(await page.getByTestId('preview-canvas').screenshot({ type: 'png' }), 320, 180))

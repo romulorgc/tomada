@@ -6,11 +6,12 @@ import { useState, type ReactNode } from 'react'
 import { formatSpan, formatTimecode } from '@shared/format'
 import { setLayoutOfSeg } from '@shared/edits'
 import type { LayoutKind } from '@shared/types'
+import { keptRanges } from '@shared/timeline'
 import { autoVerticalLayouts, speechRanges } from '@shared/vertical'
 import { LayoutBubbleIcon, LayoutCameraIcon, LayoutFocusIcon, LayoutScreenIcon, LayoutSideIcon, LayoutStackIcon, LayoutWideIcon } from '../../components/Icons'
 import { t } from '../../i18n/pt-BR'
 import { useApp } from '../../store'
-import { Hint, Section } from '../controls'
+import { Hint, Section, Toggle } from '../controls'
 import { useDoc, useEditor } from '../context'
 import { useEditorOps } from '../ops'
 
@@ -86,6 +87,8 @@ export function LayoutPanel() {
   const selection = useDoc((s) => s.selection)
   const format = useDoc((s) => s.format)
   const hook = useDoc((s) => s.project.vertical?.hook ?? '')
+  const cameraTop = useDoc((s) => s.project.style.stackCameraTop === true)
+  const cuts = useDoc((s) => s.project.cuts)
   const vertical = format === 'vertical'
   const kinds = vertical ? VERTICAL_KINDS : KINDS
   const selected = selection?.kind === 'layout' ? layouts.find((l) => l.id === selection.id) : undefined
@@ -101,7 +104,8 @@ export function LayoutPanel() {
       clicks: cursorData.clicks,
       keys: cursorData.keys,
       cursor: cursorData.grid,
-      speech: speechRanges(transcript.data?.words)
+      speech: speechRanges(transcript.data?.words),
+      kept: keptRanges(durationMs, cuts)
     })
     store.getState().change((p) => ({ ...p, layouts: next }))
     store.getState().setSelection(null)
@@ -122,6 +126,23 @@ export function LayoutPanel() {
         />
         <p className="ctl-note">{vertical ? V.videoHelp : T.videoHelp}</p>
         {vertical && (T.optionHints as Record<string, string>)[base] ? <p className="ctl-note">{(T.optionHints as Record<string, string>)[base]}</p> : null}
+        {vertical ? (
+          <Toggle
+            label={V.cameraTop}
+            hint={V.cameraTopHint}
+            checked={cameraTop}
+            disabled={!hasCamera || !hasScreen}
+            testId="layout-camera-top"
+            onChange={(v) =>
+              store.getState().change((p) => {
+                const style = { ...p.style }
+                if (v) style.stackCameraTop = true
+                else delete style.stackCameraTop
+                return { ...p, style }
+              })
+            }
+          />
+        ) : null}
       </Section>
 
       {vertical ? (

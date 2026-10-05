@@ -7,6 +7,10 @@
  * O projeto de exemplo (23 s, câmera, cliques em 2740, 7800 e 13780 ms) tem transcrição de 36 palavras:
  * "Olá, pessoal." (400-1753), "Hoje eu vou mostrar como gravar a tela." (1753-5617), "Então, vamos clicar aqui no botão de gravar."
  * (7451-11132)…
+ *
+ * Os números são os da R1 (recalibração pelos 115 vídeos reais do estudo E1): legenda de uma linha de 2 palavras no vertical (5 no
+ * 16:9), maiúscula de 58 px no Destaque e 46 px nos estilos de caixa mista, centro em y 70% (na emenda tela/câmera no V-B), V-B sem
+ * barras (tela 0-50%, câmera 50-100%), tela na largura com 94% e título de gancho de 46 px em y 15%.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -41,7 +45,7 @@ const vertical = (over: Partial<NonNullable<Project['vertical']>> = {}): NonNull
   layout: 'screen-focus',
   layouts: [],
   zooms: [],
-  zoomPreset: 'intense',
+  zoomPreset: 'moderate',
   ...over
 })
 
@@ -52,8 +56,17 @@ const CASES: Case[] = [
     t: 3200,
     format: H,
     edit: (p) => {
-      p.captions = { ...p.captions, enabled: true, style: 'natural', wordsPerLine: 4, box: true }
+      p.captions = { ...p.captions, enabled: true, style: 'natural', wordsPerLine: 5, box: true }
       p.style.defaultLayout = 'bubble'
+    }
+  },
+  // o padrão do vertical (pt-BR): Natural em caixa mista, sem caixa atrás, 1 linha de 2 palavras, a palavra falada em destaque
+  {
+    name: 'legenda-natural-vertical',
+    t: 3200,
+    format: V,
+    edit: (p) => {
+      p.vertical = vertical({ captions: { enabled: true, style: 'natural', wordsPerLine: 2 } })
     }
   },
   {
@@ -61,7 +74,7 @@ const CASES: Case[] = [
     t: 3200,
     format: V,
     edit: (p) => {
-      p.vertical = vertical({ captions: { enabled: true, style: 'highlight', wordsPerLine: 3 } })
+      p.vertical = vertical({ captions: { enabled: true, style: 'highlight', wordsPerLine: 2 } })
     }
   },
   {
@@ -69,7 +82,7 @@ const CASES: Case[] = [
     t: 3200,
     format: V,
     edit: (p) => {
-      p.vertical = vertical({ captions: { enabled: true, style: 'clean', wordsPerLine: 4, box: true } })
+      p.vertical = vertical({ captions: { enabled: true, style: 'clean', wordsPerLine: 2 } })
     }
   },
   {
@@ -77,7 +90,7 @@ const CASES: Case[] = [
     t: 3200,
     format: V,
     edit: (p) => {
-      p.vertical = vertical({ captions: { enabled: true, style: 'karaoke', wordsPerLine: 4, box: true } })
+      p.vertical = vertical({ captions: { enabled: true, style: 'karaoke', wordsPerLine: 2 } })
     }
   },
   // --- os layouts verticais, com legenda (e o título de gancho no V-A) -------------------------------------------------------
@@ -86,7 +99,7 @@ const CASES: Case[] = [
     t: 1200,
     format: V,
     edit: (p) => {
-      p.vertical = vertical({ hook: 'Grave sua tela em 1 clique', zooms: [{ id: 'z1', start: 600, end: 3000, scale: 1.4, focus: 'auto', origin: 'auto' }] })
+      p.vertical = vertical({ hook: 'Grave sua tela em 1 clique', zooms: [{ id: 'z1', start: 600, end: 3000, scale: 1.35, focus: 'auto', origin: 'auto' }] })
     }
   },
   {
@@ -94,7 +107,15 @@ const CASES: Case[] = [
     t: 8600,
     format: V,
     edit: (p) => {
-      p.vertical = vertical({ layout: 'stack', zooms: [{ id: 'z1', start: 7300, end: 9200, scale: 1.4, focus: 'auto', origin: 'auto' }] })
+      p.vertical = vertical({ layout: 'stack', zooms: [{ id: 'z1', start: 7300, end: 9200, scale: 1.35, focus: 'auto', origin: 'auto' }] })
+    }
+  },
+  {
+    name: 'vertical-b-camera-em-cima',
+    t: 8600,
+    format: V,
+    edit: (p) => {
+      p.vertical = vertical({ layout: 'stack', cameraTop: true, zooms: [{ id: 'z1', start: 7300, end: 9200, scale: 1.35, focus: 'auto', origin: 'auto' }] })
     }
   },
   {

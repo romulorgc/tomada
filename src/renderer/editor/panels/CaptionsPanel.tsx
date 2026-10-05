@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { drawCaptions } from '@shared/caption-render'
-import { CAPTION_SIZE_MAX, CAPTION_SIZE_MIN, CAPTION_STYLE_DEFAULTS as STYLE_DEFAULTS, CAPTION_STYLE_IDS, defaultCaptionY, resolveCaptionStyle } from '@shared/caption-style'
+import { CAPTION_SIZE_MAX, CAPTION_SIZE_MIN, CAPTION_STYLE_IDS, captionStyleDefaults, defaultCaptionY, maxWordsPerLine, resolveCaptionStyle } from '@shared/caption-style'
 import { buildCaptionTrack } from '@shared/captions'
 import { createRenderCache, type CanvasFactory, type CanvasLike, type Ctx2D, type RenderCache } from '@shared/render'
 import type { SceneCaptions } from '@shared/scene'
@@ -38,7 +38,7 @@ function drawSample(canvas: HTMLCanvasElement, cache: RenderCache, cap: CaptionS
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   // quadro virtual do formato (a legenda sai com o tamanho e as proporções reais), levado ao cartão
   const virtual = vertical ? { kind: 'vertical' as const, w: 1080, h: 1920 } : { kind: 'horizontal' as const, w: 1920, h: 1080 }
-  const sample: CaptionStyle = { ...cap, style, ...STYLE_DEFAULTS[style], positionY: 0.5 }
+  const sample: CaptionStyle = { ...cap, style, ...captionStyleDefaults(style, virtual.kind), positionY: 0.5 }
   delete sample.size
   delete sample.uppercase
   const rs = resolveCaptionStyle(sample, virtual)
@@ -97,7 +97,7 @@ export function CaptionsPanel() {
     store.getState().change((p) => ({ ...p, captions: { ...p.captions, ...patch } }), coalesce ? { coalesce } : undefined)
   }
   const pickStyle = (style: CaptionStyleId): void => {
-    store.getState().change((p) => ({ ...p, captions: { ...p.captions, style, ...STYLE_DEFAULTS[style] } }))
+    store.getState().change((p) => ({ ...p, captions: { ...p.captions, style, ...captionStyleDefaults(style, format) } }))
   }
   const resetStyle = (): void => {
     store.getState().change((p) => {
@@ -106,7 +106,8 @@ export function CaptionsPanel() {
       delete next.positionY
       delete next.uppercase
       delete next.textColor
-      return { ...p, captions: { ...next, highlightColor: '#FFD93D', ...STYLE_DEFAULTS[next.style] } }
+      delete next.highlightWord
+      return { ...p, captions: { ...next, highlightColor: '#FFD93D', ...captionStyleDefaults(next.style, format) } }
     })
   }
 
@@ -194,17 +195,39 @@ export function CaptionsPanel() {
             onChange={(v) => edit({ positionY: Math.round(v * 1000) / 1000 }, 'captions-position')}
           />
           {vertical ? <p className="ctl-note">{T.safeNote}</p> : null}
+          {vertical ? (
+            <p className="ctl-note" data-testid="captions-position-note">
+              {cap.positionY === undefined ? T.positionAuto : T.positionManual}{' '}
+              {cap.positionY !== undefined ? (
+                <button
+                  type="button"
+                  className="link"
+                  data-testid="captions-position-auto"
+                  onClick={() =>
+                    store.getState().change((p) => {
+                      const next = { ...p.captions }
+                      delete next.positionY
+                      return { ...p, captions: next }
+                    })
+                  }
+                >
+                  {T.positionBack}
+                </button>
+              ) : null}
+            </p>
+          ) : null}
           <Slider
             label={T.wordsPerLine}
             value={cap.wordsPerLine}
             min={1}
-            max={5}
+            max={maxWordsPerLine(format)}
             step={1}
             testId="captions-words"
             format={(v) => String(Math.round(v))}
             onChange={(v) => edit({ wordsPerLine: Math.round(v) }, 'captions-words')}
           />
           <Toggle label={T.uppercase} checked={rs.uppercase} testId="captions-uppercase" onChange={(v) => edit({ uppercase: v })} />
+          <Toggle label={T.highlightWord} hint={T.highlightWordHint} checked={cap.highlightWord !== false && cap.style !== 'clean'} disabled={cap.style === 'clean'} testId="captions-highlight-word" onChange={(v) => edit({ highlightWord: v })} />
           <Toggle label={T.box} checked={rs.box !== null} disabled={!boxable} testId="captions-box" onChange={(v) => edit({ box: v })} />
         </Section>
 
