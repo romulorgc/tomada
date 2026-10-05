@@ -632,6 +632,15 @@ export class PreviewEngine {
     this.lastScene = scene
     this.frames++
     canvas.dataset.sourceMs = this.sourceMs.toFixed(1)
+    // Diagnóstico (e testes): onde a câmera está no quadro e qual recorte da imagem dela aparece (frações, 4 casas).
+    const cam = scene.camera
+    if (cam) {
+      canvas.dataset.cameraSrc = [cam.src.x, cam.src.y, cam.src.w, cam.src.h].map((v) => v.toFixed(4)).join(',')
+      canvas.dataset.cameraDest = [cam.dest.x, cam.dest.y, cam.dest.w, cam.dest.h].map((v) => Math.round(v)).join(',')
+    } else {
+      delete canvas.dataset.cameraSrc
+      delete canvas.dataset.cameraDest
+    }
     canvas.dataset.frames = String(this.frames)
     canvas.dataset.ready = busy ? 'false' : 'true'
   }

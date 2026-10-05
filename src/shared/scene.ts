@@ -18,7 +18,8 @@ import {
 import { buildCaptionTrack, captionAt, pageAlpha, popScale, PAGE_FADE_MS, type CaptionTrack } from './captions'
 import { resolveCaptionStyle, resolveHookStyle, type CaptionRenderStyle, type HookRenderStyle } from './caption-style'
 import { projectDurationMs } from './project'
-import { coverCrop, cameraBoxAspect, cameraRadius, cornerFractions, styleUnit } from './styles'
+import { buildFaceFramer, cameraCropRect, faceAimAt, type FaceFramer, type FaceTrack } from './face'
+import { cameraBoxAspect, cameraRadius, coverCrop, cornerFractions, resolveSideBySide, styleUnit } from './styles'
 import { keptRanges, outputDuration, sourceToOutput } from './timeline'
 import type { Background, ClickEvent, CursorSample, KeyEvent, LayoutKind, Project, Range, Rect, Size, Style, Word } from './types'
 import { GRID_HZ } from './cursor'
@@ -50,8 +51,6 @@ export const HALO_RADIUS = 30
 export const CAMERA_ZOOM_SHRINK = 0.3
 /** Margem da bolha até a borda da tela, fração do lado menor do quadro. */
 export const BUBBLE_INSET = 0.035
-/** Lado a lado: fatia da largura útil que fica com a tela. */
-export const SIDE_BY_SIDE_SCREEN_SHARE = 0.7
 
 // ---------------------------------------------------------------------------
 // Eventos e dados derivados
@@ -98,6 +97,8 @@ export type Derived = {
   view: { w: number; h: number }
   /** As legendas (M4a): páginas no tempo de SAÍDA, ou `null` (desligadas ou sem transcrição). */
   captions: CaptionTrack | null
+  /** O caminho do rosto na câmera (M4c): o recorte da câmera acompanha. `null` = a análise não existe (recorte do centro). */
+  face: FaceFramer | null
   screenSize: Size | null
   cameraSize: Size | null
   layoutPoints: LayoutPoint[]
@@ -149,9 +150,10 @@ const TRIVIAL_PATH: CameraPath = { hz: GRID_HZ, t: [0], scale: [1], cx: [0.5], c
 
 /**
  * Tudo que depende do documento (zooms, cortes, layouts, estilo do cursor) e do formato. No vertical, `project` é a VISÃO do
- * vertical (`projectForFormat`): os zooms e layouts dele. `words` são as palavras da transcrição (legendas).
+ * vertical (`projectForFormat`): os zooms e layouts dele. `words` são as palavras da transcrição (legendas) e `face` a análise do
+ * rosto na câmera (enquadramento).
  */
-export function deriveProject(project: Project, data: CursorData, format: FormatSpec, words?: readonly Word[] | null): Derived {
+export function deriveProject(project: Project, data: CursorData, format: FormatSpec, words?: readonly Word[] | null, face?: FaceTrack | null): Derived {
   const durationMs = projectDurationMs(project)
   const kept = keptRanges(durationMs, project.cuts)
   const screenSize = sizeOf(project.sources.screen)
@@ -200,6 +202,7 @@ export function deriveProject(project: Project, data: CursorData, format: Format
     synthetic,
     view,
     captions: buildCaptionTrack(words, project, durationMs),
+    face: cameraSize ? buildFaceFramer(face, project.sync.cameraOffsetMs, durationMs) : null,
     screenSize,
     cameraSize,
     layoutPoints
@@ -290,19 +293,25 @@ export function layoutGeometry(
   if (L === 'screen') return { screen: snap(fitRect(sources.screen, inner)), camera: null }
 
   if (L === 'side-by-side') {
-    const gap = Math.round(pad * 0.6)
+    // O quadro da câmera ao lado (estilo Tella): largura escolhida (fração do quadro), em pé (3:4) ou quadrado (1:1), à esquerda ou à
+    // direita; a tela fica com o resto da largura. Os dois centrados na vertical, com os mesmos cantos (e a mesma sombra, ver evaluateScene).
+    const sb = resolveSideBySide(style.sideBySide)
+    const gap = Math.round(sb.gap * side)
     const aspect = sources.screen.w / sources.screen.h
-    let screenW = (inner.w - gap) * SIDE_BY_SIDE_SCREEN_SHARE
-    let cardH = screenW / aspect
-    if (cardH > inner.h) {
-      cardH = inner.h
-      screenW = cardH * aspect
+    const camW = Math.max(1, Math.min(sb.width * W, inner.h * sb.aspect, inner.w - gap - 1))
+    const camH = camW / sb.aspect
+    let screenW = Math.max(1, inner.w - gap - camW)
+    let screenH = screenW / aspect
+    if (screenH > inner.h) {
+      screenH = inner.h
+      screenW = screenH * aspect
     }
-    const camW = Math.max(1, inner.w - gap - screenW)
     const x0 = inner.x + (inner.w - (screenW + gap + camW)) / 2
-    const y0 = inner.y + (inner.h - cardH) / 2
-    const screen = snap({ x: x0, y: y0, w: screenW, h: cardH })
-    const camera = snap({ x: screen.x + screen.w + gap, y: screen.y, w: camW, h: screen.h })
+    const cy = inner.y + inner.h / 2
+    const screenX = sb.side === 'right' ? x0 : x0 + camW + gap
+    const camX = sb.side === 'right' ? x0 + screenW + gap : x0
+    const screen = snap({ x: screenX, y: cy - screenH / 2, w: screenW, h: screenH })
+    const camera = snap({ x: camX, y: cy - camH / 2, w: camW, h: camH })
     return { screen, camera: { rect: camera, radius: cornerRadius } }
   }
 
@@ -516,12 +525,14 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
     cameraBox && derived.cameraSize
       ? {
           dest: cameraBox.rect,
-          src: coverCrop(derived.cameraSize, cameraBox.rect.w / cameraBox.rect.h),
+          // o recorte da imagem da câmera: centrado no rosto (se a análise existe) e com o ajuste manual por cima (M4c)
+          src: cameraCropRect(derived.cameraSize, cameraBox.rect.w / cameraBox.rect.h, derived.face ? faceAimAt(derived.face, sourceT) : null, style.camera.framing),
           radius: cameraBox.radius,
           opacity: cameraBox.opacity,
           mirror: style.camera.mirror,
-          border: style.camera.borderWidth > 0 && !(vertical && curKey === 'stack') ? { width: style.camera.borderWidth * unit, color: style.camera.borderColor } : null,
-          shadow: vertical && curKey === 'stack' ? null : shadowOf(0.6, 0.5)
+          // o cartão do lado a lado é irmão da tela: sem borda e com a MESMA sombra (a bolha é que leva borda e sombra menor)
+          border: style.camera.borderWidth > 0 && !(vertical && curKey === 'stack') && curKey !== 'side-by-side' ? { width: style.camera.borderWidth * unit, color: style.camera.borderColor } : null,
+          shadow: vertical && curKey === 'stack' ? null : curKey === 'side-by-side' ? shadowOf(1, 1) : shadowOf(0.6, 0.5)
         }
       : null
 

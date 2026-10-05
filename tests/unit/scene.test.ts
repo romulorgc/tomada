@@ -109,14 +109,16 @@ describe('geometria dos layouts horizontais', () => {
     expect(square.radius).toBe(0)
   })
 
-  it('side-by-side: tela ~70% da largura útil, câmera retrato ao lado, mesma altura, tudo dentro do quadro', () => {
+  it('side-by-side: tela ~70% da largura útil, câmera em pé (3:4, 27% do quadro) ao lado, praticamente da altura da tela, tudo dentro do quadro', () => {
     const g = layoutGeometry('side-by-side', style, F, { screen: SCREEN, camera: CAMERA })
     const s = g.screen!
     const c = g.camera!.rect
     expect(c.x).toBeGreaterThanOrEqual(s.x + s.w)
-    expect(c.h).toBe(s.h)
-    expect(c.y).toBe(s.y)
-    expect(c.h).toBeGreaterThan(c.w) // retrato
+    expect(Math.abs(c.h - s.h)).toBeLessThanOrEqual(3) // o padrão (27%, 3:4) deixa os dois da mesma altura, como no Tella
+    expect(Math.abs(c.y - s.y)).toBeLessThanOrEqual(2)
+    expect(c.w / 1920).toBeCloseTo(0.27, 2)
+    expect(c.w / c.h).toBeCloseTo(0.75, 2)
+    expect(c.h).toBeGreaterThan(c.w) // em pé
     const pad = Math.round(style.padding * 1080)
     const usable = 1920 - 2 * pad
     expect(s.w / usable).toBeGreaterThan(0.64)

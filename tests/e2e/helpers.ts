@@ -5,8 +5,8 @@
  *   com ela `require('electron').app` vem `undefined`).
  * - `TOMADA_PROJECTS_DIR` aponta para uma pasta temporária semeada com o projeto de exemplo.
  * - `TOMADA_USER_DATA_DIR` isola ajustes e logs do app real.
- * - `TOMADA_TRANSCRIBER=mock`, `TOMADA_LLM=mock` e `TOMADA_TOOLS_DIR` (pasta da sessão): nenhum teste e2e toca na placa, no
- *   Python, na rede nem na IA de verdade (cada teste pode sobrescrever pelo `env`).
+ * - `TOMADA_TRANSCRIBER=mock`, `TOMADA_LLM=mock`, `TOMADA_CAMERA=off` e `TOMADA_TOOLS_DIR` (pasta da sessão): nenhum teste e2e toca na
+ *   placa, no Python, na rede nem na IA de verdade (cada teste pode sobrescrever pelo `env`).
  */
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -88,6 +88,7 @@ export async function launchTomada(opts: LaunchOptions = {}): Promise<Session> {
   env.TOMADA_TEST_SILENT = '1' // nada de bipe nos alto-falantes durante os testes
   env.TOMADA_TRANSCRIBER = 'mock'
   env.TOMADA_LLM = 'mock'
+  env.TOMADA_CAMERA = 'off' // a análise do rosto (M4c) é desligada por padrão; os testes dela ligam `mock`
   env.TOMADA_TOOLS_DIR = join(base, 'ferramentas')
   Object.assign(env, opts.env)
 

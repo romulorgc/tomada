@@ -3,7 +3,7 @@
  * raio, sombra e câmera, e a geometria de posição da câmera na grade 3×3.
  * Código puro: sem DOM, sem Node.
  */
-import type { Background, CameraStyle, Corner, Size } from './types'
+import type { Background, CameraStyle, Corner, SideBySideStyle, Size } from './types'
 
 export type BackgroundPreset = { id: string; name: string; from: string; to: string }
 
@@ -117,6 +117,28 @@ export function cameraRadius(shape: CameraStyle['shape'], w: number, h: number):
   if (shape === 'circle') return m / 2
   if (shape === 'rounded') return m * 0.2
   return 0
+}
+
+// ---------------------------------------------------------------------------
+// Câmera AO LADO da tela (lado a lado, estilo Tella)
+
+/** Largura do cartão da câmera: fração da largura do quadro. O padrão (27%) é o que o estudo E1 mediu no Tella (câmera em pé x 68-97%). */
+export const SIDE_WIDTH = { min: 0.25, max: 0.45, default: 0.27 } as const
+/** Espaço entre a tela e a câmera: fração do lado menor do quadro (o padrão é o de sempre: 60% da margem de 6%). */
+export const SIDE_GAP = { min: 0, max: 0.08, default: 0.036 } as const
+
+const clampTo = (v: unknown, lo: number, hi: number, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback)
+
+/** O lado a lado com os padrões aplicados e os valores presos às faixas aceitas. `aspect` = largura/altura do cartão da câmera. */
+export function resolveSideBySide(s: SideBySideStyle | undefined): { side: 'left' | 'right'; ratio: 'portrait' | 'square'; aspect: number; width: number; gap: number } {
+  const ratio = s?.ratio === 'square' ? 'square' : 'portrait'
+  return {
+    side: s?.side === 'left' ? 'left' : 'right',
+    ratio,
+    aspect: ratio === 'square' ? 1 : 3 / 4,
+    width: clampTo(s?.width, SIDE_WIDTH.min, SIDE_WIDTH.max, SIDE_WIDTH.default),
+    gap: clampTo(s?.gap, SIDE_GAP.min, SIDE_GAP.max, SIDE_GAP.default)
+  }
 }
 
 // ---------------------------------------------------------------------------

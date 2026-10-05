@@ -775,6 +775,14 @@
 .hint[data-tone='warn'] {
   color: var(--color-warn);
 }
+/* O estado da análise do rosto (aba Câmera): a linha, a barra e o botão de agir. */
+.cam-status {
+  display: grid;
+  gap: 0.5rem;
+}
+.cam-status .btn {
+  justify-self: start;
+}
 .ctl-toggle {
   grid-template-columns: 1fr auto;
   align-items: center;

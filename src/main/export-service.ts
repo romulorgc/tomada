@@ -29,6 +29,7 @@ import {
   sanitizeFileName
 } from '@shared/export'
 import { EVENT_FILES } from '@shared/events'
+import { FACE_FILE } from '@shared/face'
 import type { ExportJob, ExportProgress, ExportReport, ExportRequest, ExporterResult } from '@shared/ipc'
 import { mediaUrl } from '@shared/media-url'
 import { projectDurationMs } from '@shared/project'
@@ -599,7 +600,9 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
           cursor: await eventUrl(request.projectId, dir, EVENT_FILES.cursor),
           clicks: await eventUrl(request.projectId, dir, EVENT_FILES.clicks),
           keys: await eventUrl(request.projectId, dir, EVENT_FILES.keys)
-        }
+        },
+        // a análise do rosto (enquadramento da câmera): o exportador enquadra como a prévia
+        faceUrl: await eventUrl(request.projectId, dir, FACE_FILE)
       }
       const now = deps.now()
       const run: Run = {

@@ -21,6 +21,7 @@ import {
 } from 'mediabunny'
 import { avcCodecString, fileTimeSeconds, outputFrameCount, sourceTimeOfFrame } from '@shared/export'
 import { eventsFromText } from '@shared/events'
+import { parseFaceTrack, type FaceTrack } from '@shared/face'
 import type { ExportJob } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
 import {
@@ -115,12 +116,25 @@ type Context = {
   close(): void
 }
 
-async function createContext(job: Pick<ExportJob, 'projectId' | 'project' | 'screenUrl' | 'cameraUrl' | 'eventUrls' | 'clipLayout'> & { words?: Word[] | null }, format: FormatSpec): Promise<Context> {
-  const [cursor, clicks, keys] = await Promise.all([
+async function createContext(
+  job: Pick<ExportJob, 'projectId' | 'project' | 'screenUrl' | 'cameraUrl' | 'eventUrls' | 'clipLayout'> & { words?: Word[] | null; faceUrl?: string | null },
+  format: FormatSpec
+): Promise<Context> {
+  const [cursor, clicks, keys, faceText] = await Promise.all([
     fetchText(job.eventUrls.cursor),
     fetchText(job.eventUrls.clicks),
-    fetchText(job.eventUrls.keys)
+    fetchText(job.eventUrls.keys),
+    fetchText(job.faceUrl ?? null)
   ])
+  // A análise do rosto enquadra a câmera. Arquivo que existe e não abre é erro VISÍVEL (o enquadramento sairia diferente da prévia).
+  let face: FaceTrack | null = null
+  if (faceText !== undefined) {
+    try {
+      face = parseFaceTrack(faceText)
+    } catch (err) {
+      throw new Error(`Não consegui ler a análise do rosto da câmera (apague media/camera-face.json do projeto ou analise de novo): ${messageOf(err)}`)
+    }
+  }
   const events = eventsFromText({ cursor, clicks, keys })
   const doc = job.project
   const durationMs = Math.max(doc.sources.screen?.durationMs ?? 0, doc.sources.camera?.durationMs ?? 0, doc.sources.voice?.durationMs ?? 0, doc.sources.system?.durationMs ?? 0)
@@ -133,7 +147,7 @@ async function createContext(job: Pick<ExportJob, 'projectId' | 'project' | 'scr
   // Um corte vertical com layout fixo (V-A, V-B, V-C ou só câmera) o usa no corte todo; o automático segue a atividade (depois do ensure)
   const edited = format.kind === 'vertical' && job.clipLayout ? withClipLayout(ensured, job.clipLayout) : ensured
   const project = projectForFormat(edited, format.kind)
-  const derived = deriveProject(project, data, format, job.words)
+  const derived = deriveProject(project, data, format, job.words, face)
 
   const canvas = new OffscreenCanvas(format.w, format.h)
   const raw = canvas.getContext('2d', { alpha: false })
@@ -329,6 +343,8 @@ export type StillRequest = {
   screenUrl: string | null
   cameraUrl: string | null
   eventUrls: ExportJob['eventUrls']
+  /** A análise do rosto (enquadramento da câmera), se existe. */
+  faceUrl?: string | null
 }
 
 function toBase64(bytes: Uint8Array): string {

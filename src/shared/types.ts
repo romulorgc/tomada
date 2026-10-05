@@ -82,6 +82,21 @@ export type Background =
   /** Imagem (cobre o quadro). `path` é relativo à pasta do projeto, ou uma URL que o chamador resolva. */
   | { type: 'image'; path: string }
 
+/**
+ * Enquadramento da câmera (M4c): onde o recorte cai na imagem da webcam (que é 16:9, então um quadro em pé, quadrado ou redondo
+ * recorta). Tudo opcional: ausente = o enquadramento automático, centrado no rosto (quando a análise existe). Vale para a bolha, o
+ * lado a lado e o V-B, nos dois formatos.
+ */
+export type CameraFraming = {
+  /** Centraliza o recorte no rosto (a análise roda uma vez por gravação). Ausente = ligado. */
+  auto?: boolean
+  /** Aproximação manual sobre o enquadramento do app (1 = o do app, 1..3). */
+  zoom?: number
+  /** Deslocamento manual do recorte: fração da LARGURA e da ALTURA da imagem da câmera (−0,5..0,5). */
+  dx?: number
+  dy?: number
+}
+
 export type CameraStyle = {
   shape: 'circle' | 'rounded' | 'square'
   /** Lado da câmera (diâmetro do círculo, altura dos retângulos) como fração do LADO MENOR do quadro (0..1). */
@@ -94,6 +109,22 @@ export type CameraStyle = {
   hidden: boolean
   /** A bolha encolhe enquanto um zoom está aberto (padrão: sim). */
   shrinkOnZoom: boolean
+  /** Enquadramento do rosto (M4c). Ausente = automático. */
+  framing?: CameraFraming
+}
+
+/**
+ * O quadro da câmera AO LADO da tela, estilo Tella (M4c): a imagem normal da webcam, com o fundo do ambiente, num cartão com os mesmos
+ * cantos e a mesma sombra da tela. Só no 16:9. Tudo opcional (ausente = à direita, em pé 3:4, 27% do quadro).
+ */
+export type SideBySideStyle = {
+  side?: 'left' | 'right'
+  /** `portrait` = em pé (3:4); `square` = quadrado (1:1). */
+  ratio?: 'portrait' | 'square'
+  /** Largura do cartão da câmera, fração da LARGURA do quadro (0,25..0,45). */
+  width?: number
+  /** Espaço entre a tela e a câmera, fração do LADO MENOR do quadro (0..0,08). */
+  gap?: number
 }
 
 export type CursorStyle = {
@@ -118,6 +149,8 @@ export type Style = {
   defaultLayout: LayoutKind
   camera: CameraStyle
   cursor: CursorStyle
+  /** O quadro da câmera ao lado da tela (layout `side-by-side`, 16:9). Ausente = os padrões. */
+  sideBySide?: SideBySideStyle
   /** Só na VISÃO do vertical (vem de `VerticalEdit.cameraTop`): no V-B a câmera fica em cima e a tela embaixo. Nunca é gravada aqui. */
   stackCameraTop?: boolean
 }

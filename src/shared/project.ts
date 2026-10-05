@@ -132,7 +132,8 @@ const cameraStyleSchema = z.looseObject({
   borderColor: z.string().default(D.camera.borderColor),
   mirror: z.boolean().default(D.camera.mirror),
   hidden: z.boolean().default(D.camera.hidden),
-  shrinkOnZoom: z.boolean().default(D.camera.shrinkOnZoom)
+  shrinkOnZoom: z.boolean().default(D.camera.shrinkOnZoom),
+  framing: z.looseObject({ auto: z.boolean().optional(), zoom: z.number().optional(), dx: z.number().optional(), dy: z.number().optional() }).optional()
 })
 
 const cursorStyleSchema = z.looseObject({
@@ -156,7 +157,10 @@ const styleSchema = z.looseObject({
     .prefault({}),
   defaultLayout: layoutKind.default(D.defaultLayout),
   camera: cameraStyleSchema.prefault({}),
-  cursor: cursorStyleSchema.prefault({})
+  cursor: cursorStyleSchema.prefault({}),
+  sideBySide: z
+    .looseObject({ side: z.enum(['left', 'right']).optional(), ratio: z.enum(['portrait', 'square']).optional(), width: z.number().optional(), gap: z.number().optional() })
+    .optional()
 })
 
 /** O estilo de legenda; o "plain" das versões antigas do documento vira "natural". */

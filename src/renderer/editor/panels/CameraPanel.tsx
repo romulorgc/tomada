@@ -1,20 +1,86 @@
 /**
- * Aba CÂMERA: mostrar/esconder, forma, tamanho, posição (grade 3×3; também dá para arrastar na prévia), borda,
- * espelhar e "encolher durante o zoom".
+ * Aba CÂMERA: mostrar/esconder, o ENQUADRAMENTO DO ROSTO (o recorte acompanha o rosto; aproximação e deslocamento à mão; também dá
+ * para arrastar dentro da câmera na prévia), a câmera AO LADO da tela (lado, formato, largura e espaço), forma, tamanho, posição
+ * (grade 3×3; também dá para arrastar a bolha na prévia), borda, espelhar e "encolher durante o zoom".
  */
-import { CAMERA_CORNERS } from '@shared/styles'
-import type { CameraStyle, Corner } from '@shared/types'
+import { MANUAL_ZOOM, MANUAL_OFFSET_MAX, resolveFraming } from '@shared/face'
+import { SIDE_GAP, SIDE_WIDTH, CAMERA_CORNERS, resolveSideBySide } from '@shared/styles'
+import type { CameraFraming, CameraStyle, Corner, SideBySideStyle } from '@shared/types'
+import { cameraJobKey, isCameraJobActive, useCamera } from '../../camera-store'
+import { CameraPrepare } from '../../components/CameraPrepare'
 import { CameraIcon, ShapeCircleIcon, ShapeRoundedIcon, ShapeSquareIcon } from '../../components/Icons'
 import { t } from '../../i18n/pt-BR'
 import { ColorField, Section, Segmented, Slider, Toggle } from '../controls'
 import { useDoc, useEditor } from '../context'
 
 const T = t.editor.camera
+const F = T.framing
+const S = T.side
+
+/** O estado da análise do rosto: preparar o motor, procurando, achado, não achado, ou o erro com o "tentar de novo". */
+function FaceStatus() {
+  const { detail, face } = useEditor()
+  const view = useCamera((s) => s.view)
+  const job = useCamera((s) => s.jobs[cameraJobKey(detail.id, 'face')])
+  const analyze = useCamera((s) => s.analyze)
+  const cancel = useCamera((s) => s.cancel)
+  const pct = Math.round((job?.fraction ?? 0) * 100)
+
+  if (isCameraJobActive(job)) {
+    return (
+      <div className="cam-status" data-testid="face-status" data-state={job!.state}>
+        <p className="ctl-note" aria-live="polite">
+          {job!.state === 'queued' ? F.status.queued : F.status.running(pct)}
+        </p>
+        <div className="meter" role="progressbar" aria-label={F.status.running(pct)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+          <i style={{ width: `${pct}%` }} />
+        </div>
+        <button type="button" className="btn btn-ghost" onClick={() => void cancel(detail.id, 'face')} data-testid="face-cancel">
+          {F.status.cancel}
+        </button>
+      </div>
+    )
+  }
+  if (job?.state === 'error' || face.status === 'error') {
+    const message = job?.state === 'error' ? job.error : face.error
+    return (
+      <div className="cam-status" role="alert" data-testid="face-status" data-state="error">
+        <p className="ctl-note">
+          {job?.state === 'error' ? F.status.failed : F.status.unreadable}
+          {message ? `: ${message}` : ''}
+        </p>
+        <button type="button" className="btn" onClick={() => void analyze(detail.id, 'face')} data-testid="face-retry">
+          {F.status.retry}
+        </button>
+      </div>
+    )
+  }
+  if (view && view.face.state !== 'ready' && face.status !== 'ready') return <CameraPrepare explain={F.needsPrepare} />
+  if (face.status === 'loading') return <p className="ctl-note" data-testid="face-status" data-state="loading">{F.status.running(100)}</p>
+  if (face.status === 'ready' && face.data) {
+    const looks = face.data.sampleMs > 0 ? Math.max(1, Math.round(face.data.durationMs / face.data.sampleMs)) : face.data.boxes.length
+    const coverage = Math.min(1, face.data.boxes.length / looks)
+    return (
+      <p className="ctl-note" data-testid="face-status" data-state={face.data.boxes.length > 0 ? 'found' : 'none'}>
+        {face.data.boxes.length > 0 ? F.status.found(Math.round(coverage * 100)) : F.status.none}
+      </p>
+    )
+  }
+  return (
+    <div className="cam-status" data-testid="face-status" data-state="missing">
+      <p className="ctl-note">{F.status.missing}</p>
+      <button type="button" className="btn" onClick={() => void analyze(detail.id, 'face')} data-testid="face-start">
+        {F.status.retry}
+      </button>
+    </div>
+  )
+}
 
 export function CameraPanel() {
   const { store, hasCamera } = useEditor()
   const cam = useDoc((s) => s.project.style.camera)
   const layout = useDoc((s) => s.project.style.defaultLayout)
+  const sideBySide = useDoc((s) => s.project.style.sideBySide)
   const vertical = useDoc((s) => s.format === 'vertical')
 
   if (!hasCamera) {
@@ -31,7 +97,24 @@ export function CameraPanel() {
   const edit = (patch: Partial<CameraStyle>, coalesce?: string): void => {
     store.getState().change((p) => ({ ...p, style: { ...p.style, camera: { ...p.style.camera, ...patch } } }), coalesce ? { coalesce } : undefined)
   }
+  const editFraming = (patch: Partial<CameraFraming>, coalesce?: string): void => {
+    store.getState().change((p) => ({ ...p, style: { ...p.style, camera: { ...p.style.camera, framing: { ...p.style.camera.framing, ...patch } } } }), coalesce ? { coalesce } : undefined)
+  }
+  const resetFraming = (): void => {
+    store.getState().change((p) => {
+      const { framing: _gone, ...rest } = p.style.camera
+      void _gone
+      return { ...p, style: { ...p.style, camera: rest } }
+    })
+  }
+  const editSide = (patch: Partial<SideBySideStyle>, coalesce?: string): void => {
+    store.getState().change((p) => ({ ...p, style: { ...p.style, sideBySide: { ...p.style.sideBySide, ...patch } } }), coalesce ? { coalesce } : undefined)
+  }
   const off = cam.hidden
+  const framing = resolveFraming(cam.framing)
+  const hasManual = cam.framing !== undefined && (cam.framing.zoom !== undefined || cam.framing.dx !== undefined || cam.framing.dy !== undefined || cam.framing.auto === false)
+  const side = resolveSideBySide(sideBySide)
+  const sideActive = layout === 'side-by-side'
 
   return (
     <div className="panel" data-testid="camera-panel">
@@ -40,6 +123,75 @@ export function CameraPanel() {
       </Section>
 
       <div className="panel-group" data-disabled={off} aria-disabled={off}>
+        <Section title={F.title} testId="camera-framing">
+          <FaceStatus />
+          <Toggle label={F.auto} hint={F.autoHint} checked={framing.auto} testId="framing-auto" disabled={off} onChange={(v) => editFraming({ auto: v })} />
+          <Slider
+            label={F.zoom}
+            value={framing.zoom}
+            min={MANUAL_ZOOM.min}
+            max={MANUAL_ZOOM.max}
+            step={0.05}
+            testId="framing-zoom"
+            disabled={off}
+            format={F.zoomValue}
+            onChange={(v) => editFraming({ zoom: v }, 'framing-zoom')}
+          />
+          <Slider
+            label={F.horizontal}
+            value={framing.dx}
+            min={-MANUAL_OFFSET_MAX}
+            max={MANUAL_OFFSET_MAX}
+            step={0.005}
+            testId="framing-dx"
+            disabled={off}
+            format={F.offset}
+            onChange={(v) => editFraming({ dx: v }, 'framing-dx')}
+          />
+          <Slider
+            label={F.vertical}
+            value={framing.dy}
+            min={-MANUAL_OFFSET_MAX}
+            max={MANUAL_OFFSET_MAX}
+            step={0.005}
+            testId="framing-dy"
+            disabled={off}
+            format={F.offset}
+            onChange={(v) => editFraming({ dy: v }, 'framing-dy')}
+          />
+          <p className="ctl-note">{F.dragHint}</p>
+          <button type="button" className="btn btn-wide" disabled={off || !hasManual} onClick={resetFraming} data-testid="framing-reset">
+            {F.reset}
+          </button>
+        </Section>
+
+        {!vertical ? (
+          <Section title={S.title} testId="camera-side">
+            <p className="ctl-note">{S.help}</p>
+            {!sideActive ? <p className="ctl-note" data-testid="side-inactive">{S.notActive}</p> : null}
+            <Segmented<'left' | 'right'>
+              label={S.side}
+              value={side.side}
+              onChange={(v) => editSide({ side: v })}
+              options={[
+                { value: 'left', label: S.sides.left, disabled: off, testId: 'side-left' },
+                { value: 'right', label: S.sides.right, disabled: off, testId: 'side-right' }
+              ]}
+            />
+            <Segmented<'portrait' | 'square'>
+              label={S.ratio}
+              value={side.ratio}
+              onChange={(v) => editSide({ ratio: v })}
+              options={[
+                { value: 'portrait', label: S.ratios.portrait, disabled: off, testId: 'side-portrait' },
+                { value: 'square', label: S.ratios.square, disabled: off, testId: 'side-square' }
+              ]}
+            />
+            <Slider label={S.width} value={side.width} min={SIDE_WIDTH.min} max={SIDE_WIDTH.max} step={0.005} testId="side-width" disabled={off} format={S.percent} onChange={(v) => editSide({ width: v }, 'side-width')} />
+            <Slider label={S.gap} value={side.gap} min={SIDE_GAP.min} max={SIDE_GAP.max} step={0.002} testId="side-gap" disabled={off} format={S.percent} onChange={(v) => editSide({ gap: v }, 'side-gap')} />
+          </Section>
+        ) : null}
+
         <Section title={T.shape}>
           <Segmented<CameraStyle['shape']>
             label={T.shape}
@@ -78,6 +230,7 @@ export function CameraPanel() {
         <Section title={T.border}>
           <Slider label={T.borderWidth} value={cam.borderWidth} min={0} max={12} step={1} testId="camera-border" disabled={off} format={(v) => `${Math.round(v)} px`} onChange={(v) => edit({ borderWidth: v }, 'camera-border')} />
           <ColorField label={T.borderColor} value={cam.borderColor} testId="camera-border-color" onChange={(c) => edit({ borderColor: c }, 'camera-border-color')} />
+          {!vertical ? <p className="ctl-note">{T.borderNote}</p> : null}
         </Section>
 
         <Section title={T.behavior}>

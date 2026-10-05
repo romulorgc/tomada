@@ -10,6 +10,7 @@ import type { Levels } from '@shared/clean'
 import type { ClipQueue } from '@shared/clip-queue'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import type { CursorData, Derived } from '@shared/scene'
+import type { FaceTrack } from '@shared/face'
 import type { Transcript } from '@shared/types'
 import type { AiUiStore } from './ai-store'
 import type { ClipsUiStore } from './clips-store'
@@ -41,6 +42,8 @@ export type EditorCtx = {
   /** A transcrição do projeto (lida do transcript.json). */
   transcript: AssetState<Transcript>
   reloadTranscript(): void
+  /** A análise do rosto na câmera (enquadramento): lida de `media/camera-face.json`; `none` = ainda não existe. */
+  face: AssetState<FaceTrack>
   /** Nível do áudio por quadro (para achar silêncio); só é pedido depois que há transcrição. */
   levels: AssetState<Levels>
   /** Estado da aba Texto (seleção, busca, escolhas da limpeza). */

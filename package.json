@@ -21,6 +21,7 @@
     "medir:codec": "node scripts/limpo.mjs electron scripts/medir-codec.cjs",
     "medir:cursor": "node scripts/limpo.mjs electron scripts/cursor-viabilidade.cjs",
     "preparar:transcricao": "vitest run -c vitest.medir.config.ts tests/medir/preparar.run.ts",
+    "preparar:camera": "vitest run -c vitest.medir.config.ts tests/medir/preparar-camera.run.ts",
     "medir:transcricao": "vitest run -c vitest.medir.config.ts tests/medir/medir.run.ts",
     "test:ia": "vitest run -c vitest.ia.config.ts"
   },

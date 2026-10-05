@@ -10,6 +10,7 @@ import { clipScene } from '@shared/clips'
 import { DEFAULT_CLEAN, type Levels } from '@shared/clean'
 import { createEditorStore } from '@shared/editor-store'
 import { eventsFromText } from '@shared/events'
+import { parseFaceTrack, type FaceTrack } from '@shared/face'
 import { regenerateZooms } from '@shared/edits'
 import { formatSpan } from '@shared/format'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
@@ -19,6 +20,7 @@ import type { Transcript } from '@shared/types'
 import { ensureVertical } from '@shared/vertical'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
+import { cameraJobKey, useCamera } from '../camera-store'
 import { useApp } from '../store'
 import { useTranscription } from '../transcription-store'
 import { createAiUiStore } from './ai-store'
@@ -259,14 +261,52 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     if (jobState === 'done') loadTranscript()
   }, [jobState, loadTranscript])
 
+  // --- análise do rosto (enquadramento da câmera) --------------------------------------------------------------------
+  const [face, setFace] = useState<AssetState<FaceTrack>>({ status: detail.analysis.face ? 'loading' : 'none', data: null, error: null })
+  const faceUrl = useRef<string | null>(null)
+  const loadFace = useCallback((url: string | null) => {
+    if (url === faceUrl.current) return
+    faceUrl.current = url
+    if (!url) {
+      setFace({ status: 'none', data: null, error: null })
+      return
+    }
+    setFace((s) => ({ status: 'loading', data: s.data, error: null }))
+    void fetchText(url)
+      .then((text) => parseFaceTrack(text ?? ''))
+      .then((data) => {
+        if (mounted.current && faceUrl.current === url) setFace({ status: 'ready', data, error: null })
+      })
+      .catch((err: unknown) => {
+        window.tomada.log({ level: 'error', message: 'Falha ao ler a análise do rosto da câmera', detail: messageOf(err) })
+        if (mounted.current && faceUrl.current === url) setFace({ status: 'error', data: null, error: messageOf(err) })
+      })
+  }, [])
+  useEffect(() => {
+    loadFace(detail.analysis.face)
+  }, [detail.analysis.face, loadFace])
+  // a análise terminou (aqui ou em segundo plano): lê o resultado novo
+  const faceJob = useCamera((s) => s.jobs[cameraJobKey(detail.id, 'face')])
+  useEffect(() => {
+    if (faceJob?.state === 'done' && faceJob.url) loadFace(faceJob.url)
+  }, [faceJob, loadFace])
+  // Gravação com câmera e motor pronto (ao abrir, ou quando a preparação termina com o editor aberto): pede a análise. Volta na hora
+  // se o resultado guardado ainda vale; se já está na fila ou rodando, devolve o trabalho que existe.
+  const faceEngineReady = useCamera((s) => s.view?.face.state === 'ready')
+  useEffect(() => {
+    if (!hasCamera || !faceEngineReady) return
+    void useCamera.getState().analyze(detail.id, 'face')
+  }, [detail.id, hasCamera, faceEngineReady])
+
   // --- cena -----------------------------------------------------------------------------------------------
   const format = useStore(store, (s) => s.format)
   const formatRef = useRef(format)
   formatRef.current = format
   const words = transcript.data?.words ?? null
+  const faceTrack = face.data
   const derived = useMemo(
-    () => (cursorData ? deriveProject(project, cursorData, format === 'vertical' ? VERTICAL_1080 : HORIZONTAL_1080, words) : null),
-    [project, cursorData, format, words]
+    () => (cursorData ? deriveProject(project, cursorData, format === 'vertical' ? VERTICAL_1080 : HORIZONTAL_1080, words, faceTrack) : null),
+    [project, cursorData, format, words, faceTrack]
   )
 
   // A prévia de um corte: o MESMO documento que a exportação desenha (os trechos do corte, o gancho dele, o layout e a legenda
@@ -275,8 +315,8 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
   const previewClip = useMemo(() => (previewId ? doc.clips.find((c) => c.id === previewId) : undefined), [previewId, doc.clips])
   const sceneProject = useMemo(() => (previewClip ? clipScene(doc, previewClip) : project), [previewClip, doc, project])
   const sceneDerived = useMemo(
-    () => (!previewClip ? derived : cursorData ? deriveProject(sceneProject, cursorData, VERTICAL_1080, words) : null),
-    [previewClip, derived, sceneProject, cursorData, words]
+    () => (!previewClip ? derived : cursorData ? deriveProject(sceneProject, cursorData, VERTICAL_1080, words, faceTrack) : null),
+    [previewClip, derived, sceneProject, cursorData, words, faceTrack]
   )
   // a prévia só existe no 9:16 e enquanto o corte existe
   useEffect(() => {
@@ -539,6 +579,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       retryAssets,
       transcript,
       reloadTranscript: loadTranscript,
+      face,
       levels,
       text,
       exporter,
@@ -547,7 +588,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, store, playback, cursorData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, levels, text, exporter, clips, queue, aiUi]
+    [detail, store, playback, cursorData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (

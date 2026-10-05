@@ -75,6 +75,13 @@ const api: TomadaApi = {
     thumbs: (id) => invoke('derived:thumbs', id),
     levels: (id) => invoke('derived:levels', id)
   },
+  camera: {
+    status: () => invoke('camera:status'),
+    prepare: () => invoke('camera:prepare'),
+    cancelPrepare: () => invoke('camera:cancel-prepare'),
+    analyze: (projectId, kind) => invoke('camera:analyze', projectId, kind),
+    cancel: (projectId, kind) => invoke('camera:cancel', projectId, kind)
+  },
   transcription: {
     status: () => invoke('transcription:status'),
     prepare: () => invoke('transcription:prepare'),

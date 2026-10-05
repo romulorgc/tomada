@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, protocol, safeStorage, session, shell } from 'electron'
 import { LEVEL_CHANNEL, type AppInfo, type IpcEvents, type ProcessSnapshot } from '@shared/ipc'
 import { createSourceProvider } from './capture-sources'
+import { chooseCameraEngine } from './camera/engines'
+import { createCameraService } from './camera/service'
 import { createDerivedMedia } from './derived-media'
 import { createExporterWindowFactory } from './export-window'
 import { createExportService } from './export-service'
@@ -151,6 +153,13 @@ async function main(): Promise<void> {
     vocabulary: () => state.dictionary(),
     emit
   })
+  // --- Análise da câmera (M4c): o rosto, para enquadrar a câmera --------------------------------------------------
+  const camera = createCameraService({
+    logger,
+    engine: chooseCameraEngine({ env: process.env, scriptPath: join(resourcesDir, 'camera_tools.py'), logger }),
+    read: (id) => store.read(id),
+    emit
+  })
   const vault: KeyVault = {
     available: () => safeStorage.isEncryptionAvailable(),
     encrypt: (plain) => safeStorage.encryptString(plain).toString('base64'),
@@ -181,6 +190,16 @@ async function main(): Promise<void> {
       emit('record:notice', { kind: 'error', text: 'Não consegui começar a transcrição desta gravação', detail: err instanceof Error ? err.message : String(err) })
     }
   }
+  /** Depois de cada gravação com câmera processada, o rosto é analisado em segundo plano (se o motor está pronto; senão o editor oferece preparar). */
+  const autoAnalyzeFace = async (folder: string): Promise<void> => {
+    try {
+      const ready = (await camera.view()).face.state === 'ready'
+      if (ready) await camera.analyze(folder, 'face')
+    } catch (err) {
+      // projeto sem câmera ou outro motivo: o editor tenta de novo ao abrir e mostra o motivo; aqui só fica no log
+      logger.warn(`Não comecei a análise do rosto de ${folder}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
   const emitRecording = <K extends keyof IpcEvents>(channel: K, payload: IpcEvents[K]): void => {
     emit(channel, payload)
     if (channel === 'process:progress') {
@@ -188,6 +207,7 @@ async function main(): Promise<void> {
       if (snap.status === 'done' && !autoStarted.has(snap.sessionId)) {
         autoStarted.add(snap.sessionId)
         void autoTranscribe(snap.folder)
+        void autoAnalyzeFace(snap.folder)
       }
     }
   }
@@ -266,6 +286,7 @@ async function main(): Promise<void> {
     void recording.shutdown()
     void exporter.shutdown()
     transcription.shutdown()
+    camera.shutdown()
     derived.shutdown()
     windows.closeAll()
   })
@@ -280,6 +301,7 @@ async function main(): Promise<void> {
       exporter,
       derived,
       transcription,
+      camera,
       llm,
       outputDirs,
       pickExportDir: async (defaultPath) => {

@@ -177,7 +177,44 @@ export const ptBR = {
       borderColor: 'Cor da borda',
       behavior: 'Comportamento',
       mirror: 'Espelhar a imagem',
-      shrink: 'Encolher durante o zoom'
+      shrink: 'Encolher durante o zoom',
+      borderNote: 'No layout "Lado a lado" a câmera não leva borda: ela acompanha a tela.',
+      framing: {
+        title: 'Enquadramento do rosto',
+        auto: 'Centralizar no rosto',
+        autoHint: 'O app acha o rosto uma vez por gravação e o recorte da câmera o acompanha, devagar. Vale para a bolha, o lado a lado e o "Câmera + tela" do vertical.',
+        zoom: 'Aproximação',
+        zoomValue: (v: number): string => `${v.toFixed(2).replace('.', ',').replace(/,?0+$/, '')}×`,
+        horizontal: 'Deslocar na horizontal',
+        vertical: 'Deslocar na vertical',
+        offset: (v: number): string => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`,
+        reset: 'Restaurar o enquadramento',
+        dragHint: 'Arraste dentro da câmera, na prévia, para mover o recorte (na bolha, segure Alt).',
+        status: {
+          queued: 'Na fila para procurar o rosto…',
+          running: (pct: number): string => `Procurando o rosto… ${pct}%`,
+          found: (pct: number): string => `Rosto achado em ${pct}% da gravação.`,
+          none: 'Não achei um rosto nesta gravação. O recorte fica no centro; ajuste à mão.',
+          failed: 'Não consegui procurar o rosto',
+          retry: 'Procurar de novo',
+          cancel: 'Cancelar',
+          unreadable: 'Não consegui ler a análise do rosto',
+          missing: 'O rosto ainda não foi procurado.'
+        },
+        needsPrepare: 'Para centralizar a câmera no seu rosto, o app precisa de um detector pequeno (OpenCV e um modelo de 230 KB). Roda neste computador e nada sai dele.'
+      },
+      side: {
+        title: 'Câmera ao lado da tela',
+        help: 'Vale para o layout "Lado a lado" do vídeo 16:9: a imagem normal da câmera, num cartão com os mesmos cantos e a mesma sombra da tela.',
+        notActive: 'O layout atual não é o "Lado a lado".',
+        side: 'Lado',
+        sides: { left: 'Esquerda', right: 'Direita' },
+        ratio: 'Formato do quadro',
+        ratios: { portrait: 'Em pé 3:4', square: 'Quadrado 1:1' },
+        width: 'Largura',
+        gap: 'Espaço entre os dois',
+        percent: (v: number): string => `${Math.round(v * 100)}%`
+      }
     },
 
     zoom: {
@@ -234,6 +271,7 @@ export const ptBR = {
         'screen-wide': 'Tela na largura'
       },
       optionHints: {
+        'side-by-side': 'A câmera num quadro ao lado da tela, com a imagem normal da webcam. Lado, formato e largura ficam na aba Câmera.',
         'screen-focus': 'A tela recortada em tela cheia, seguindo o cursor, com a câmera numa bolha.',
         stack: 'A tela em cima e a câmera embaixo, metade e metade, de ponta a ponta. A tela segue o cursor.',
         'screen-wide': 'A tela inteira na largura, com o mesmo vídeo desfocado ao fundo. Para telas de letra grande.',
@@ -817,6 +855,20 @@ export const ptBR = {
     done: 'Tudo pronto. A transcrição roda neste computador.',
     stepStatus: { pending: 'Na fila', running: 'Em andamento', done: 'Pronto', error: 'Erro' },
     chip: { queued: 'Na fila para transcrever', running: (pct: number): string => `Transcrevendo ${pct}%` }
+  },
+
+  /** A preparação da análise da câmera (M4c): pacotes e o detector de rosto. */
+  cameraTools: {
+    steps: { python: 'Ambiente do Python', packages: 'Pacotes da análise', binary: 'Programa', model: 'Detector de rosto', check: 'Teste final' },
+    stepStatus: { pending: 'Na fila', running: 'Em andamento', done: 'Pronto', error: 'Erro' },
+    state: { ready: 'Pronta', missing: 'Falta preparar', preparing: 'Preparando…', error: 'Com problema' },
+    prepare: 'Preparar a análise da câmera',
+    preparing: 'Preparando…',
+    cancel: 'Cancelar',
+    retry: 'Tentar de novo',
+    cancelled: 'Preparação cancelada. O que já foi baixado fica guardado e a próxima tentativa continua de onde parou.',
+    failed: (message: string): string => `A preparação parou: ${message}`,
+    failedStep: (step: string): string => `Parou em: ${step}`
   },
 
   bubble: { label: 'Bolha da câmera', error: 'Câmera indisponível' },

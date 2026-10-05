@@ -25,7 +25,7 @@ import { createMockTranscriber } from '../../src/main/transcription/mock'
 import { createTranscriptionService } from '../../src/main/transcription/service'
 import { useTmpDir } from '../helpers/env'
 import { buildDemo, sentenceRange } from '../helpers/demo-script'
-import { fakeVault } from '../helpers/handler-extras'
+import { cameraDeps, fakeVault } from '../helpers/handler-extras'
 import { createIdleExportService, createIdleRecordingService } from '../helpers/recording'
 
 const tmp = useTmpDir()
@@ -95,6 +95,7 @@ async function build(opts: { responses?: unknown[]; llm?: 'mock' | 'off'; projec
     exporter: createIdleExportService(),
     derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, levels: async () => null, idle: async () => undefined, shutdown: () => undefined },
     transcription,
+    camera: cameraDeps({ store, logger }),
     llm,
     outputDirs: createOutputDirs(),
     pickExportDir: async () => null,

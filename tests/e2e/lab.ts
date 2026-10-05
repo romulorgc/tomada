@@ -9,6 +9,7 @@ import type { ElectronApplication, Page } from '@playwright/test'
 import pixelmatch from 'pixelmatch'
 import { PNG } from 'pngjs'
 import { EVENT_FILES } from '../../src/shared/events'
+import { FACE_FILE, type FaceTrack } from '../../src/shared/face'
 import { mediaUrl } from '../../src/shared/media-url'
 import { parseProject } from '../../src/shared/project'
 import type { FormatSpec } from '../../src/shared/scene'
@@ -55,6 +56,8 @@ export type StillOptions = {
   folder?: string
   /** As palavras da transcrição (legendas). */
   words?: Word[] | null
+  /** A URL da análise do rosto (enquadramento da câmera), se a cena usa (ver `writeFace`). */
+  faceUrl?: string | null
 }
 
 /** Renderiza os instantes pedidos e devolve os PNGs. */
@@ -66,6 +69,7 @@ export async function renderStills(lab: Page, o: StillOptions): Promise<Buffer[]
     project,
     format: o.format ?? { kind: 'horizontal', w: 1920, h: 1080 },
     words: o.words ?? null,
+    faceUrl: o.faceUrl ?? null,
     times: o.times,
     screenUrl: project.sources.screen ? mediaUrl(folder, project.sources.screen.path) : null,
     cameraUrl: project.sources.camera ? mediaUrl(folder, project.sources.camera.path) : null,
@@ -77,6 +81,25 @@ export async function renderStills(lab: Page, o: StillOptions): Promise<Buffer[]
   }
   const base64s = await lab.evaluate((r) => (window as unknown as { tomadaExport: { renderStills(x: unknown): Promise<string[]> } }).tomadaExport.renderStills(r), req)
   return base64s.map((b) => Buffer.from(b, 'base64'))
+}
+
+/**
+ * Grava uma análise de rosto SINTÉTICA na pasta do projeto da sessão (`media/camera-face.json`) e devolve a URL para `renderStills`:
+ * o rosto fica parado em (`cx`, `cy`) com a caixa `w × h` (fração da imagem da câmera). Serve para os goldens do enquadramento.
+ */
+export function writeFace(session: Session, face: { cx: number; cy?: number; w?: number; h?: number; durationMs?: number }, folder = EXAMPLE_FOLDER): string {
+  const { cx, cy = 0.4, w = 0.14, h = 0.3, durationMs = 23_000 } = face
+  const track: FaceTrack = {
+    version: 1,
+    engine: 'teste',
+    frame: { w: 640, h: 360 },
+    sampleMs: 200,
+    durationMs,
+    boxes: Array.from({ length: Math.floor(durationMs / 200) + 1 }, (_, i) => ({ t: i * 200, x: cx - w / 2, y: cy - h / 2, w, h, score: 0.99 })),
+    createdAt: '2026-10-05T00:00:00.000Z'
+  }
+  writeFileSync(join(session.projects, folder, FACE_FILE), JSON.stringify(track))
+  return mediaUrl(folder, FACE_FILE)
 }
 
 export type GoldenResult = { name: string; mismatched: number; ratio: number; created: boolean }

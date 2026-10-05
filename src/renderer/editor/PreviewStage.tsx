@@ -8,15 +8,17 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import { useStore } from 'zustand'
 import { setZoomFocus } from '@shared/edits'
+import { panFraming } from '@shared/face'
 import type { Scene } from '@shared/scene'
-import type { Corner } from '@shared/types'
+import type { CameraFraming, Corner } from '@shared/types'
 import { PLATFORM_ZONES, SAFE_BOX, VERTICAL_H, VERTICAL_W, safeBoxFor } from '@shared/vertical'
 import { AlertIcon, FolderIcon, TargetIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
 import { useDoc, useEditor, usePlayback } from './context'
 
-type DragMode = { mode: 'camera' }
+/** `camera`: a bolha anda pela grade; `frame`: arrasta a IMAGEM dentro do quadro da câmera (o enquadramento). */
+type DragMode = { mode: 'camera' } | { mode: 'frame'; startX: number; startY: number; framing: CameraFraming | undefined; dest: { w: number; h: number }; crop: { w: number; h: number }; mirror: boolean }
 
 /** A posição da grade 3×3 mais próxima de um ponto (fração 0..1 da área da tela). */
 function nearestCorner(fx: number, fy: number): Corner {
@@ -87,12 +89,32 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
 
   const cameraHit = (scene: Scene | null, p: { x: number; y: number }): boolean =>
     Boolean(scene && scene.screen && scene.camera && BUBBLE_LAYOUTS.has(scene.debug.layout) && scene.debug.previous === scene.debug.layout && inside(p, scene.camera.dest, 4))
+  /** Dentro do quadro da câmera (parado num layout só)? Aí arrastar move a imagem; na bolha, só com Alt (sem Alt a bolha anda). */
+  const frameHit = (scene: Scene | null, p: { x: number; y: number }, alt: boolean): boolean => {
+    if (!scene?.camera || scene.debug.previous !== scene.debug.layout || !inside(p, scene.camera.dest)) return false
+    return !BUBBLE_LAYOUTS.has(scene.debug.layout) || alt
+  }
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
     if (e.button !== 0) return
     const scene = engineRef.current?.scene ?? null
     const p = toCanvas(e)
     if (!scene || !p) return
+    if (scene.camera && frameHit(scene, p, e.altKey) && !previewId) {
+      e.currentTarget.setPointerCapture(e.pointerId)
+      store.getState().begin()
+      drag.current = {
+        mode: 'frame',
+        startX: p.x,
+        startY: p.y,
+        framing: store.getState().project.style.camera.framing,
+        dest: { w: scene.camera.dest.w, h: scene.camera.dest.h },
+        crop: { w: scene.camera.src.w, h: scene.camera.src.h },
+        mirror: scene.camera.mirror
+      }
+      setCursor('grabbing')
+      return
+    }
     if (cameraHit(scene, p)) {
       e.currentTarget.setPointerCapture(e.pointerId)
       store.getState().begin()
@@ -112,6 +134,12 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
     const scene = engineRef.current?.scene ?? null
     const p = toCanvas(e)
     if (!scene || !p) return
+    const d = drag.current
+    if (d?.mode === 'frame') {
+      const { dx, dy } = panFraming(d.framing, p.x - d.startX, p.y - d.startY, d.dest, d.crop, d.mirror)
+      store.getState().change((doc) => ({ ...doc, style: { ...doc.style, camera: { ...doc.style.camera, framing: { ...doc.style.camera.framing, dx, dy } } } }))
+      return
+    }
     if (drag.current?.mode === 'camera' && scene.screen) {
       // no 16:9 a grade 3×3 é a da tela; no vertical é a da área segura (a câmera nunca sai dela)
       const dest = scene.format.kind === 'vertical' ? safeBoxFor(scene.format) : scene.screen.dest
@@ -119,7 +147,7 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
       store.getState().change((doc) => (doc.style.camera.corner === corner ? doc : { ...doc, style: { ...doc.style, camera: { ...doc.style.camera, corner } } }))
       return
     }
-    setCursor(cameraHit(scene, p) ? 'grab' : selected && scene.screen && inside(p, scene.screen.dest) ? 'crosshair' : 'default')
+    setCursor(cameraHit(scene, p) || (!previewId && frameHit(scene, p, e.altKey)) ? 'grab' : selected && scene.screen && inside(p, scene.screen.dest) ? 'crosshair' : 'default')
   }
 
   const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>): void => {
