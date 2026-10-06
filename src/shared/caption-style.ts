@@ -4,7 +4,7 @@
  *
  *  - Destaque: Montserrat ExtraBold em CAIXA ALTA, maiúscula de 58 px (corpo de 80), contorno de ~5 px, a palavra falada em
  *    #FFD93D com "pop" (E1: 58 [54-61] px, n = 21);
- *  - Natural (o padrão do pt-BR): Inter SemiBold em caixa mista, branco com contorno fino, SEM caixa atrás, maiúscula de 46 px
+ *  - Natural (o padrão do pt-BR): Inter ExtraBold em caixa mista, branco com contorno fino, SEM caixa atrás, maiúscula de 46 px
  *    (corpo de 63; E1: 46 [41-57] px, n = 34; 72% das legendas brasileiras são em caixa mista);
  *  - Limpa: caixa branca e texto escuro; as palavras ainda não ditas ficam apagadas (corpo de 63);
  *  - Karaokê: Montserrat Bold, a palavra falada ganha uma pílula (corpo de 66);
@@ -30,7 +30,8 @@ export const CAPTION_FONT_FILES: readonly { family: string; weight: number; file
   { family: 'Tomada Montserrat', weight: 700, file: 'Montserrat-Bold.woff2' },
   { family: 'Tomada Anton', weight: 400, file: 'Anton-Regular.woff2' },
   { family: 'Tomada Inter', weight: 600, file: 'Inter-SemiBold.woff2' },
-  { family: 'Tomada Inter', weight: 700, file: 'Inter-Bold.woff2' }
+  { family: 'Tomada Inter', weight: 700, file: 'Inter-Bold.woff2' },
+  { family: 'Tomada Inter', weight: 800, file: 'inter-latin-wght-normal.woff2' }
 ]
 
 export type CaptionRenderStyle = {
@@ -87,7 +88,8 @@ const DARK = '#12151B'
 const SPECS: Record<CaptionStyleId, Spec> = {
   natural: {
     font: 'inter',
-    weight: 600,
+    // Nota 5 da conferência: mais tinta sobre fundos claros, sem alterar as medidas calibradas.
+    weight: 800,
     v: 63,
     h: 36,
     lineHeight: 1.28,

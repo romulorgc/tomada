@@ -456,6 +456,14 @@ export const ClipsIcon = (p: IconProps) => (
   </Svg>
 )
 
+/** Uma região coberta: distinto do ícone de composição de layout. */
+export const BlurIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2.4" />
+    <path d="m5 15 6-8M9 17l7-10M14 17l5-7" />
+  </Svg>
+)
+
 /** Publicar: o envio (seta saindo de uma bandeja). */
 export const PublishIcon = (p: IconProps) => (
   <Svg {...p}>

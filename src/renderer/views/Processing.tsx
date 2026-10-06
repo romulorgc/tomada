@@ -57,6 +57,7 @@ export function Processing() {
       <div className="mt-6 h-1.5 overflow-hidden rounded-full bg-raised" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overall} aria-label={t.processing.title}>
         <div className={['h-full rounded-full transition-[width] duration-200', failed ? 'bg-danger' : 'bg-rec'].join(' ')} style={{ width: `${overall}%` }} data-testid="processing-overall" />
       </div>
+      <p className="mt-2 text-right text-sm text-muted tnum" role="status">{overall}%</p>
 
       <ol className="mt-6 grid gap-1" data-testid="processing-steps">
         {snapshot.steps.map((step) => (

@@ -80,6 +80,7 @@ export function Bar() {
             aria-label={running ? t.bar.pause : t.bar.resume}
             title={`${running ? t.bar.pause : t.bar.resume} (${state.shortcutPause})`}
             data-testid="bar-pause"
+            aria-pressed={!running && !stopping}
           >
             {running ? <PauseIcon size={18} /> : <PlayIcon size={18} />}
           </button>

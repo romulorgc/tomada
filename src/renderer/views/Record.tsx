@@ -78,7 +78,7 @@ function Segmented<T extends string | number>({
 
 function Field({ title, help, children }: { title: string; help?: string; children: React.ReactNode }) {
   return (
-    <section className="grid gap-2">
+    <section className="record-field grid gap-2">
       <h2 className="text-[0.8125rem] font-semibold uppercase tracking-[0.06em] text-muted">{title}</h2>
       {children}
       {help ? <p className="text-[0.8125rem] text-faint">{help}</p> : null}
@@ -171,8 +171,8 @@ function SourceCard({ source, selected, onSelect }: { source: SourceInfo; select
           </span>
         ) : null}
       </span>
-      <span className="flex min-w-0 items-baseline gap-2 text-left">
-        <span className="truncate text-[0.9375rem] font-medium" title={source.name}>
+      <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-left">
+        <span className="w-full break-words text-[0.9375rem] font-medium" title={source.name}>
           {source.name}
         </span>
         {source.primary ? <span className="shrink-0 text-[0.75rem] text-muted">{t.record.source.primary}</span> : null}
@@ -400,11 +400,11 @@ export function Record() {
             <section aria-label={t.record.source.title} data-testid="source-picker">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <h2 className="text-[0.8125rem] font-semibold uppercase tracking-[0.06em] text-muted">{t.record.source.title}</h2>
-                <div className="seg" role="tablist" aria-label={t.record.source.title}>
-                  <button type="button" role="tab" aria-selected={tab === 'screens'} aria-pressed={tab === 'screens'} onClick={() => setTab('screens')} data-testid="source-tab-screens" disabled={!idle}>
+                <div className="seg" role="group" aria-label={t.record.source.title}>
+                  <button type="button" aria-pressed={tab === 'screens'} onClick={() => setTab('screens')} data-testid="source-tab-screens" disabled={!idle}>
                     <ScreenIcon size={15} /> {t.record.source.screens} <span className="text-faint tnum">{screens.length}</span>
                   </button>
-                  <button type="button" role="tab" aria-selected={tab === 'windows'} aria-pressed={tab === 'windows'} onClick={() => setTab('windows')} data-testid="source-tab-windows" disabled={!idle}>
+                  <button type="button" aria-pressed={tab === 'windows'} onClick={() => setTab('windows')} data-testid="source-tab-windows" disabled={!idle}>
                     {t.record.source.windows} <span className="text-faint tnum">{windows.length}</span>
                   </button>
                 </div>
