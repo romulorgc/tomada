@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import numpy as np
@@ -233,75 +234,257 @@ def single_clap_time(audio):
     return time if .4 < time < 4.6 else None
 
 
-def visual_hand_contact(frames, audio_time, fps=100):
-    """Duas regiões de pele abaixo do rosto convergem, unem-se e recuam. Ambiguidade é rejeição.
+def native_frames(request, duration=5, size=(480, 270)):
+    """Quadros nos instantes REAIS do contêiner (pts), sem reamostrar a taxa nenhuma.
 
-    Critério físico conservador, sem modelo novo: não infere mãos de movimento global.
-    Luvas, oclusão, pouca luz ou braço ligado ao rosto podem exigir nova tentativa/manual.
+    A câmera real varia de 15 a 60 qps e muda com a luz do quarto; reamostrar a 100 qps inventaria quadros
+    repetidos e esconderia onde a imagem realmente mudou. O tempo de cada quadro vem do `showinfo`.
+    """
+    width, height = size
+    filters = (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+               f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,showinfo")
+    process = None
+    for mode in (["-fps_mode", "passthrough"], ["-vsync", "0"]):
+        process = subprocess.run([absolute(request["ffmpeg"]), "-hide_banner", "-loglevel", "info", "-nostdin",
+                                  "-i", absolute(request["video"]), "-t", str(duration), "-an", *mode,
+                                  "-vf", filters, "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, check=False)
+        if process.returncode == 0:
+            break
+    if process is None or process.returncode:
+        raise RuntimeError("Não consegui decodificar a mídia para medir a sincronia.")
+    times = np.array([float(value) for value in re.findall(
+        r"Parsed_showinfo[^\n]*?pts_time:\s*(-?[0-9.]+)", process.stderr.decode("utf-8", "ignore"))])
+    data = np.frombuffer(process.stdout, dtype=np.uint8)
+    if len(data) % (width * height * 3):
+        raise RuntimeError("Não consegui ler os quadros do vídeo da calibração.")
+    frames = data.reshape(-1, height, width, 3)
+    # O filtro pode ver uns quadros além do corte de `-t`; o que o pipe entregou são os primeiros.
+    if len(times) < len(frames):
+        raise RuntimeError("Não consegui ler os instantes dos quadros do vídeo da calibração.")
+    return frames, times[:len(frames)]
+
+
+def face_box(frames, times, audio_time, model):
+    """Maior rosto (mediana de várias detecções perto da palma); sem modelo ou sem rosto, None."""
+    if not model or not os.path.isfile(model) or not len(frames):
+        return None
+    import cv2
+    height, width = frames.shape[1:3]
+    detector = cv2.FaceDetectorYN.create(str(model), "", (width, height), .7, .3, 50)
+    near = np.flatnonzero((times >= audio_time - 1.2) & (times <= audio_time + .4))
+    boxes = []
+    for index in near[::max(1, len(near) // 12)]:
+        _, faces = detector.detect(frames[index])
+        if faces is not None and len(faces):
+            boxes.append(max(faces[:, :4], key=lambda box: box[2] * box[3]))
+    return tuple(float(value) for value in np.median(boxes, axis=0)) if len(boxes) >= 3 else None
+
+
+def hand_contact(frames, times, audio_time, face=None, window=.35):
+    """Instante em que as duas mãos se encontram: {"time", ...} ou {"reason": motivo}.
+
+    Não depende de cor de pele (parede, porta e piso claros enganam a máscara): usa só MOVIMENTO entre
+    quadros vizinhos, numa faixa abaixo do rosto. Antes do contato há dois blocos de movimento, um de
+    cada lado, e o vão entre as pontas internas deles diminui de quadro em quadro; no contato o vão some.
+    O instante do contato sai da reta (vão × tempo) pelos tempos REAIS dos quadros, então vale de 15 a
+    60 qps (a incerteza é o intervalo entre o último quadro com vão e o seguinte). Quadros repetidos pela
+    câmera não entram. Sem convergência, sem as duas mãos, sem as mãos pararem ou se afastarem depois, ou
+    com dois encontros distintos: rejeição com o motivo.
     """
     import cv2
-    from itertools import combinations
-    if not len(frames):
-        return None
+    times = np.asarray(times, dtype=float)
+    count = len(frames)
+    if count < 8 or times[-1] - times[0] <= 0 or (count - 1) / (times[-1] - times[0]) < 9:
+        return {"reason": "slow"}
     height, width = frames.shape[1:3]
-    cache = {}
-    def regions(index):
-        if index < 0 or index >= len(frames): return []
-        if index in cache: return cache[index]
-        color = cv2.cvtColor(frames[index], cv2.COLOR_BGR2YCrCb)
-        mask = cv2.inRange(color, np.array([20, 133, 77], dtype=np.uint8), np.array([245, 180, 135], dtype=np.uint8))
-        # Exclui a região usual do rosto/cabeça e bordas, sem aceitar clarão da imagem inteira.
-        mask[:round(height * .35)] = 0
-        mask[round(height * .95):] = 0
-        mask[:, :round(width * .05)] = 0
-        mask[:, round(width * .95):] = 0
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        _, _, stats, centers = cv2.connectedComponentsWithStats(mask)
-        selected = [(stat, center) for stat, center in zip(stats[1:], centers[1:])
-                    if .004 * height * width <= stat[4] <= .15 * height * width and .25 <= stat[2] / max(1, stat[3]) <= 4]
-        cache[index] = sorted(selected, key=lambda region: region[1][0])
-        return cache[index]
-    def gap(pair):
-        return pair[1][0][0] - (pair[0][0][0] + pair[0][0][2])
-    def track(origin, candidates, inward=0):
-        # Acompanhamento local de área/altura; um rosto estável não substitui mão móvel.
-        matches = []
-        for region in candidates:
-            dx, dy = region[1] - origin[1]
-            if abs(dx) > width * .25 or abs(dy) > height * .06: continue
-            if not .65 * origin[0][4] <= region[0][4] <= 1.5 * origin[0][4]: continue
-            if inward and inward * dx < width * .025: continue
-            matches.append((abs(dx) + abs(dy), region))
-        return min(matches, key=lambda match: match[0])[1] if matches else None
-    contacts = []
-    for index in range(max(12, round((audio_time - .3) * fps)), min(len(frames) - 12, round((audio_time + .3) * fps) + 1)):
-        snapshots = [regions(t) for t in [index - 12, index - 6, index, index + 6, index + 12]]
-        # Muitas regiões são ambíguas e não devem disparar busca combinatória ilimitada.
-        if any(len(snapshot) > 12 for snapshot in snapshots): continue
-        before_regions, approach_regions, touch_regions, recoil_regions, after_regions = snapshots
-        for before in combinations(before_regions, 2):
-            if gap(before) < width * .12 or abs(before[0][1][1] - before[1][1][1]) > height * .12: continue
-            approach = [track(before[0], approach_regions, 1), track(before[1], approach_regions, -1)]
-            after = [track(before[0], after_regions), track(before[1], after_regions)]
-            if any(region is None for region in [*approach, *after]): continue
-            if approach[0] is approach[1] or after[0] is after[1]: continue
-            if gap(after) < width * .12: continue
-            recoil = [track(after[0], recoil_regions, 1), track(after[1], recoil_regions, -1)]
-            if any(region is None for region in recoil) or recoil[0] is recoil[1]: continue
-            if not gap(before) > gap(approach) + width * .05 or not gap(after) > gap(recoil) + width * .05: continue
-            center = (before[0][1] + before[1][1]) / 2
-            area = before[0][0][4] + before[1][0][4]
-            for touch in touch_regions:
-                dx, dy = touch[1] - center
-                if abs(dx) > width * .08 or abs(dy) > height * .06: continue
-                if not .65 * area <= touch[0][4] <= 1.35 * area: continue
-                contacts.append((index, touch[1]))
-    if not contacts or max(t[0] for t in contacts) - min(t[0] for t in contacts) > 4:
-        return None
-    # Dois contatos em posições distintas também são ambíguos, mesmo no mesmo instante.
-    if any(abs(center[0] - contacts[0][1][0]) > width * .08 or abs(center[1] - contacts[0][1][1]) > height * .06 for _, center in contacts):
-        return None
-    return min(t[0] for t in contacts) / fps
+    top = round(height * .35) if face is None else int(np.clip(face[1] + face[3] * .85, height * .30, height * .75))
+    left, right = round(width * .01), width - round(width * .01)
+    zone_height, zone = height - top, (height - top) * (right - left)
+    kernel = max(3, round(width * .008)) | 1
+    hole = max(2, round(width * .006))      # buraco de poucas colunas dentro de uma mão não é vão
+    touch = max(2., width * .02)            # vão menor que isto conta como mãos juntas
+    floor_gap = .06 * width                 # abaixo disto o vão medido já é ruído de borda/borrão, não distância
+    lit_min = max(3., .04 * zone_height)    # linhas em movimento para uma coluna "acesa"
+    lo = max(1, int(np.searchsorted(times, audio_time - window - .5)))
+    hi = min(count - 1, int(np.searchsorted(times, audio_time + window + .6)))
+    blurred = {}
+
+    def blur(index):
+        if index not in blurred:
+            blurred[index] = cv2.GaussianBlur(frames[index][top:, left:right], (kernel, kernel), 0).astype(np.int16)
+        return blurred[index]
+
+    kept, profiles, previous = [], {}, lo - 1
+    for index in range(lo, hi + 1):
+        small = np.abs(frames[index][::3, ::3].astype(np.int16) - frames[previous][::3, ::3])
+        if small.mean() < .5 and np.percentile(small, 99.9) <= 4:
+            continue   # a câmera repetiu o quadro: não há imagem nova neste instante
+        now, before = blur(index), blur(previous)
+        # Exposição automática multiplica a imagem toda; o ganho típico dos pixels (a mediana) sai da conta, e depois
+        # o deslocamento médio (clarão). O que sobra é o que de fato se mexeu.
+        sample_now, sample_before = now[::3, ::3].reshape(-1, 3).astype(np.float32), before[::3, ::3].reshape(-1, 3).astype(np.float32)
+        usable = sample_before.min(axis=1) > 30
+        gain = np.clip(np.median(sample_now[usable] / sample_before[usable], axis=0), .8, 1.25) if usable.sum() > 200 else np.ones(3, np.float32)
+        change = now - (before * gain).astype(np.int16) if np.abs(gain - 1).max() > .01 else now - before   # ganho de ruído não conta
+        change -= np.median(change.reshape(-1, 3), axis=0).astype(np.int16)
+        magnitude = np.abs(change).max(axis=2)
+        moving = (magnitude > max(9., 3 * 1.48 * float(np.median(magnitude)))).astype(np.uint8)   # acima do ruído do sensor
+        moving &= (cv2.boxFilter(moving, -1, (3, 3), normalize=False) >= 3).astype(np.uint8)   # tira pontos soltos; mantém traços finos
+        kept.append(index)
+        profiles[index] = moving.sum(axis=0).astype(float) if moving.sum() <= .55 * zone else None
+        blurred.pop(previous, None)
+        previous = index
+    if not any(profile is not None for profile in profiles.values()):
+        return {"reason": "none"}
+
+    def centre_of(profile):
+        return float((profile * np.arange(len(profile))).sum() / max(profile.sum(), 1e-9))
+
+    def state(profile, meet, seed):
+        """("two", vão, massa, centro do vão), ("merged", 0, massa), ("side", 0, massa) ou None.
+
+        `seed` = primeira passada, com o ponto de encontro só estimado (aceita o vão mais próximo dele);
+        depois o ponto de encontro sai do vão do fim da aproximação e o vão tem de CONTÊ-LO, pois no meio de
+        mão que se move há também "vãos" no miolo da própria mão (a máscara de movimento é oca)."""
+        if profile is None:
+            return ("flash", 0., 0.)   # mudança na imagem toda: não diz nada sobre as mãos, nem que pararam
+        lit = profile >= lit_min
+        total = float(profile[lit].sum())
+        if total < .004 * zone:
+            return None
+        columns = np.flatnonzero(lit)
+        floor = max(.12 * total, .002 * zone)
+        best = None
+        for j in np.flatnonzero(np.diff(columns) > hole + 1):
+            a, b = int(columns[j]) + 1, int(columns[j + 1]) - 1
+            if profile[:a][lit[:a]].sum() < floor or profile[b + 1:][lit[b + 1:]].sum() < floor:
+                continue
+            distance = 0 if a <= meet <= b else (min(abs(a - meet), abs(b - meet)) if seed else None)
+            if distance is not None and (best is None or (distance, -(b - a)) < best[0]):
+                best = ((distance, -(b - a)), b - a + 1, (a, b))
+        if best is not None and best[1] > touch / 2:
+            return ("two", best[1], total, best[2])  # (…, (início, fim) do vão)
+        meet = int(round(meet))
+        if min(profile[:meet][lit[:meet]].sum(), profile[meet:][lit[meet:]].sum()) >= floor:
+            return ("merged", 0., total)
+        return ("side", 0., total)
+
+    def find_events(meet, seed):
+        states = [state(profiles[index], meet, seed) for index in kept]
+        found = []
+        for n, end in enumerate(kept):
+            here = states[n]
+            if here is None or here[0] != "two" or here[1] <= floor_gap:
+                continue
+            following = states[n + 1] if n + 1 < len(kept) else None
+            near = following is not None and times[kept[n + 1]] - times[end] <= .3
+            # Ainda se aproximando: o vão do quadro seguinte é menor e com força de movimento parecida. Se a força
+            # despencou, é o quadro das mãos que pararam e voltaram (a máscara guarda o "fantasma" do quadro anterior).
+            if near and following[0] == "two" and floor_gap < following[1] < here[1] - .01 * width and following[2] >= .5 * here[2]:
+                continue
+            approach = []
+            for m in range(n, -1, -1):
+                earlier = states[m]
+                if earlier is None or earlier[0] != "two" or earlier[1] <= floor_gap or times[end] - times[kept[m]] > .4 \
+                        or (approach and earlier[1] < approach[-1][1] - .01 * width):
+                    break
+                approach.append((kept[m], earlier[1], earlier[3]))
+                if len(approach) == 5:
+                    break
+            approach.reverse()
+            if len(approach) < 2 or approach[0][1] < .10 * width or approach[0][1] - approach[-1][1] < .04 * width:
+                continue
+            # A reta usa só o fim da aproximação (o mais recente que já cobre 60 ms): o começo é mão se apressando.
+            recent = approach
+            while len(recent) > 2 and times[end] - times[recent[1][0]] >= .06:
+                recent = recent[1:]
+            instants = np.array([times[j] for j, _, _ in recent])
+            gaps = np.array([gap for _, gap, _ in recent], dtype=float)
+            slope, intercept = np.polyfit(instants, gaps, 1)
+            if slope >= 0:
+                continue
+            # Duas mãos fecham o vão pelos DOIS lados. Uma mão só, rápida, deixa a máscara "antes e depois" dela mesma
+            # (dois blocos que andam juntos para o mesmo lado): não é palma.
+            closure = approach[0][1] - approach[-1][1]
+            if min(approach[-1][2][0] - approach[0][2][0], approach[0][2][1] - approach[-1][2][1]) < .2 * closure:
+                continue
+            joined = near and (following[0] == "merged" or (following[0] == "two" and following[1] <= floor_gap))
+            # Prazo: o quadro em que as mãos já aparecem juntas ou, se pararam de repente, o próximo quadro. Se o
+            # próximo quadro ainda mostra um vãozinho (perto, mas sem encostar), o encontro cai logo depois dele.
+            following_time = float(times[kept[n + 1]]) if n + 1 < len(kept) else float(times[end])
+            deadline = following_time + (following_time - float(instants[-1]) if joined and following[0] == "two" else 0.)
+            deadline = min(deadline, float(times[end]) + .15)
+            # As bordas acesas engordam um pouco: o quadro "juntas" aparece até ~1% da largura antes do encontro real.
+            contact = float(np.clip(-intercept / slope, instants[-1], deadline + min(.01 * width / -slope, .3 * (deadline - instants[-1]))))
+            if not joined and not seed:
+                # Sem as mãos juntas no quadro seguinte: ou o vão ainda encolheu bastante, ou as mãos pararam já bem
+                # perto; e o vão que sobra tem de caber no intervalo até esse quadro (senão pararam no meio do caminho).
+                if following is not None and following[0] == "flash":
+                    continue
+                if near and following[0] == "two":
+                    if following[1] > .95 * gaps[-1]:
+                        continue
+                elif gaps[-1] > .12 * width:
+                    continue
+                if gaps[-1] / -slope > 1.2 * (deadline - instants[-1]) + .02:
+                    continue
+            # O ponto de encontro está dentro do vão de TODOS os quadros da aproximação: interseção dos vãos largos.
+            wide = [run for _, gap, run in approach if gap >= .5 * approach[0][1]]
+            start, stop = max(run[0] for run in wide), min(run[1] for run in wide)
+            centre = (start + stop) / 2 if start <= stop else (approach[0][2][0] + approach[0][2][1]) / 2
+            found.append({"time": contact, "index": n, "centre": centre, "first": approach[0][0], "frames": len(approach),
+                          "interval": following_time - float(instants[-1]), "gaps": [round(float(g)) for g in gaps],
+                          "peak": max(states[kept.index(j)][2] for j, _, _ in approach), "states": states})
+        # Quadros fantasma depois do contato formam "aproximações" mais longas da mesma mão: vale o fim mais cedo.
+        earliest = {}
+        for event in found:
+            if event["first"] not in earliest or event["index"] < earliest[event["first"]]["index"]:
+                earliest[event["first"]] = event
+        return list(earliest.values())
+
+    strong = [(profile.sum(), centre_of(profile)) for index, profile in profiles.items()
+              if profile is not None and abs(times[index] - audio_time) <= window]
+    if not strong:
+        return {"reason": "none"}
+    biggest = max(mass for mass, _ in strong)
+    meet = float(np.median([centre for mass, centre in strong if mass >= .5 * biggest]))
+    events = find_events(meet, True)
+    if events:   # o ponto de encontro real está no vão do fim da aproximação (contém o encontro de todos os quadros antes)
+        first = min(events, key=lambda event: abs(event["time"] - audio_time))
+        events = find_events(first["centre"], False)
+    events = [event for event in events if abs(event["time"] - audio_time) <= window + .35]
+    if not events:
+        return {"reason": "none"}
+    chosen = min(events, key=lambda event: abs(event["time"] - audio_time))
+    if abs(chosen["time"] - audio_time) > window:
+        return {"reason": "none"}
+    # Outro encontro de mãos, de força parecida e em outro instante: não dá para saber qual foi a palma.
+    if any(abs(event["time"] - chosen["time"]) > .12 and event["peak"] >= .5 * chosen["peak"] for event in events):
+        return {"reason": "ambiguous"}
+    # Passado o borrão do fim da aproximação (80 ms), as mãos têm de continuar se mexendo: afastar-se, recuar.
+    # Mãos coladas e paradas não provam que a palma foi aquela.
+    after = [state[2] for n, state in enumerate(chosen["states"])
+             if state and chosen["time"] + .08 < times[kept[n]] <= chosen["time"] + .6]
+    if max(after, default=0.) < .08 * chosen["peak"]:
+        return {"reason": "stuck"}
+    return {"time": chosen["time"], "frames": chosen["frames"], "interval": chosen["interval"], "gaps": chosen["gaps"]}
+
+
+def visual_hand_contact(frames, audio_time, fps=100, times=None, face=None):
+    """Contato das duas mãos (segundos) ou None. `times` são os instantes reais; sem eles, `fps` fixo."""
+    instants = np.arange(len(frames)) / fps if times is None else times
+    return hand_contact(frames, instants, audio_time, face).get("time")
+
+
+CLAP_REASONS = {
+    "slow": "A câmera gravou devagar demais (menos de 10 quadros por segundo). Feche outros programas que usam a câmera e acenda mais a luz.",
+    "face": "Não vi o seu rosto. Fique de frente para a câmera, com o rosto inteiro à mostra e boa luz.",
+    "none": "Não vi as duas mãos se aproximando e se encontrando. Mostre as duas mãos abaixo do rosto, bem abertas, junte-as numa palma só e abra de novo logo depois.",
+    "ambiguous": "Vi mais de um movimento de mãos. Fique parado, só as mãos se mexem, e bata uma palma só.",
+    "stuck": "As mãos ficaram juntas e paradas depois da palma. Bata e abra as mãos logo em seguida.",
+    "lost": "A câmera perdeu quadros justo na hora da palma. Feche outros programas que usam a câmera e tente de novo."
+}
 
 
 def clap_sync(request):
@@ -309,11 +492,21 @@ def clap_sync(request):
     audio_time = single_clap_time(audio)
     if audio_time is None:
         return {"offsetMs": None, "confidence": 0, "reason": "Não encontrei uma única palma curta. Grave de novo em silêncio e bata só uma palma."}
-    frames = video_frames(request, 0, 5, fps=100)
-    contact = visual_hand_contact(frames, audio_time)
-    if contact is None:
-        return {"offsetMs": None, "confidence": 0, "reason": "Não vi duas mãos se aproximando, encostando e se afastando. Mostre as mãos abaixo do rosto e tente novamente."}
-    return {"offsetMs": round((contact - audio_time) * 1000, 1), "confidence": 4}
+    frames, times = native_frames(request)
+    model = absolute(request["faceModel"]) if request.get("faceModel") else None
+    face = face_box(frames, times, audio_time, model)
+    if face is None and model and os.path.isfile(model):
+        return {"offsetMs": None, "confidence": 0, "reason": CLAP_REASONS["face"]}
+    found = hand_contact(frames, times, audio_time, face)
+    if "time" not in found:
+        reason = CLAP_REASONS[found["reason"]]
+        rate = (len(times) - 1) / (times[-1] - times[0]) if len(times) > 1 and times[-1] > times[0] else 0
+        if found["reason"] == "none" and 9 <= rate < 24:
+            reason += f" A câmera gravou só {round(rate)} quadros por segundo: aproxime as mãos mais devagar, em meio segundo."
+        return {"offsetMs": None, "confidence": 0, "reason": reason + " Tente de novo."}
+    if found["interval"] > .09:   # faltaram quadros justo na palma: a medida teria mais de ~1 quadro de incerteza
+        return {"offsetMs": None, "confidence": 0, "reason": CLAP_REASONS["lost"]}
+    return {"offsetMs": round((found["time"] - audio_time) * 1000, 1), "confidence": 4}
 
 
 if __name__ == "__main__":

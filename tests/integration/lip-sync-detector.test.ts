@@ -70,27 +70,31 @@ describe('SyncNet real, validado antes de confiar na estimativa', () => {
 
   it.each(['lip_sync_prepare_checks.py', 'lip_sync_clap_checks.py'])('gabaritos conservadores offline: %s', async (helper) => {
     const base = ensureToolsDir()
-    const result = await runProcess(join(base, 'python', 'Scripts', 'python.exe'), [join(ROOT, 'tests', 'helpers', helper)], { timeoutMs: 60_000 })
-    expect(result.stderr).toContain(`Ran ${helper === 'lip_sync_clap_checks.py' ? 6 : 4} tests`)
+    const result = await runProcess(join(base, 'python', 'Scripts', 'python.exe'), [join(ROOT, 'tests', 'helpers', helper)], { timeoutMs: 180_000 })
+    expect(result.stderr).toContain(`Ran ${helper === 'lip_sync_clap_checks.py' ? 12 : 4} tests`)
     expect(result.stderr).toContain('OK')
   })
-  it('palma localizada mede 0 e ±80 ms, mantém início WebM e rejeita movimento alheio', async () => {
+  it('palma localizada mede 0 e ±80 ms, mantém início WebM, vale com parede cor de pele de 15 a 60 qps e rejeita movimento alheio', async () => {
     const base = ensureToolsDir()
     const ff = createFfmpeg(locateFfmpeg()!)
     const temporary = join(base, 'tmp', 's1-calibracao-integracao')
     await mkdir(temporary, { recursive: true })
-    const measure = async (video: string) => {
+    const measure = async (video: string, extra: Record<string, unknown> = {}) => {
       const result = await runProcess(join(base, 'python', 'Scripts', 'python.exe'), ['-I', join(ROOT, 'resources', 'lip_sync.py')], {
-        stdin: JSON.stringify({ mode: 'clap', video, ffmpeg: ff.paths.ffmpeg }), env: { PYTHONUTF8: '1' }, timeoutMs: 60_000
+        stdin: JSON.stringify({ mode: 'clap', video, ffmpeg: ff.paths.ffmpeg, ...extra }), env: { PYTHONUTF8: '1' }, timeoutMs: 60_000
       })
-      return JSON.parse(result.stdout) as { offsetMs: number | null; confidence: number }
+      return JSON.parse(result.stdout) as { offsetMs: number | null; confidence: number; reason?: string }
     }
     try {
       for (const options of [
         { offset: 0 }, { offset: 80 }, { offset: -80 },
         { webm: true, videoStart: 80 }, { webm: true, audioStart: 80 },
         { lowFace: true, offset: 0 }, { lowFace: true, offset: 80 }, { lowFace: true, offset: -80 },
-        { lowFace: true, fps: 30, offset: 0 }, { lowFace: true, fps: 30, offset: 80 }, { lowFace: true, fps: 30, offset: -80 }
+        { lowFace: true, fps: 30, offset: 0 }, { lowFace: true, fps: 30, offset: 80 }, { lowFace: true, fps: 30, offset: -80 },
+        // Quarto cor de pele (a máscara de cor via 33% do quadro como "mão") e taxas reais de webcam, com a imagem inteira em VP9.
+        { skin: true, fps: 60, offset: 0, approach: .2 }, { skin: true, fps: 60, offset: 80, approach: .2 }, { skin: true, fps: 60, offset: -80, approach: .2 },
+        { skin: true, fps: 30, offset: 0, approach: .25 }, { skin: true, fps: 30, offset: 80, approach: .25 }, { skin: true, fps: 30, offset: -80, approach: .25 },
+        { skin: true, fps: 15, offset: 0, approach: .35 }, { skin: true, fps: 15, offset: 80, approach: .35 }, { skin: true, fps: 15, offset: -80, approach: .35 }
       ]) {
         const video = await clapMedia(ff, temporary, `palma-${JSON.stringify(options).replace(/\W/g, '')}`, options)
         if (options.webm) {
@@ -102,7 +106,8 @@ describe('SyncNet real, validado antes de confiar na estimativa', () => {
         const result = await measure(video)
         const expected = (options.offset ?? 0) + (options.videoStart ?? 0) - (options.audioStart ?? 0)
         expect(typeof result.offsetMs).toBe('number')
-        expect(Math.abs(result.offsetMs! - expected)).toBeLessThanOrEqual(options.fps === 30 ? 33 : 10)
+        // Sem reamostrar a 100 qps: a incerteza física é um intervalo entre quadros da câmera.
+        expect(Math.abs(result.offsetMs! - expected)).toBeLessThanOrEqual(options.fps && options.fps < 100 ? Math.round(1000 / options.fps) : 10)
         expect(result.confidence).toBeGreaterThan(3)
         console.log(`[palma] esperado=${expected} ms; medido=${result.offsetMs} ms`)
       }
@@ -112,6 +117,17 @@ describe('SyncNet real, validado antes de confiar na estimativa', () => {
       }
       const lowHead = await clapMedia(ff, temporary, 'cabeca-baixa-sem-maos', { kind: 'head', lowFace: true })
       expect((await measure(lowHead)).offsetMs).toBeNull()
+      // Rejeição sempre diz o que fazer, em português simples.
+      const headReason = (await measure(await clapMedia(ff, temporary, 'sem-maos', { kind: 'head', skin: true, fps: 30 }))).reason
+      expect(headReason).toContain('mãos')
+      expect(headReason).toContain('Tente de novo')
+      const slow = await measure(await clapMedia(ff, temporary, 'oito-qps', { skin: true, fps: 8, approach: .5 }))
+      expect(slow.offsetMs).toBeNull()
+      expect(slow.reason).toContain('devagar demais')
+      // Com o modelo de rosto do app e sem rosto na imagem a medição não chuta uma zona: pede o rosto à mostra.
+      const faceless = await measure(await clapMedia(ff, temporary, 'sem-rosto', { skin: true, fps: 30, approach: .25 }), { faceModel: join(base, 'lip-sync', 'yunet.onnx') })
+      expect(faceless.offsetMs).toBeNull()
+      expect(faceless.reason).toContain('rosto')
     } finally {
       await rm(temporary, { recursive: true, force: true })
     }

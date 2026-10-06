@@ -3,13 +3,16 @@ import { join } from 'node:path'
 import type { Ffmpeg } from '../../src/main/ffmpeg'
 
 /** Gabarito físico: duas regiões convergem, tocam e recuam; nenhum dado pessoal. */
-export async function clapMedia(ff: Ffmpeg, folder: string, name: string, options: { offset?: number; videoStart?: number; audioStart?: number; webm?: boolean; fps?: number; lowFace?: boolean; kind?: 'hands' | 'head' | 'flash' | 'silent' | 'double' }) {
+export async function clapMedia(ff: Ffmpeg, folder: string, name: string, options: { offset?: number; videoStart?: number; audioStart?: number; webm?: boolean; fps?: number; lowFace?: boolean; skin?: boolean; approach?: number; kind?: 'hands' | 'head' | 'flash' | 'silent' | 'double' }) {
   const kind = options.kind ?? 'hands'
   const contact = 1 + (options.offset ?? 0) / 1000
   const fps = options.fps ?? 100
   const width = 160, height = 90, count = 5 * fps
   const raw = Buffer.alloc(width * height * 3 * count)
-  const rect = (frame: number, x: number, y: number, w: number, h: number, color = [220, 170, 140]) => {
+  // `skin`: quarto de parede e piso cor de pele, mão sobre pele (a máscara de cor da primeira versão enxergava 33% do quadro).
+  const handColour = options.skin ? [178, 140, 114] : [220, 170, 140]
+  if (options.skin) for (let at = 0; at < raw.length; at += 3) { raw[at] = 214; raw[at + 1] = 176; raw[at + 2] = 150 }
+  const rect = (frame: number, x: number, y: number, w: number, h: number, color = handColour) => {
     for (let row = y; row < y + h; row++) for (let col = x; col < x + w; col++) {
       const at = ((frame * height + row) * width + col) * 3
       raw[at] = color[0]!; raw[at + 1] = color[1]!; raw[at + 2] = color[2]!
@@ -22,7 +25,7 @@ export async function clapMedia(ff: Ffmpeg, folder: string, name: string, option
     if (kind === 'head') continue
     // Em 30 qps o contato físico dura um quadro, em vez de exigir coincidência subquadro.
     const distance = Math.max(0, Math.abs(time - contact) - (fps === 30 ? .5 / fps : 0))
-    const spread = Math.round(35 * Math.min(1, distance / .15))
+    const spread = Math.round(35 * Math.min(1, distance / (options.approach ?? .15)))
     rect(frame, 62 - spread, options.lowFace ? 69 : 47, 18, options.lowFace ? 16 : 25)
     rect(frame, 80 + spread, options.lowFace ? 69 : 47, 18, options.lowFace ? 16 : 25)
   }

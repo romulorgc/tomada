@@ -51,10 +51,11 @@ export function parseLipSyncResult(text: string): LipSyncResult {
 export function createLipSyncDetector(args: { toolsDir: string; scriptPath: string; ffmpeg: () => string | null; logger?: Logger }): LipSyncDetector {
   const python = join(args.toolsDir, 'python', 'Scripts', 'python.exe')
   const model = join(args.toolsDir, 'lip-sync', 'syncnet_v2.model')
-  const call = async (request: Record<string, unknown>, needsModel: boolean): Promise<string> => {
+  const faceModel = join(args.toolsDir, 'lip-sync', 'yunet.onnx')
+  const call = async (request: Record<string, unknown>, needsModel: boolean, needsFace = false): Promise<string> => {
     const ffmpeg = args.ffmpeg()
     if (!ffmpeg) throw new LipSyncRuntimeError('ffmpeg')
-    for (const file of [python, args.scriptPath, ...(needsModel ? [model, model.replace(/\.model$/, '.lip.onnx'), model.replace(/\.model$/, '.aud.onnx'), join(args.toolsDir, 'lip-sync', 'yunet.onnx')] : [])]) {
+    for (const file of [python, args.scriptPath, ...(needsModel ? [model, model.replace(/\.model$/, '.lip.onnx'), model.replace(/\.model$/, '.aud.onnx'), faceModel] : needsFace ? [faceModel] : [])]) {
       if (!isAbsolute(file)) throw new Error('Caminho interno inválido para o detector de sincronia.')
       await access(file).catch(() => { throw new LipSyncRuntimeError(file === python ? 'python' : file === args.scriptPath ? 'script' : 'modelo-local') })
     }
@@ -80,7 +81,7 @@ export function createLipSyncDetector(args: { toolsDir: string; scriptPath: stri
     async clap(video) {
       let raw: { offsetMs: number | null; confidence: number; reason?: string }
       try {
-        raw = z.object({ offsetMs: z.number().finite().min(-300).max(300).nullable(), confidence: z.number().finite(), reason: z.string().optional() }).parse(JSON.parse(await call({ mode: 'clap', video: assertFfmpegPath(video, 'vídeo da calibração') }, false)))
+        raw = z.object({ offsetMs: z.number().finite().min(-300).max(300).nullable(), confidence: z.number().finite(), reason: z.string().optional() }).parse(JSON.parse(await call({ mode: 'clap', video: assertFfmpegPath(video, 'vídeo da calibração'), faceModel }, false, true)))
       } catch (error) {
         args.logger?.warn('Calibração de sincronia indisponível: falha técnica local.', lipSyncFailureDiagnostic(error))
         throw new Error(failureReason(error))
