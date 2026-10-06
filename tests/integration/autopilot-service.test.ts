@@ -8,6 +8,8 @@ import type { ExportService } from '../../src/main/export-service'
 import type { TranscriptionService } from '../../src/main/transcription/service'
 import type { LlmManager } from '../../src/main/llm/manager'
 import { createMemoryLogger } from '../../src/main/logger'
+import { createMockProvider } from '../../src/main/llm/mock'
+import type { LlmProvider } from '../../src/main/llm/provider'
 import { DEFAULT_AUTOPILOT, newPipeline } from '../../src/shared/autopilot'
 import { MANIFEST_PATH, type RecordingManifest } from '../../src/main/manifest'
 import { createProject } from '../../src/shared/project'
@@ -37,7 +39,7 @@ function addClip(doc: Project): void {
   doc.clips = [{ id: 'clip-1', title: 'Agenda', hook: 'Organize agora', ranges: [{ start: 0, end: 20_000 }], score: 80, reason: 'Demonstração sintética', format: 'vertical', layoutV: 'auto', source: 'manual' }]
 }
 
-async function world(initial: Project, options: { gate?: Promise<void>; transcript?: Transcript; camera?: ReturnType<typeof makeCamera> } = {}) {
+async function world(initial: Project, options: { gate?: Promise<void>; transcript?: Transcript; camera?: ReturnType<typeof makeCamera>; provider?: LlmProvider | null } = {}) {
   const dir = tmp()
   await Promise.all(['media', 'events', 'exports'].map((folder) => mkdir(join(dir, folder), { recursive: true })))
   let stored = structuredClone(initial)
@@ -70,7 +72,7 @@ async function world(initial: Project, options: { gate?: Promise<void>; transcri
     exporter: exporter as unknown as ExportService,
     transcription: transcription as unknown as TranscriptionService,
     derived: { levels: async () => null, peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, idle: async () => undefined, shutdown: () => undefined },
-    llm: { provider: () => null } as unknown as LlmManager,
+    llm: { provider: () => options.provider ?? null } as unknown as LlmManager,
     ...(options.camera ? { camera: options.camera as unknown as NonNullable<Parameters<typeof createAutopilot>[0]['camera']> } : {}),
     logger: createMemoryLogger(), prefs: () => prefs, emit: vi.fn(), ready
   })
@@ -78,6 +80,61 @@ async function world(initial: Project, options: { gate?: Promise<void>; transcri
 }
 
 describe('integração dos ajustes e da retomada do piloto automático', () => {
+  it('sem título da IA, publicação usa o título que o usuário já deu', async () => {
+    const doc = baseProject()
+    doc.title = 'Título escolhido pelo usuário'
+    const w = await world(doc)
+    w.prefs.mode = 'prepare'
+    for (const key of Object.keys(w.prefs.steps) as (keyof typeof w.prefs.steps)[]) w.prefs.steps[key] = key === 'publish'
+    await w.service.start(id)
+    expect(w.project().meta?.youtube?.titles?.[0]).toBe('Título escolhido pelo usuário')
+    expect(w.project().title).toBe('Título escolhido pelo usuário')
+  })
+  it.each([['', 'Veja a agenda.'], ['Título do usuário', 'Título do usuário']])('fallback de publicação respeita título %s ou usa a transcrição', async (title, expected) => {
+    const doc = baseProject(); doc.title = title
+    const w = await world(doc)
+    w.prefs.mode = 'prepare'; w.prefs.steps = Object.fromEntries(['transcribe','clean','zooms','layouts','captions','youtube','clips','clipExports','notify'].map(k => [k, false]))
+    await w.service.start(id)
+    expect(w.project().title).toBe(expected)
+  })
+  it('título da publicação recebido da IA precede título provisório de projeto e roteiro', async () => {
+    const doc = baseProject()
+    doc.script = { title: 'Roteiro provisório', hook: 'Teste', topics: ['Um','Dois','Três'], closing: 'Fim' }
+    const w = await world(doc, { provider: createMockProvider() })
+    w.prefs.mode = 'prepare'; w.prefs.steps = Object.fromEntries(['transcribe','clean','zooms','layouts','captions','youtube','clips','clipExports','notify'].map(k => [k, false]))
+    await w.service.start(id)
+    expect(w.project().title).toBe('Título de teste')
+  })
+  it('desligar a etapa de zoom remove segmentos automáticos dos dois formatos e conserva os manuais', async () => {
+    const doc = baseProject()
+    const auto = {id:'auto',start:1000,end:3000,scale:1.4,focus:'auto' as const,origin:'auto' as const}
+    const manual = {...auto,id:'manual',start:6000,end:8000,origin:'manual' as const}
+    doc.zooms = [auto,manual]
+    doc.vertical = {...defaultVerticalEdit(),zoomPreset:'intense',zooms:[{...auto,id:'auto-v'},{...manual,id:'manual-v'}]}
+    const w = await world(doc)
+    w.prefs.mode = 'nothing'
+    w.prefs.steps.zooms = false
+    await w.service.start(id)
+    expect(w.project().zoomPreset).toBe('off')
+    expect(w.project().vertical?.zoomPreset).toBe('off')
+    expect(w.project().zooms).toEqual([manual])
+    expect(w.project().vertical?.zooms).toEqual([{...manual,id:'manual-v'}])
+  })
+  it('desfoque vindo do editor de um corte salva no comum sem copiar cortes do item e invalida arquivos anteriores', async () => {
+    const base = baseProject(); addClip(base)
+    base.review = {items:{youtube:{decision:'approved',origin:'manual',phase:'ready',exportPath:'exports/antigo.mp4'},'clip-1':{decision:'approved',origin:'manual',phase:'ready',exportPath:'exports/corte-antigo.mp4'}}}
+    const w = await world(base)
+    const opened = reviewDocument(base,'clip-1')
+    const regions = [{id:'b1',start:0,end:20000,rect:{x:.3,y:.3,w:.4,h:.2},mode:'blur' as const}]
+    await w.service.saveProject(id,{...opened,blurRegions:regions},opened)
+    expect(w.project().cuts).toEqual(base.cuts)
+    expect(w.project().title).toBe(base.title)
+    for (const item of ['youtube','clip-1']) {
+      expect(reviewDocument(w.project(),item).blurRegions).toEqual(regions)
+      expect(itemOf(w.project(),item).exportPath).toBeUndefined()
+      expect(itemOf(w.project(),item).error).toContain('proteção')
+    }
+  })
   it('tentar salvar de novo recupera o documento aberto se só o project.json sumiu',async () => {
     const base = baseProject()
     const w = await world(base)

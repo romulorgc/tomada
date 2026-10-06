@@ -18,6 +18,8 @@
     "fixtures": "node scripts/fixtures.mjs",
     "test:real": "npm run build && node scripts/limpo.mjs playwright test -c playwright.real.config.ts",
     "contact-sheet": "node scripts/contact-sheet.mjs",
+    "gerar:icone": "node scripts/fila-pesada.mjs node scripts/gerar-icone.mjs",
+    "criar:atalhos": "node scripts/criar-atalhos.mjs",
     "medir:codec": "node scripts/limpo.mjs electron scripts/medir-codec.cjs",
     "medir:cursor": "node scripts/limpo.mjs electron scripts/cursor-viabilidade.cjs",
     "preparar:transcricao": "vitest run -c vitest.medir.config.ts tests/medir/preparar.run.ts",

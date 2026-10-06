@@ -7,9 +7,9 @@
  * passo e o motivo, o BRUTO continua intacto em `raw/` e `runProcessing` pode ser chamado
  * de novo (passos já concluídos não se repetem). Sem Electron.
  */
-import { mkdir, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { ProcessSnapshot, ProcessStepId, ProcessStepState } from '@shared/ipc'
+import type { ProcessSnapshot, ProcessStepId, ProcessStepState, Settings } from '@shared/ipc'
 import { createProject, parseProject, serializeProject } from '@shared/project'
 import { buildEvents, toJsonLines, type BuiltEvents, type RawEvents } from '@shared/recording'
 import type { CaptureInfo, Project, Src } from '@shared/types'
@@ -21,6 +21,10 @@ import type { Logger } from './logger'
 import { writeManifest, type RecordingManifest } from './manifest'
 import { extractAudio, makeThumbnail, normalizeVideo } from './normalize'
 import { PROJECT_FILE, THUMB_PATH } from './projects'
+import { applyOwnerEditingDefaults, type OwnerEditingDefaults } from '@shared/settings-defaults'
+import { EVENT_FILES, eventsFromText } from '@shared/events'
+import { prepareEvents } from '@shared/scene'
+import { generateAutoZooms, zoomPresetFor } from '@shared/zoom'
 import { resolveProjectFile } from './project-files'
 
 /** Estado que sobrevive entre uma tentativa e a seguinte (mesma sessão do app). */
@@ -45,6 +49,7 @@ export type ProcessDeps = {
   stepDelayMs?: number
   lipSync?: LipSyncDetector
   calibrations?: () => readonly CameraCalibration[]
+  editingDefaults?: OwnerEditingDefaults & Pick<Settings, 'autopilot'>
 }
 
 export const STEP_ORDER: ProcessStepId[] = ['save', 'screen', 'camera', 'voice', 'system', 'thumb', 'project']
@@ -199,14 +204,26 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
     async project() {
       const saved = manifest.saved
       if (!saved) throw new Error('O passo de salvar eventos não terminou; não dá para montar o project.json.')
-      const project: Project = createProject({
+      const automaticZooms = deps.editingDefaults?.autopilot?.steps.zooms !== false
+      const editingDefaults = automaticZooms ? deps.editingDefaults ?? {} : { ...deps.editingDefaults, ownerZoomPreset: 'off' as const, ownerVerticalZoomPreset: 'off' as const }
+      const project: Project = applyOwnerEditingDefaults(createProject({
         id: manifest.sessionId,
         title: manifest.title,
         createdAt: manifest.createdAt,
         sources: ctx.sources,
         sync: saved.sync,
         capture: saved.capture
-      })
+      }), editingDefaults)
+      // Preset salvo é uma escolha de estilo, e não um sinal de que já houve geração.
+      // Gere uma vez no nascimento; apagar zooms à mão depois não os recria ao abrir.
+      if (automaticZooms && project.sources.screen && (editingDefaults.ownerZoomPreset || editingDefaults.ownerVerticalZoomPreset)) {
+        const texts = await Promise.all([EVENT_FILES.cursor, EVENT_FILES.clicks, EVENT_FILES.keys].map(async (rel) => readFile(await resolveProjectFile(dir, rel), 'utf8')))
+        const duration = project.sources.screen.durationMs
+        const data = prepareEvents(eventsFromText({cursor:texts[0],clicks:texts[1],keys:texts[2]}), duration)
+        const make = (kind: 'horizontal' | 'vertical', preset: Project['zoomPreset']) => !preset || preset === 'off' ? [] : generateAutoZooms({clicks:data.clicks,keys:data.keys,cursor:data.grid,duration,preset:zoomPresetFor(kind,preset)})
+        if (editingDefaults.ownerZoomPreset) project.zooms = make('horizontal', project.zoomPreset)
+        if (editingDefaults.ownerVerticalZoomPreset && project.vertical) project.vertical.zooms = make('vertical', project.vertical.zoomPreset)
+      }
       // Sem o cursor do sistema no vídeo, o editor precisa desenhar o sintético; com ele, só ripple/halo.
       project.style.cursor.mode = saved.capture.cursorHidden ? 'synthetic' : 'real'
       if (project.sources.camera && project.sources.voice) {
@@ -332,7 +349,7 @@ async function saveEvents(ctx: ProcessContext, deps: ProcessDeps): Promise<strin
     mainToRenderer: -clock.offsetMs,
     pauses: manifest.pauses
   })
-  if (!raw) addNote(ctx, deps, 'O rastreador do mouse não entregou eventos: o vídeo foi salvo sem cursor e cliques.')
+  if (!raw) addNote(ctx, deps, 'Os eventos de cursor, cliques e teclas não estavam disponíveis no bruto. O cursor capturado na imagem permanece; os efeitos e zooms por atividade podem faltar.')
   if (built.sizeMismatch) {
     logger.warn(
       `O quadro capturado (${screen.frame?.w}×${screen.frame?.h}) difere do retângulo do Win32 (${built.rectSource}) em ${built.sizeMismatch.dw}×${built.sizeMismatch.dh} px; a normalização usa o quadro real.`

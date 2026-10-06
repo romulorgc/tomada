@@ -47,7 +47,7 @@ function fakeVideo(file: string, frames: number): Buffer {
 
 type Which = 'exemplo' | 'longo'
 
-async function build(mutate?: (p: Project) => void, which: Which = 'exemplo') {
+async function build(mutate?: (p: Project) => void, which: Which = 'exemplo', beforeFinish?: (store: ReturnType<typeof createProjectStore>, id: string) => Promise<void>, beforeRead?: (store: ReturnType<typeof createProjectStore>, id: string, dir:string) => Promise<void>) {
   const base = tmp()
   const root = join(base, 'projetos')
   const id = which === 'longo' ? LONG_FOLDER : ID
@@ -72,7 +72,7 @@ async function build(mutate?: (p: Project) => void, which: Which = 'exemplo') {
   const exporter = createExportService({
     logger,
     outputDirs: createOutputDirs(),
-    read: (id) => store.read(id),
+    read: async (id) => {await beforeRead?.(store,id,dir);return store.read(id)},
     words: async () => parseTranscript(readFileSync(join(dir, 'transcript.json'), 'utf8')).words,
     ffmpeg: () => ff,
     openExporterWindow: (id) => {
@@ -83,6 +83,7 @@ async function build(mutate?: (p: Project) => void, which: Which = 'exemplo') {
           jobs.push(job)
           const frames = outputFrameCount(outputDuration(projectDurationMs(job.project), job.project.cuts), job.fps)
           await svc.write(id, 0, new Uint8Array(fakeVideo(join(base, `video-${id.slice(0, 6)}.mp4`), frames)))
+          await beforeFinish?.(store, job.projectId)
           svc.finish(id, { ok: true, frames, encoder: 'teste' })
         })()
       }, 20)
@@ -104,6 +105,46 @@ async function build(mutate?: (p: Project) => void, which: Which = 'exemplo') {
 }
 
 describe('exportar um corte vertical', () => {
+  it('proteção que muda entre criar a saída e anunciar pronto remove somente a saída nova', async () => {
+    let sawFinal = false
+    const w = await build(undefined,'exemplo',undefined,async (store,id,dir) => {
+      const folder = join(dir,'exports')
+      if (!existsSync(folder) || !readdirSync(folder).some(name => name.endsWith('.mp4'))) return
+      sawFinal = true
+      const {project} = await store.read(id)
+      project.blurRegions = [{id:'nova',start:0,end:23000,rect:{x:.2,y:.2,w:.4,h:.4},mode:'solid'}]
+      await store.write(id,project)
+    })
+    const done = await w.run(w.request())
+    expect(sawFinal).toBe(true)
+    expect(done).toMatchObject({phase:'error',message:expect.stringContaining('proteção')})
+    expect(done.outputPath).toBeUndefined()
+    expect(readdirSync(join(w.dir,'exports'))).toEqual([])
+  })
+  it('proteção nova invalida também o resultado manual já concluído sem apagar arquivos anteriores', async () => {
+    const w = await build()
+    const done = await w.run(w.request())
+    expect(done.phase).toBe('done')
+    expect(existsSync(done.outputPath!)).toBe(true)
+    w.exporter.protectionChanged(w.id)
+    expect(w.exporter.status(done.exportId)).toMatchObject({phase:'error',message:expect.stringContaining('proteção')})
+    expect(w.exporter.status(done.exportId)?.outputPath).toBeUndefined()
+    expect(w.exporter.status()?.textPath).toBeUndefined()
+    expect(existsSync(done.outputPath!)).toBe(true)
+  })
+  it.each(['horizontal','vertical'] as const)('proteção alterada durante a exportação %s impede criar um arquivo final da fotografia anterior', async (format) => {
+    const w = await build(p => {p.clips=[clipOf()]}, 'exemplo', async (store,id) => {
+      const {project} = await store.read(id)
+      project.blurRegions = [{id:'privacidade',start:0,end:23000,rect:{x:.2,y:.2,w:.4,h:.4},mode:'solid'}]
+      await store.write(id,project)
+    })
+    const done = await w.run(w.request(format === 'vertical' ? {clipId:'clip-1'} : {}))
+    expect(done.phase).toBe('error')
+    expect(done.message).toContain('proteção')
+    expect(done.outputPath).toBeUndefined()
+    const out = join(w.dir,'exports',...(format === 'vertical' ? ['cortes'] : []))
+    expect(readdirSync(out).filter(name => /\.(mp4|txt)$/.test(name))).toEqual([])
+  })
   it('sai em exports/cortes/<n> - <título>.mp4 (1080×1920, com áudio) e o .txt de legenda e hashtags ao lado', async () => {
     const { dir, jobs, request, run } = await build((p) => {
       p.clips = [clipOf()]

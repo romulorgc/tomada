@@ -1,14 +1,16 @@
 /** Conecta os serviços existentes numa fila persistente; nunca há duas exportações do piloto em paralelo. */
-import { constants } from 'node:fs'
-import { mkdir, readFile, copyFile, rm, stat, writeFile } from 'node:fs/promises'
-import { relative } from 'node:path'
+import { existsSync } from 'node:fs'
+import { mkdir, readFile, copyFile, rm, open, stat } from 'node:fs/promises'
+import { relative, join } from 'node:path'
 import { newPipeline, runPipeline, type AutopilotPrefs, type PipelineState, type PipelineStepId } from '@shared/autopilot'
 import { computeClean, DEFAULT_CLEAN } from '@shared/clean'
+import { protectionFingerprint, PROTECTION_CHANGED_MESSAGE } from '@shared/blur'
 import { planClean } from '@shared/clean-plan'
-import { heuristicClips, mergeSuggestedClips, titleFromText, limitHook, type ClipDraft } from '@shared/clips'
+import { heuristicClips, heuristicClipLabels, mergeSuggestedClips, titleFromText, type ClipDraft } from '@shared/clips'
 import { processCursor } from '@shared/cursor'
 import { eventsFromText, EVENT_FILES } from '@shared/events'
 import { sanitizeFileName } from '@shared/export'
+import { uniqueName } from '@shared/recording'
 import { projectDurationMs } from '@shared/project'
 import { buildClipText, buildYoutubeText, fallbackClipMeta, heuristicChapters, keywordsOf } from '@shared/publish'
 import { itemOf, updateReviewItem, reviewDocument, refreshReviewSnapshots, type ReviewItem } from '@shared/review'
@@ -32,6 +34,7 @@ import { MANIFEST_PATH, readManifest, writeManifest } from './manifest'
 import { resolveProjectFile, assertDocumentPaths } from './project-files'
 import { ProjectNotFoundError, type ProjectStore } from './projects'
 import type { TranscriptionService } from './transcription/service'
+import { applyOwnerEditingDefaults, type OwnerEditingDefaults } from '@shared/settings-defaults'
 
 export interface AutopilotService {
   start(id: string, startedAt?: number): Promise<void>
@@ -51,6 +54,7 @@ export type AutopilotDeps = {
   ownerBackground?(): Promise<string | undefined>
   /** O serviço da câmera (M4c): o piloto espera a análise do rosto e do recorte do fundo e escolhe o Apresentador quando o recorte já existe. */
   camera?: Pick<CameraService, 'idle' | 'result' | 'analyze' | 'view'>
+  ownerEditingDefaults?(): OwnerEditingDefaults
   emit(state: PipelineState): void; ready(id: string, clips: number,youtube?:boolean): void
 }
 /** Saída que o app gravou em exports/postar, com o que ele viu ao gravar (para provar depois que continua intacta). */
@@ -89,6 +93,9 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       const {project,dir} = detail
       const next = fn(project)
       await assertDocumentPaths(dir, next)
+      // Síncrono antes de escrever: a exportação não pode publicar a fotografia anterior
+      // enquanto a escrita atômica desta proteção ainda está em andamento.
+      if (protectionFingerprint(project) !== protectionFingerprint(next)) deps.exporter.protectionChanged?.(id)
       await deps.store.write(id, next)
       return next
     })
@@ -131,6 +138,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       // O enquadramento do rosto e o recorte do fundo (M4c) entram no vídeo: a exportação só começa com a análise pronta.
       await deps.camera?.idle()
       await deps.exporter.idle()
+      const protection = protectionFingerprint((await deps.store.read(id)).project)
       const { exportId } = await deps.exporter.start({ projectId: id, format: itemId === 'youtube' ? 'horizontal' : 'vertical', resolution: '1080p', fps: 30, ...(itemId === 'youtube' ? {} : { clipId: itemId }) })
       await deps.exporter.idle()
       const done = deps.exporter.status(exportId)
@@ -140,10 +148,13 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       await resolveProjectFile(dir, path)
       const textPath = done.textPath ? relative(dir, done.textPath).replaceAll('\\', '/') : undefined
       if (textPath) await resolveProjectFile(dir, textPath)
-      await change(id, (p) => settle(p, { phase: 'ready', exportPath: path, textPath }))
+      await change(id, (p) => {
+        if (protectionFingerprint(p) !== protection) throw new Error(PROTECTION_CHANGED_MESSAGE)
+        return settle(p, { phase: 'ready', exportPath: path, textPath })
+      })
       if (done.message) throw new Error(done.message)
     } catch (err) {
-      await change(id, (p) => settle(p, { phase: 'error', error: err instanceof Error ? err.message : String(err) }))
+      await change(id, (p) => settle(p, { phase: 'error', exportPath: undefined, textPath: undefined, error: err instanceof Error ? err.message : String(err) }))
       throw err
     }
   }
@@ -189,10 +200,10 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         const e = await events(dir, duration)
         await regenerate(id, (p) => {
           const v = p.vertical ?? defaultVerticalEdit()
-          const make = (kind: 'horizontal' | 'vertical', current: Project['zooms'], off: boolean, excluded?:string[]) => [...current.filter((z) => z.origin === 'manual'), ...(off ? [] : generateAutoZooms({ clicks: e.clicks, keys: e.keys, cursor: e.grid, duration, preset: zoomPresetFor(kind, 'moderate') }).filter((z) => !excluded?.includes(z.id) && !current.some((m) => m.origin === 'manual' && m.start < z.end && m.end > z.start)))]
-          return { ...p, zoomPreset: p.zoomPreset === 'off' ? 'off' : 'moderate', zooms: make('horizontal', p.zooms, p.zoomPreset === 'off',p.autoExclusions?.zooms), vertical: { ...v, zoomPreset: v.zoomPreset === 'off' ? 'off' : 'moderate', zooms: make('vertical', v.zooms, v.zoomPreset === 'off',v.autoExclusions?.zooms) } }
+          const make = (kind: 'horizontal' | 'vertical', current: Project['zooms'], preset: Project['zoomPreset'], excluded?:string[]) => [...current.filter((z) => z.origin === 'manual'), ...(preset === 'off' ? [] : generateAutoZooms({ clicks: e.clicks, keys: e.keys, cursor: e.grid, duration, preset: zoomPresetFor(kind, preset ?? 'moderate') }).filter((z) => !excluded?.includes(z.id) && !current.some((m) => m.origin === 'manual' && m.start < z.end && m.end > z.start)))]
+          return { ...p, zooms: make('horizontal', p.zooms, p.zoomPreset,p.autoExclusions?.zooms), vertical: { ...v, zooms: make('vertical', v.zooms, v.zoomPreset,v.autoExclusions?.zooms) } }
         })
-        return 'Zooms moderados; ajustes manuais preservados.'
+        return 'Zooms conforme os padrões de cada formato; ajustes manuais preservados.'
       }
       case 'layouts': {
         const t = await deps.transcription.getTranscript(id)
@@ -239,7 +250,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         // Gravações menores que a faixa de 25-65 s também têm uma versão vertical completa para revisar.
         if (drafts.length === 0 && duration < 25000 && t.words.length > 0 && outputDuration(duration, project.cuts) > 1000) {
           const text = t.words.filter((w) => !project.cuts.some((c) => c.enabled && w.start >= c.start && w.end <= c.end)).map((w) => w.text).join(' ')
-          drafts = [{ title: titleFromText(text), hook: limitHook(text), ranges: [{ start: 0, end: duration }], score: 70, notes: { hook: 70, flow: 70, value: 70 }, reason: 'Versão vertical completa da gravação curta; nota heurística, confira o conteúdo.', source: 'heuristic' }]
+          drafts = [{ ...heuristicClipLabels(text), ranges: [{ start: 0, end: duration }], score: 70, notes: { hook: 70, flow: 70, value: 70 }, reason: 'Versão vertical completa da gravação curta; nota heurística, confira o conteúdo.', source: 'heuristic' }]
           notice += 'Gravação curta: versão vertical completa, abaixo da faixa habitual de cortes. '
         }
         const chosen = drafts.filter((c) => c.score >= prefs.minScore).sort((a,b) => b.score-a.score).slice(0, prefs.maxClips)
@@ -270,8 +281,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           catch (err) { notice = `Textos pela IA falharam: ${err instanceof Error ? err.message : String(err)}. ` }
         } else notice = 'Sem IA: textos e capítulos gerados pela transcrição; confira antes de postar. '
         const body = t.words.filter((w) => !project.cuts.some((c) => c.enabled && c.start <= w.start && c.end >= w.end)).map((w) => w.text).join(' ')
-        if (!meta) meta = { youtube: { titles: [project.script?.title || titleFromText(body) || project.title], description: body.slice(0, 1200), tags: keywordsOf(body, 12), chapters: heuristicChapters(t.words, duration, project.cuts).chapters }, perClip: Object.fromEntries(project.clips.map((c) => [c.id, fallbackClipMeta(c,t.words)])) }
-        const updated = await change(id, (p) => p.review?.metaOrigin === 'manual' ? p : { ...p, title: p.review?.titleOrigin === 'manual' ? p.title : p.script?.title || meta?.youtube?.titles?.[0] || p.title, meta: { ...p.meta, ...meta, perClip: { ...p.meta?.perClip, ...meta?.perClip } }, review: { ...p.review, items: p.review?.items ?? {}, metaOrigin: 'auto' } })
+        if (!meta) meta = { youtube: { titles: [project.title.trim() || titleFromText(body)], description: body.slice(0, 1200), tags: keywordsOf(body, 12), chapters: heuristicChapters(t.words, duration, project.cuts).chapters }, perClip: Object.fromEntries(project.clips.map((c) => [c.id, fallbackClipMeta(c,t.words)])) }
+        const updated = await change(id, (p) => p.review?.metaOrigin === 'manual' ? p : { ...p, title: p.review?.titleOrigin === 'manual' ? p.title : meta?.youtube?.titles?.[0] || p.title.trim() || titleFromText(body), meta: { ...p.meta, ...meta, perClip: { ...p.meta?.perClip, ...meta?.perClip } }, review: { ...p.review, items: p.review?.items ?? {}, metaOrigin: 'auto' } })
         for (const [itemId,item] of Object.entries(updated.review?.items ?? {})) {
           if (!item.textPath) continue
           const file = await resolveProjectFile(dir,item.textPath)
@@ -330,9 +341,10 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     },
     saveProject: (id,doc,base) => change(id,(current) => {
       const merged = base ? mergeEditorProject(base,doc,current) : doc
+      const protectionChanged = protectionFingerprint(current) !== protectionFingerprint(merged)
       const items = Object.fromEntries(Object.entries({...current.review?.items,...merged.review?.items}).map(([itemId,item]) => {
         const fresh = current.review?.items[itemId]
-        return [itemId,{...item,...(fresh ? {phase:fresh.phase,exportPath:fresh.exportPath,textPath:fresh.textPath,error:fresh.error,revision:fresh.revision} : {})}]
+        return [itemId,{...item,...(fresh ? {phase:fresh.phase,exportPath:fresh.exportPath,textPath:fresh.textPath,error:fresh.error,revision:fresh.revision} : {}), ...(protectionChanged && (fresh?.exportPath || item.exportPath || fresh?.phase === 'exporting' || item.phase === 'exporting') ? {phase:'error' as const, exportPath:undefined,textPath:undefined,error:PROTECTION_CHANGED_MESSAGE} : {})}]
       }))
       return {...merged,autopilot:current.autopilot,review:{...current.review,...merged.review,items}}
     },base ?? doc),
@@ -348,7 +360,19 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           if (source) style = {...style,background:{type:'image',path:await deps.store.importBackground(id,source)}}
           else style = {...style,background:before.style.background}
         }
-        await change(id, (p) => p.autopilot ? p : ({ ...p, ...(prefs.mode === 'nothing' ? {} : {autopilot:newPipeline(id,startedAt)}), style: { ...(style ?? p.style),cursor:{...(style?.cursor ?? p.style.cursor),mode:p.style.cursor.mode} }, captions:{...p.captions,enabled:prefs.steps.captions === false ? false : prefs.captionsHorizontal}, vertical:{...(p.vertical ?? defaultVerticalEdit()),captions:{...p.vertical?.captions,enabled:prefs.steps.captions === false ? false : prefs.captionsVertical},...(prefs.steps.zooms === false ? {zoomPreset:'off'} : {})},...(prefs.steps.zooms === false ? {zoomPreset:'off'} : {}) }))
+        await change(id, (current) => {
+          if (current.autopilot) return current
+          const p = applyOwnerEditingDefaults(current, deps.ownerEditingDefaults?.() ?? {})
+          const v = p.vertical ?? defaultVerticalEdit()
+          const zoomsOff = prefs.steps.zooms === false
+          return {
+            ...p, ...(prefs.mode === 'nothing' ? {} : {autopilot:newPipeline(id,startedAt)}),
+            style: { ...(style ?? p.style),cursor:{...(style?.cursor ?? p.style.cursor),mode:p.style.cursor.mode} },
+            captions:{...p.captions,enabled:prefs.steps.captions === false ? false : prefs.captionsHorizontal},
+            vertical:{...v,captions:{...v.captions,enabled:prefs.steps.captions === false ? false : prefs.captionsVertical},...(zoomsOff ? {zoomPreset:'off' as const,zooms:v.zooms.filter(z => z.origin !== 'auto')} : {})},
+            ...(zoomsOff ? {zoomPreset:'off' as const,zooms:p.zooms.filter(z => z.origin !== 'auto')} : {})
+          }
+        })
         await settleIntent(id)
         if (prefs.mode === 'nothing') return
         // Apresentador: o recorte do fundo começa logo depois da gravação, na fila da câmera, atrás da análise do rosto.
@@ -392,56 +416,81 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     },
     async reexport(id,itemId) { await enqueue(() => exportItem(id,itemId)) },
     async postingFolder(id) {
-      await queue
-      const { project, dir } = await deps.store.read(id)
-      const folder = await resolveProjectFile(dir,'exports/postar')
-      await mkdir(folder,{ recursive: true })
-      const manifest = await resolveProjectFile(dir,'exports/postar/arquivos.json')
-      // Só some o que o app comprovadamente gerou (está no manifesto) e continua como ele gravou (tamanho e data).
-      // O que o usuário criou ou editou na pasta nunca é apagado nem coberto.
-      for (const entry of await readPostedManifest(manifest)) {
-        if (!entry.path.startsWith('exports/postar/') || entry.size === undefined || entry.mtimeMs === undefined) continue
+      return enqueue(async () => {
+        await writes
+        const { project, dir } = await deps.store.read(id)
+        const protection = protectionFingerprint(project)
+        const ensureProtection = (): Promise<void> => {
+          const check = writes.then(async () => {
+            if (protectionFingerprint((await deps.store.read(id)).project) !== protection) throw new Error(PROTECTION_CHANGED_MESSAGE)
+          })
+          writes = check.catch(() => undefined)
+          return check
+        }
+        const folder = await resolveProjectFile(dir,'exports/postar')
+        await mkdir(folder,{ recursive: true })
+        const manifest = await resolveProjectFile(dir,'exports/postar/arquivos.json')
+        // Só some o que o app comprovadamente gerou (está no manifesto) e continua como ele gravou (tamanho e data).
+        // O que o usuário criou ou editou na pasta nunca é apagado nem coberto.
+        for (const entry of await readPostedManifest(manifest)) {
+          if (!entry.path.startsWith('exports/postar/') || entry.size === undefined || entry.mtimeMs === undefined) continue
+          try {
+            const file = await resolveProjectFile(dir,entry.path)
+            const now = await stat(file)
+            if (now.isFile() && now.size === entry.size && Math.abs(now.mtimeMs - entry.mtimeMs) < 2) await rm(file,{ force: true })
+          } catch { /* sumiu ou não resolve: nada a apagar */ }
+        }
+        const created: PostedFile[] = []
+        const reserved: string[] = []
+        let manifestWritten = false
+        // Reserva somente nomes novos (criação exclusiva, "nome (2)"). A limpeza de uma tentativa invalidada nunca
+        // remove um arquivo manual que já estava na pasta.
+        const reserve = async (stem:string,extension:string):Promise<{rel:string;path:string}> => {
+          for (let attempt=0;attempt<100;attempt++) {
+            const name = uniqueName(stem,n => existsSync(join(folder,`${n}.${extension}`)))
+            const rel = `exports/postar/${name}.${extension}`
+            const path = await resolveProjectFile(dir,rel)
+            let handle
+            try {handle = await open(path,'wx')}
+            catch(error) {if((error as NodeJS.ErrnoException).code === 'EEXIST') continue;throw error}
+            reserved.push(rel)
+            await handle.close()
+            return {rel,path}
+          }
+          throw new Error('Não achei nome livre na pasta para postar.')
+        }
+        const record = async (rel:string,path:string):Promise<void> => { const made = await stat(path); created.push({ path: rel, size: made.size, mtimeMs: made.mtimeMs }) }
         try {
-          const file = await resolveProjectFile(dir,entry.path)
-          const now = await stat(file)
-          if (now.isFile() && now.size === entry.size && Math.abs(now.mtimeMs - entry.mtimeMs) < 2) await rm(file,{ force: true })
-        } catch { /* sumiu ou não resolve: nada a apagar */ }
-      }
-      const created: PostedFile[] = []
-      // Criação exclusiva com nome livre ("nome (2)"): nunca sobrescreve um arquivo que já exista.
-      const place = async (stem: string, ext: string, write: (target: string) => Promise<void>): Promise<void> => {
-        for (let n = 1; n < 1000; n++) {
-          const rel = `exports/postar/${stem}${n === 1 ? '' : ` (${n})`}${ext}`
-          const target = await resolveProjectFile(dir,rel)
-          try { await write(target) } catch (err) { if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue; throw err }
-          const made = await stat(target)
-          created.push({ path: rel, size: made.size, mtimeMs: made.mtimeMs })
-          return
+          const texts: Record<string,string[]> = { YouTube: [], TikTok: [], Reels: [], Shorts: [] }
+          for (const [itemId,item] of Object.entries(project.review?.items ?? {})) {
+            if (item.decision !== 'approved' || item.phase !== 'ready' || !item.exportPath) continue
+            await ensureProtection()
+            const c = project.clips.find((c) => c.id === itemId)
+            const stem = `${sanitizeFileName(itemId)} - ${sanitizeFileName(item.title ?? c?.title ?? project.title)}`
+            const output = await reserve(stem,'mp4')
+            await copyFile(await resolveProjectFile(dir,item.exportPath),output.path)
+            await record(output.rel,output.path)
+            await ensureProtection()
+            if (itemId === 'youtube') {
+              const t = await transcript(id)
+              texts.YouTube!.push(textOf(project,itemId,t.words))
+            } else if (c) {
+              const meta = reviewDocument(project,itemId).meta?.perClip?.[itemId] ?? fallbackClipMeta(c,null)
+              for (const [platform,key] of [['TikTok','tiktok'],['Reels','reels'],['Shorts','shorts']] as const) texts[platform]!.push(item.text ?? `${item.title ?? c.title}\n${meta.caption ?? c.hook}\n${meta[key]?.join(' ') ?? ''}`)
+            }
+          }
+          for (const [platform,blocks] of Object.entries(texts)) if (blocks.length) { const output = await reserve(platform,'txt'); await writeFileAtomic(output.path,blocks.join('\n\n')); await record(output.rel,output.path) }
+          await ensureProtection()
+          await writeFileAtomic(manifest,JSON.stringify(created))
+          manifestWritten = true
+          await ensureProtection()
+          return folder
+        } catch(error) {
+          for (const rel of reserved) await rm(await resolveProjectFile(dir,rel),{force:true}).catch(() => undefined)
+          if(manifestWritten) await rm(manifest,{force:true}).catch(() => undefined)
+          throw error
         }
-        throw new Error(`Não achei nome livre para ${stem}${ext} em exports/postar.`)
-      }
-      const texts: Record<string,string[]> = { YouTube: [], TikTok: [], Reels: [], Shorts: [] }
-      try {
-      for (const [itemId,item] of Object.entries(project.review?.items ?? {})) {
-        if (item.decision !== 'approved' || item.phase !== 'ready' || !item.exportPath) continue
-        const c = project.clips.find((c) => c.id === itemId)
-        const stem = `${sanitizeFileName(itemId)} - ${sanitizeFileName(item.title ?? c?.title ?? project.title)}`
-        const source = await resolveProjectFile(dir,item.exportPath)
-        await place(stem,'.mp4',(target) => copyFile(source,target,constants.COPYFILE_EXCL))
-        if (itemId === 'youtube') {
-          const t = await transcript(id)
-          texts.YouTube!.push(textOf(project,itemId,t.words))
-        } else if (c) {
-          const meta = reviewDocument(project,itemId).meta?.perClip?.[itemId] ?? fallbackClipMeta(c,null)
-          for (const [platform,key] of [['TikTok','tiktok'],['Reels','reels'],['Shorts','shorts']] as const) texts[platform]!.push(item.text ?? `${item.title ?? c.title}\n${meta.caption ?? c.hook}\n${meta[key]?.join(' ') ?? ''}`)
-        }
-      }
-      for (const [platform,blocks] of Object.entries(texts)) if (blocks.length) await place(platform,'.txt',(target) => writeFile(target,blocks.join('\n\n'),{ flag: 'wx' }))
-      } finally {
-        // Mesmo se algo falhar no meio, o manifesto lista o que já foi criado (senão ficaria órfão e nunca mais seria refeito).
-        await writeFileAtomic(manifest,JSON.stringify(created))
-      }
-      return folder
+      })
     },
     async resume() {
       for (const entry of await deps.store.list()) {

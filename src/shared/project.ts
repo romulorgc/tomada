@@ -95,6 +95,15 @@ const muteSchema = z.looseObject({
   enabled: z.boolean()
 })
 
+const blurRegionSchema = z.looseObject({
+  id: z.string().min(1).max(100),
+  start: z.number().finite().min(0),
+  end: z.number().finite().min(0),
+  rect: z.looseObject({ x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1), w: z.number().finite().gt(0).max(1), h: z.number().finite().gt(0).max(1) })
+    .refine(r => r.x + r.w <= 1.000000001 && r.y + r.h <= 1.000000001),
+  mode: z.enum(['blur', 'pixelate', 'solid']).default('blur')
+}).refine(r => r.end > r.start)
+
 const zoomSchema = z.looseObject({
   id: z.string(),
   start: z.number(),
@@ -216,7 +225,9 @@ const verticalSchema = z.looseObject({
       size: z.number().optional(),
       positionY: z.number().optional(),
       uppercase: z.boolean().optional(),
-      highlightWord: z.boolean().optional()
+      highlightWord: z.boolean().optional(),
+      highlightColor: z.string().optional(),
+      textColor: z.string().optional()
     })
     .optional()
 })
@@ -288,6 +299,7 @@ export const projectSchema = z.looseObject({
     .prefault({}),
   capture: captureSchema.default(defaultCapture()),
   cuts: z.array(cutSchema).default([]),
+  blurRegions: z.array(blurRegionSchema).max(1000).optional(),
   mutes: z.array(muteSchema).optional(),
   zooms: z.array(zoomSchema).default([]),
   layouts: z.array(layoutSegSchema).default([]),

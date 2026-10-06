@@ -133,13 +133,18 @@ export function createClipQueue(deps: QueueDeps): ClipQueue {
         try {
           await deps.flush()
         } catch (err) {
-          for (const id of ids) patch(id, { state: 'error', fraction: 0, message: `Não consegui salvar o projeto antes de exportar: ${messageOf(err)}` })
+          for (const id of ids) patch(id, { state: 'error', fraction: 0, message: `Não consegui salvar o projeto; nada foi exportado. ${messageOf(err)}` })
           return
         }
         for (const id of ids) {
           if (get().cancelling) {
             patch(id, { state: 'cancelled', fraction: 0, message: 'Cancelado antes de começar.' })
             continue
+          }
+          try { await deps.flush() }
+          catch (err) {
+            for (const pending of ids.slice(ids.indexOf(id))) patch(pending, { state: 'error', fraction: 0, message: `Não consegui salvar o projeto; nada foi exportado deste item. ${messageOf(err)}` })
+            return
           }
           patch(id, { state: 'running', fraction: 0 })
           try {

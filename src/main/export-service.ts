@@ -14,6 +14,7 @@
  * Sem Electron: a janela entra por interface, então roda em teste com uma janela falsa.
  */
 import { randomUUID } from 'node:crypto'
+import { protectionFingerprint, PROTECTION_CHANGED_MESSAGE } from '@shared/blur'
 import { reviewDocument } from '@shared/review'
 import { itemOf } from '@shared/review'
 import type { FileHandle } from 'node:fs/promises'
@@ -38,6 +39,7 @@ import { mediaUrl } from '@shared/media-url'
 import { projectDurationMs } from '@shared/project'
 import { buildClipText, buildYoutubeText, fallbackClipMeta, heuristicChapters, resolveClipMeta } from '@shared/publish'
 import { uniqueName } from '@shared/recording'
+import { estimateExportBytes, type DiskEstimate } from '@shared/disk'
 import { keptRanges, outputDuration } from '@shared/timeline'
 import { projectForFormat } from '@shared/vertical'
 import type { Clip, Project, Word } from '@shared/types'
@@ -51,6 +53,7 @@ import {
   parseLoudnormMeasure
 } from './audio-graph'
 import type { Ffmpeg } from './ffmpeg'
+import { checkDiskSpace, diskWarning } from './disk-space'
 import { pathExists } from './fs-utils'
 import type { Logger } from './logger'
 import type { OutputDirs } from './path-guard'
@@ -93,7 +96,10 @@ export type ExportServiceDeps = {
 
 export interface ExportService {
   start(request: ExportRequest): Promise<{ exportId: string }>
+  diskSpace(request: ExportRequest): Promise<DiskEstimate>
   cancel(exportId: string): Promise<void>
+  /** A proteção comum mudou; invalida resultados e interrompe a fotografia antiga sem aguardar a fila de escrita. */
+  protectionChanged(projectId: string): void
   status(exportId?: string): ExportProgress | null
   /** Canais da janela escondida. */
   job(exportId: string): ExportJob
@@ -125,6 +131,11 @@ type Run = {
   startedAt: number
   abort: AbortController
   cancelled: boolean
+  protection: string
+  protectionVersion: number
+  protectionInvalidated: boolean
+  placedFinal: boolean
+  placedText: string | null
   win: ExporterWindow | null
   /** Pasta onde o arquivo final (e o temporário, ao lado dele) é gravado. */
   outDir: string
@@ -203,10 +214,23 @@ async function outputKey(path: string): Promise<string> {
 export function createExportService(deps: ExportServiceDeps): ExportService {
   const { logger } = deps
   let current: Run | null = null
+  let preparing = false
+  let preparingDone: Promise<void> | null = null
+  // A notificação pode chegar enquanto start ainda aguarda caminhos/palavras,
+  // antes de existir current e antes da escrita atômica do documento terminar.
+  const protectionVersions = new Map<string,number>()
   let last: ExportProgress | null = null
   const history = new Map<string,ExportProgress>()
   /** Saídas de exportações concluídas nesta sessão (chave de `outputKey`). */
   const outputs = new Set<string>()
+
+  async function assertProtection(run: Run): Promise<void> {
+    const latest = await deps.read(run.req.projectId)
+    if (run.protectionInvalidated || (protectionVersions.get(run.req.projectId) ?? 0) !== run.protectionVersion || protectionFingerprint(latest.project) !== run.protection) {
+      run.protectionInvalidated = true
+      throw new ExportError(PROTECTION_CHANGED_MESSAGE)
+    }
+  }
 
   /** Escolhe um nome livre e move o parcial para ele; o nome tomado no meio do caminho só faz tentar o próximo. */
   async function placeFinal(run: Run): Promise<string> {
@@ -257,7 +281,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         const text = item.text ?? buildClipText({ ...run.clip,title:item.title ?? run.clip.title,hook:item.hook ?? run.clip.hook }, resolveClipMeta(meta, fallbackClipMeta(run.clip, run.words)))
         const stem = basename(run.finalPath).replace(/\.mp4$/i, '')
         const path = await writeTextBeside(run.outDir, stem, text)
-        outputs.add(await outputKey(path))
+        run.placedText = path
         return { textPath: path }
       }
       if (run.req.format === 'vertical') return {}
@@ -283,7 +307,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         ...(why ? { chaptersWhy: why } : {})
       })
       const path = await writeTextBeside(run.outDir, `${sanitizeFileName(run.stored.title)} - YouTube`, text)
-      outputs.add(await outputKey(path))
+      run.placedText = path
       return { textPath: path }
     } catch (err) {
       logger.error(`Exportação ${run.id}: o vídeo ficou pronto, mas não consegui gravar o texto que o acompanha`, err)
@@ -378,6 +402,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       const exportsDir = run.outDir
       await mkdir(run.tmpDir, { recursive: true })
       run.handle = await open(run.videoPath, 'w+')
+      await assertProtection(run)
 
       const label = run.req.format === 'vertical' ? `vertical 1080×1920 ${run.req.fps}` : `${EXPORT_RESOLUTION_LABEL[run.req.resolution]}${run.req.fps}`
       logger.info(`Exportação ${run.id} (${label}) do projeto ${run.req.projectId}: ${run.progress.totalFrames} quadros.`)
@@ -397,9 +422,14 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
           run.win?.destroy()
           throw err
         })
-      const [videoResult] = await Promise.all([guard(renderVideo(run)), guard(renderAudio(run, ff))])
+      // O renderer comunica falhas como resultado; transforme em rejeição imediatamente,
+      // para interromper também o áudio (uma hora de loudnorm não pode esconder o erro).
+      const video = renderVideo(run).then(result => {
+        if (!result.ok) throw new ExportError(result.message)
+        return result
+      })
+      const [videoResult] = await Promise.all([guard(video), guard(renderAudio(run, ff))])
       if (run.cancelled) throw new CancelledError('cancelada')
-      if (!videoResult.ok) throw new ExportError(videoResult.message)
       run.renderEndedAt = deps.now()
       run.win?.destroy()
       run.win = null
@@ -418,17 +448,35 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       // conferência
       setPhase(run, 'checking')
       const report = await checkOutput(ff, run, videoResult.frames)
+      await assertProtection(run)
       run.finalPath = await placeFinal(run)
+      run.placedFinal = true
+      await assertProtection(run)
       report.outputPath = run.finalPath
-      outputs.add(await outputKey(run.finalPath))
-      logger.info(`Exportação ${run.id} pronta: ${run.finalPath} (${report.renderFps.toFixed(1)} qps, áudio×vídeo ${report.audioVideoDiffMs} ms).`)
       run.videoFraction = 1
       // o texto que acompanha o vídeo: legenda e hashtags do corte, ou títulos, descrição e capítulos do YouTube.
       // Falhar aqui NÃO joga fora o vídeo (já está pronto), mas também não cala: o aviso vai no resultado.
       const text = await writeCompanionText(run)
+      await assertProtection(run)
+      const finalKey = await outputKey(run.finalPath)
+      const textKey = run.placedText ? await outputKey(run.placedText) : null
+      if (run.protectionInvalidated) throw new ExportError(PROTECTION_CHANGED_MESSAGE)
+      outputs.add(finalKey)
+      if (textKey) outputs.add(textKey)
+      logger.info(`Exportação ${run.id} pronta: ${run.finalPath} (${report.renderFps.toFixed(1)} qps, áudio×vídeo ${report.audioVideoDiffMs} ms).`)
       setPhase(run, 'done', { outputPath: run.finalPath, report, etaMs: 0, frame: run.progress.totalFrames, ...text })
     } catch (err) {
-      if (run.cancelled || err instanceof CancelledError) {
+      if (run.protectionInvalidated) {
+        // Só arquivos novos criados por ESTA execução; placeFinal/writeTextBeside jamais sobrescrevem.
+        const remaining: string[] = []
+        for (const file of [run.placedFinal ? run.finalPath : null, run.placedText]) {
+          if (!file) continue
+          try { await rm(file, { force: true }) }
+          catch (removeError) { logger.warn(`Não consegui apagar a saída invalidada ${file}.`, removeError); remaining.push(`Apague ${file}; ele saiu sem a proteção nova.`) }
+        }
+        logger.warn(`Exportação ${run.id} invalidada porque a proteção de dados mudou.`)
+        setPhase(run, 'error', { message: [PROTECTION_CHANGED_MESSAGE, ...remaining].join(' '), outputPath: undefined, textPath: undefined, report: undefined })
+      } else if (run.cancelled || err instanceof CancelledError) {
         logger.info(`Exportação ${run.id} cancelada.`)
         setPhase(run, 'cancelled', { message: 'Exportação cancelada.' })
       } else {
@@ -534,141 +582,189 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
   }
 
   return {
+    async diskSpace(asked) {
+      const { project: stored, dir } = await deps.read(asked.projectId)
+      if (asked.clipId && !stored.clips.some((clip) => clip.id === asked.clipId)) throw new ExportError('Esse corte não existe mais neste projeto.')
+      const request = asked.clipId ? { ...asked, format: 'vertical' as const } : asked
+      const project = asked.clipId ? reviewDocument(stored, asked.clipId) : (request.format ?? 'horizontal') === 'horizontal' ? reviewDocument(stored, 'youtube') : stored
+      await assertDocumentPaths(dir, project)
+      const durationMs = outputDuration(projectDurationMs(project), project.cuts)
+      const outDir = await chooseOutputDir(dir, request.dir, asked.clipId ? 'cortes' : undefined)
+      return checkDiskSpace(outDir, estimateExportBytes(durationMs, exportBitrate(request.resolution, request.fps, request.format), request.format === 'vertical' ? 192_000 : 384_000), durationMs, 'O vídeo e o arquivo final coexistem durante a exportação. A estimativa inclui áudio e 20% de folga.')
+    },
     async start(asked) {
+      if (preparing) throw new ExportError('Já há uma exportação em andamento. Espere terminar ou cancele.')
       // A que acabou de mostrar o resultado ainda está apagando a pasta temporária: espera ela sair em vez de recusar o pedido
       // seguinte (a fila dos cortes pede o próximo no mesmo instante em que recebe o "pronto" do anterior).
       if (current && (current.progress.phase === 'done' || current.progress.phase === 'error' || current.progress.phase === 'cancelled')) {
         await current.done.catch(() => undefined)
       }
-      if (current) throw new ExportError('Já há uma exportação em andamento. Espere terminar ou cancele.')
-      const { project: stored, dir } = await deps.read(asked.projectId)
-      if (!stored.sources.screen && !stored.sources.camera) {
-        throw new ExportError('Este projeto não tem vídeo da tela nem da câmera para exportar.')
-      }
-      // UM corte vertical: o corte vem do documento (no disco), nunca da interface; o formato é sempre o vertical
-      let clip: Clip | null = null
-      let clipNumber = 0
-      let project = stored
-      let request: ExportRequest = asked
-      if (asked.clipId !== undefined) {
-        const at = stored.clips.findIndex((c) => c.id === asked.clipId)
-        if (at < 0) throw new ExportError('Esse corte não existe mais neste projeto. Atualize a lista de cortes e tente de novo.')
-        clip = stored.clips[at]!
-        clipNumber = at + 1
-        if (normalizeRanges(clip.ranges, projectDurationMs(stored)).length === 0) {
-          throw new ExportError(`O corte «${clip.title}» não tem nenhum trecho dentro da gravação. Ajuste os trechos do corte e tente de novo.`)
-        }
-        project = reviewDocument(stored, clip.id)
-        request = { ...asked, format: 'vertical' }
-        delete request.fileName
-      }
-      if (!clip && (request.format ?? 'horizontal') === 'horizontal') project = reviewDocument(stored, 'youtube')
-      // O documento pode vir de terceiros: todo caminho dele é relativo e resolve para DENTRO da pasta do projeto.
-      // Erro visível ANTES de começar qualquer coisa ("Este projeto aponta para um arquivo fora da pasta dele").
-      await assertDocumentPaths(dir, project)
-      const files = {
-        screen: project.sources.screen ? await resolveProjectFile(dir, project.sources.screen.path, 'sources.screen.path') : null,
-        camera: project.sources.camera ? await resolveProjectFile(dir, project.sources.camera.path, 'sources.camera.path') : null,
-        voice: project.sources.voice ? await resolveProjectFile(dir, project.sources.voice.path, 'sources.voice.path') : null,
-        system: project.sources.system ? await resolveProjectFile(dir, project.sources.system.path, 'sources.system.path') : null
-      }
-      const format = exportFormat(request)
-      const durationMs = projectDurationMs(project)
-      const outMs = outputDuration(durationMs, project.cuts)
-      const totalFrames = outputFrameCount(outMs, request.fps)
-      if (totalFrames === 0) throw new ExportError('Não há nada para exportar: todos os trechos foram cortados.')
-
-      // As palavras da transcrição (legendas). Ler falhou e a legenda está ligada neste formato: erro visível, nunca legenda sumida.
-      let words: Word[] | null = null
+      if (current || preparing) throw new ExportError('Já há uma exportação em andamento. Espere terminar ou cancele.')
+      preparing = true
+      let finishPreparing!: () => void
+      preparingDone = new Promise<void>(resolve => {finishPreparing = resolve})
+      const protectionVersion = protectionVersions.get(asked.projectId) ?? 0
       try {
-        words = (await deps.words?.(request.projectId)) ?? null
-      } catch (err) {
-        if (projectForFormat(project, format.kind).captions.enabled) throw new ExportError(`Não consegui ler a transcrição para as legendas: ${messageOf(err)}`)
-        logger.warn(`Exportação: não consegui ler a transcrição de ${request.projectId} (${messageOf(err)}); a legenda está desligada, segue sem ela.`)
-      }
+        const { project: stored, dir } = await deps.read(asked.projectId)
+        if (!stored.sources.screen && !stored.sources.camera) {
+          throw new ExportError('Este projeto não tem vídeo da tela nem da câmera para exportar.')
+        }
+        // UM corte vertical: o corte vem do documento (no disco), nunca da interface; o formato é sempre o vertical
+        let clip: Clip | null = null
+        let clipNumber = 0
+        let project = stored
+        let request: ExportRequest = asked
+        if (asked.clipId !== undefined) {
+          const at = stored.clips.findIndex((c) => c.id === asked.clipId)
+          if (at < 0) throw new ExportError('Esse corte não existe mais neste projeto. Atualize a lista de cortes e tente de novo.')
+          clip = stored.clips[at]!
+          clipNumber = at + 1
+          if (normalizeRanges(clip.ranges, projectDurationMs(stored)).length === 0) {
+            throw new ExportError(`O corte «${clip.title}» não tem nenhum trecho dentro da gravação. Ajuste os trechos do corte e tente de novo.`)
+          }
+          project = reviewDocument(stored, clip.id)
+          request = { ...asked, format: 'vertical' }
+          delete request.fileName
+        }
+        if (!clip && (request.format ?? 'horizontal') === 'horizontal') project = reviewDocument(stored, 'youtube')
+        // O documento pode vir de terceiros: todo caminho dele é relativo e resolve para DENTRO da pasta do projeto.
+        // Erro visível ANTES de começar qualquer coisa ("Este projeto aponta para um arquivo fora da pasta dele").
+        await assertDocumentPaths(dir, project)
+        const files = {
+          screen: project.sources.screen ? await resolveProjectFile(dir, project.sources.screen.path, 'sources.screen.path') : null,
+          camera: project.sources.camera ? await resolveProjectFile(dir, project.sources.camera.path, 'sources.camera.path') : null,
+          voice: project.sources.voice ? await resolveProjectFile(dir, project.sources.voice.path, 'sources.voice.path') : null,
+          system: project.sources.system ? await resolveProjectFile(dir, project.sources.system.path, 'sources.system.path') : null
+        }
+        const format = exportFormat(request)
+        const durationMs = projectDurationMs(project)
+        const outMs = outputDuration(durationMs, project.cuts)
+        const totalFrames = outputFrameCount(outMs, request.fps)
+        if (totalFrames === 0) throw new ExportError('Não há nada para exportar: todos os trechos foram cortados.')
 
-      const id = randomUUID()
-      const exportsDir = await chooseOutputDir(dir, request.dir, clip ? 'cortes' : undefined)
-      const stem = clip ? `${String(clipNumber).padStart(2, '0')} - ${sanitizeFileName(project.title, 'Corte')}` : exportFileName(project.title, request).replace(/\.mp4$/, '')
-      const unique = uniqueName(stem, (n) => existsSync(join(exportsDir, `${n}.mp4`)))
-      const finalPath = join(exportsDir, `${unique}.mp4`)
-      const tmpDir = join(exportsDir, `.tmp-${id.slice(0, 8)}`)
-      const clipLayout = clip ? (itemOf(stored, clip.id).layout ?? (clip.layoutV !== 'auto' ? clip.layoutV : undefined)) : undefined
-      const job: ExportJob = {
-        exportId: id,
-        projectId: request.projectId,
-        project,
-        format: format.kind,
-        // O layout fixo do corte (o escolhido na Revisão ou o do corte) já está no documento por reviewDocument; vai também aqui
-        // para a janela reaplicá-lo DEPOIS de gerar o vertical nunca aberto, senão os layouts automáticos prevalecem.
-        ...(clipLayout ? { clipLayout } : {}),
-        width: format.w,
-        height: format.h,
-        fps: request.fps,
-        bitrate: exportBitrate(request.resolution, request.fps, request.format),
-        words,
-        screenUrl: project.sources.screen ? mediaUrl(request.projectId, project.sources.screen.path) : null,
-        cameraUrl: project.sources.camera ? mediaUrl(request.projectId, project.sources.camera.path) : null,
-        eventUrls: {
-          cursor: await eventUrl(request.projectId, dir, EVENT_FILES.cursor),
-          clicks: await eventUrl(request.projectId, dir, EVENT_FILES.clicks),
-          keys: await eventUrl(request.projectId, dir, EVENT_FILES.keys)
-        },
-        // a análise do rosto (enquadramento da câmera): o exportador enquadra como a prévia
-        faceUrl: await eventUrl(request.projectId, dir, FACE_FILE),
-        // o recorte do fundo (apresentador recortado): só o que vale para a câmera de agora
-        matteUrl: await currentMatteUrl(request.projectId, dir, project)
-      }
-      const now = deps.now()
-      const run: Run = {
-        id,
-        req: request,
-        project,
-        stored,
-        clip,
-        clipNumber,
-        words,
-        dir,
-        startedAt: now,
-        abort: new AbortController(),
-        cancelled: false,
-        win: null,
-        outDir: exportsDir,
-        tmpDir,
-        videoPath: join(tmpDir, 'video.mp4'),
-        audioPath: join(tmpDir, 'audio.m4a'),
-        stem,
-        finalPath,
-        partialFinal: join(tmpDir, 'saida.parcial'),
-        files,
-        handle: null,
-        progress: {
+        // As palavras da transcrição (legendas). Ler falhou e a legenda está ligada neste formato: erro visível, nunca legenda sumida.
+        let words: Word[] | null = null
+        try {
+          words = (await deps.words?.(request.projectId)) ?? null
+        } catch (err) {
+          if (projectForFormat(project, format.kind).captions.enabled) throw new ExportError(`Não consegui ler a transcrição para as legendas: ${messageOf(err)}`)
+          logger.warn(`Exportação: não consegui ler a transcrição de ${request.projectId} (${messageOf(err)}); a legenda está desligada, segue sem ela.`)
+        }
+
+        const id = randomUUID()
+        const exportsDir = await chooseOutputDir(dir, request.dir, clip ? 'cortes' : undefined)
+        const disk = await checkDiskSpace(exportsDir, estimateExportBytes(outMs, exportBitrate(request.resolution, request.fps, request.format), request.format === 'vertical' ? 192_000 : 384_000), outMs, 'O vídeo e o arquivo final coexistem durante a exportação. A estimativa inclui áudio e 20% de folga.')
+        if (disk.status !== 'ok') logger.warn(diskWarning(disk))
+        const stem = clip ? `${String(clipNumber).padStart(2, '0')} - ${sanitizeFileName(project.title, 'Corte')}` : exportFileName(project.title, request).replace(/\.mp4$/, '')
+        const unique = uniqueName(stem, (n) => existsSync(join(exportsDir, `${n}.mp4`)))
+        const finalPath = join(exportsDir, `${unique}.mp4`)
+        const tmpDir = join(exportsDir, `.tmp-${id.slice(0, 8)}`)
+        const clipLayout = clip ? (itemOf(stored, clip.id).layout ?? (clip.layoutV !== 'auto' ? clip.layoutV : undefined)) : undefined
+        const job: ExportJob = {
           exportId: id,
           projectId: request.projectId,
-          ...(clip ? { clipId: clip.id } : {}),
-          phase: 'preparing',
-          fraction: 0,
-          frame: 0,
-          totalFrames,
-          renderFps: null,
-          etaMs: null,
-          audioReady: false
-        },
-        video: null,
-        audioFraction: 0,
-        videoFraction: 0,
-        lastSign: now,
-        lastEmit: 0,
-        renderStartedAt: null,
-        renderEndedAt: null,
-        timing: null,
-        done: Promise.resolve(),
-        job
+          project,
+          format: format.kind,
+          // O layout fixo do corte (o escolhido na Revisão ou o do corte) já está no documento por reviewDocument; vai também aqui
+          // para a janela reaplicá-lo DEPOIS de gerar o vertical nunca aberto, senão os layouts automáticos prevalecem.
+          ...(clipLayout ? { clipLayout } : {}),
+          width: format.w,
+          height: format.h,
+          fps: request.fps,
+          bitrate: exportBitrate(request.resolution, request.fps, request.format),
+          words,
+          screenUrl: project.sources.screen ? mediaUrl(request.projectId, project.sources.screen.path) : null,
+          cameraUrl: project.sources.camera ? mediaUrl(request.projectId, project.sources.camera.path) : null,
+          eventUrls: {
+            cursor: await eventUrl(request.projectId, dir, EVENT_FILES.cursor),
+            clicks: await eventUrl(request.projectId, dir, EVENT_FILES.clicks),
+            keys: await eventUrl(request.projectId, dir, EVENT_FILES.keys)
+          },
+          // a análise do rosto (enquadramento da câmera): o exportador enquadra como a prévia
+          faceUrl: await eventUrl(request.projectId, dir, FACE_FILE),
+          // o recorte do fundo (apresentador recortado): só o que vale para a câmera de agora
+          matteUrl: await currentMatteUrl(request.projectId, dir, project)
+        }
+        const now = deps.now()
+        const run: Run = {
+          id,
+          req: request,
+          project,
+          stored,
+          clip,
+          clipNumber,
+          words,
+          dir,
+          startedAt: now,
+          abort: new AbortController(),
+          cancelled: false,
+          protection: protectionFingerprint(stored),
+          protectionVersion,
+          protectionInvalidated: false,
+          placedFinal: false,
+          placedText: null,
+          win: null,
+          outDir: exportsDir,
+          tmpDir,
+          videoPath: join(tmpDir, 'video.mp4'),
+          audioPath: join(tmpDir, 'audio.m4a'),
+          stem,
+          finalPath,
+          partialFinal: join(tmpDir, 'saida.parcial'),
+          files,
+          handle: null,
+          progress: {
+            exportId: id,
+            projectId: request.projectId,
+            ...(clip ? { clipId: clip.id } : {}),
+            phase: 'preparing',
+            fraction: 0,
+            frame: 0,
+            totalFrames,
+            renderFps: null,
+            etaMs: null,
+            audioReady: false,
+            ...(disk.status !== 'ok' ? { message: diskWarning(disk) } : {})
+          },
+          video: null,
+          audioFraction: 0,
+          videoFraction: 0,
+          lastSign: now,
+          lastEmit: 0,
+          renderStartedAt: null,
+          renderEndedAt: null,
+          timing: null,
+          done: Promise.resolve(),
+          job
+        }
+        if ((protectionVersions.get(asked.projectId) ?? 0) !== protectionVersion) throw new ExportError(PROTECTION_CHANGED_MESSAGE)
+        current = run
+        emit(run, true)
+        run.done = execute(run)
+        return { exportId: id }
+      } finally {preparing = false;preparingDone = null;finishPreparing()}
+    },
+
+    protectionChanged(projectId) {
+      protectionVersions.set(projectId,(protectionVersions.get(projectId) ?? 0)+1)
+      const run = current
+      if (run?.req.projectId === projectId && !['done', 'error', 'cancelled'].includes(run.progress.phase)) {
+        run.protectionInvalidated = true
+        run.abort.abort()
+        if (run.video) {
+          run.video.reject(new ExportError(PROTECTION_CHANGED_MESSAGE))
+          run.video = null
+        }
+        run.win?.destroy()
       }
-      current = run
-      emit(run, true)
-      run.done = execute(run)
-      return { exportId: id }
+      for (const [id, progress] of history) {
+        if (progress.projectId !== projectId || progress.phase !== 'done') continue
+        const invalidated: ExportProgress = { ...progress, phase: 'error', outputPath: undefined, textPath: undefined, report: undefined, message: PROTECTION_CHANGED_MESSAGE }
+        history.set(id, invalidated)
+        if (last?.exportId === id) last = invalidated
+        if (current?.id === id) current.progress = invalidated
+        deps.emit({ ...invalidated })
+      }
     },
 
     async cancel(exportId) {
@@ -728,10 +824,14 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     },
 
     async idle() {
-      while (current) await current.done
+      while (preparingDone || current) {
+        if (preparingDone) await preparingDone
+        if (current) await current.done
+      }
     },
 
     async shutdown() {
+      if (preparingDone) await preparingDone
       if (current) await this.cancel(current.id)
     }
   }

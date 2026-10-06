@@ -8,6 +8,7 @@ import { addManualCut, restoreCut } from '@shared/cuts'
 import { createLayoutSeg, createZoom, createZoomAt, deleteLayoutSeg, deleteZoom, splitLayoutAt } from '@shared/edits'
 import { cutWords, restoreWords, togglePause } from '@shared/text-edit'
 import type { LayoutKind } from '@shared/types'
+import { createBlurRegion, deleteBlurRegion, resizeBlurRegion } from '@shared/blur'
 import { selectionRange } from './text/text-store'
 import { useEditor } from './context'
 
@@ -88,6 +89,11 @@ export function useEditorOps() {
       deleteSelected(): boolean {
         if (ops.cutWordSelection()) return true
         const { selection } = st()
+        if (selection?.kind === 'blur') {
+          st().change(p => deleteBlurRegion(p, selection.id))
+          st().setSelection(null)
+          return true
+        }
         if (selection?.kind === 'zoom') {
           st().change((p) => deleteZoom(p, selection.id))
           st().setSelection(null)
@@ -107,6 +113,23 @@ export function useEditorOps() {
       },
 
       /** S: divide o layout no ponto da reprodução. */
+      blurUntilEnd(): boolean {
+        const { selection } = st()
+        if (selection?.kind !== 'blur') return false
+        return st().change(p => resizeBlurRegion(p, selection.id, 'end', durationMs, durationMs))
+      },
+      createBlurDrag(a: number, b: number): string | null {
+        let id: string | null = null
+        st().change(p => {
+          const rect = p.blurRegions?.find(r => r.id === st().selection?.id)?.rect ?? { x: .35, y: .35, w: .3, h: .2 }
+          const next = createBlurRegion(p, rect, a, b, durationMs)
+          if (!next) return p
+          id = next.blurRegions!.at(-1)!.id
+          return next
+        })
+        if (id) st().setSelection({ kind: 'blur', id })
+        return id
+      },
       splitAtPlayhead(): boolean {
         const t = playback.getState().sourceMs
         let made: string | null = null
@@ -173,6 +196,7 @@ export function useEditorOps() {
       clearSelection(): void {
         st().setSelection(null)
         st().setRange(null)
+        st().setBlurDrawing(false)
         text.getState().clear()
       },
       engine: () => engineRef.current

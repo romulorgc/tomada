@@ -8,11 +8,34 @@ import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { parseTranscript } from '../../src/shared/transcript'
-import { checkAgainstGabarito } from '../helpers/gabarito'
+import { checkAgainstGabarito, loadGabarito } from '../helpers/gabarito'
 import { openEditor, readSaved, waitSaved } from './editor-helpers'
 import { EXAMPLE_FOLDER, launchTomada, shot, type Session } from './helpers'
+import { DEFAULT_DICTIONARY } from '../../src/shared/dictionary'
 
 let s: Session | undefined
+test('dicionário padrão do usuário não alucina seus nomes em áudio sintético sem esses termos', async () => {
+  test.setTimeout(180000)
+  s = await launchTomada({ env: { TOMADA_TRANSCRIBER: 'faster-whisper', TOMADA_TOOLS_DIR: '', TOMADA_LLM: 'off' } })
+  expect(await s.page.evaluate(() => window.tomada.dictionary.get())).toEqual([...DEFAULT_DICTIONARY])
+  const file = join(s.projects, EXAMPLE_FOLDER, 'transcript.json')
+  rmSync(file)
+  await openEditor(s); await s.page.getByTestId('tab-text').click()
+  await s.page.getByTestId('text-transcribe').click()
+  await expect(s.page.getByTestId('transcript-view')).toBeVisible({ timeout: 120000 })
+  const transcript = parseTranscript(readFileSync(file, 'utf8'))
+  const normalize = (text: string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const text = ` ${normalize(transcript.words.map(w => w.text).join(' '))} `
+  const reference = ` ${normalize(loadGabarito().text)} `
+  expect(transcript.engine).toBe('faster-whisper')
+  expect(transcript.words.length).toBeGreaterThan(10)
+  for (const term of DEFAULT_DICTIONARY) {
+    expect(reference, `o áudio sintético não contém: ${term}`).not.toContain(` ${normalize(term)} `)
+    expect(text, `nome ausente no áudio: ${term}`).not.toContain(` ${normalize(term)} `)
+  }
+  await shot(s.page, 'm5a-consertos-dicionario-padrao')
+  console.log(`Dicionário padrão: ${DEFAULT_DICTIONARY.length} termos, ${transcript.words.length} palavras, nenhum nome alucinado.`)
+})
 test.afterEach(async () => {
   if (s) {
     const problems = s.problems
@@ -27,6 +50,9 @@ test('transcreve o exemplo com o faster-whisper de verdade, limpa sozinho e apag
   // TOMADA_TOOLS_DIR vazio: vale a pasta de ferramentas do usuário (a que a preparação pela interface criou)
   s = await launchTomada({ env: { TOMADA_TRANSCRIBER: 'faster-whisper', TOMADA_TOOLS_DIR: '', TOMADA_LLM: 'off' } })
   const { page } = s
+  // O gabarito foi medido com o prompt-base: os nomes do usuário mudam a grafia
+  // de hesitações no Whisper. Este áudio sintético não usa esse vocabulário.
+  await page.evaluate(() => window.tomada.dictionary.set([]))
   const file = join(s.projects, EXAMPLE_FOLDER, 'transcript.json')
   rmSync(file)
   await openEditor(s)

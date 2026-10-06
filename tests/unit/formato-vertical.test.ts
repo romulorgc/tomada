@@ -130,14 +130,32 @@ describe('projectForFormat: a visão de cada formato', () => {
     })
   })
 
-  it('as cores da legenda valem para os dois formatos (mudar no vertical muda no documento)', () => {
+  it('as cores mudadas no vertical são próprias e não alteram o horizontal', () => {
     const d = doc()
     const view = projectForFormat(d, 'vertical')
     const next = mergeFormatView(d, { ...view, captions: { ...view.captions, highlightColor: '#FF0000', textColor: '#ABCDEF' } }, 'vertical')
-    expect(next.captions.highlightColor).toBe('#FF0000')
-    expect(next.captions.textColor).toBe('#ABCDEF')
+    expect(next.captions).toEqual(d.captions)
+    expect(projectForFormat(next, 'vertical').captions).toMatchObject({ highlightColor: '#FF0000', textColor: '#ABCDEF' })
     const cleared = mergeFormatView(next, (() => { const v = projectForFormat(next, 'vertical'); const c = { ...v.captions }; delete c.textColor; return { ...v, captions: c } })(), 'vertical')
-    expect(cleared.captions.textColor).toBeUndefined()
+    expect(cleared.captions).toEqual(d.captions)
+    expect(projectForFormat(cleared, 'vertical').captions.textColor).toBeUndefined()
+  })
+
+  it('cores explícitas do padrão vertical sobrevivem ao disco e prevalecem na visão', () => {
+    const d = doc({ vertical: { layout: 'screen-focus', layouts: [], zooms: [], captions: { highlightColor: '#FF0000', textColor: '#AABBCC' } } })
+    const saved = parseProject(serializeProject(d))
+    expect(projectForFormat(saved, 'vertical').captions).toMatchObject({ highlightColor: '#FF0000', textColor: '#AABBCC' })
+    expect(saved.captions).toEqual(d.captions)
+  })
+
+  it('sem cores próprias, o vertical continua herdando cores horizontais após editar outro campo', () => {
+    const d = doc({ captions: { ...doc().captions, textColor: '#123456' } })
+    const view = projectForFormat(d, 'vertical')
+    const saved = mergeFormatView(d, { ...view, captions: { ...view.captions, size: 1.1 } }, 'vertical')
+    expect(saved.vertical?.captions?.textColor).toBeUndefined()
+    expect(saved.vertical?.captions?.highlightColor).toBeUndefined()
+    const changed = { ...saved, captions: { ...saved.captions, textColor: '#ABCDEF', highlightColor: '#112233' } }
+    expect(projectForFormat(changed, 'vertical').captions).toMatchObject({ textColor: '#ABCDEF', highlightColor: '#112233' })
   })
 
   it('o gancho: texto vazio some do documento; o preset "sem zoom" (off) é guardado', () => {
@@ -155,8 +173,8 @@ describe('projectForFormat: a visão de cada formato', () => {
     expect(mergeFormatView(d, view, 'horizontal')).toBe(view)
   })
 
-  it('os campos de legenda de cada formato são os esperados (as cores ficam de fora)', () => {
-    expect([...FORMAT_CAPTION_KEYS]).toEqual(['enabled', 'style', 'wordsPerLine', 'position', 'box', 'size', 'positionY', 'uppercase', 'highlightWord'])
+  it('os campos de legenda de cada formato incluem cores próprias opcionais', () => {
+    expect([...FORMAT_CAPTION_KEYS]).toEqual(['enabled', 'style', 'wordsPerLine', 'position', 'box', 'size', 'positionY', 'uppercase', 'highlightWord', 'highlightColor', 'textColor'])
     expect(VERTICAL_CAPTION_DEFAULTS).toEqual({ enabled: true, style: 'natural', wordsPerLine: 2, position: 'bottom', box: false })
   })
 })

@@ -13,6 +13,7 @@ export type View =
   | { name: 'record' }
   | { name: 'processing' }
   | { name: 'settings' }
+  | { name: 'setup' }
 
 export type Notice = {
   id: number

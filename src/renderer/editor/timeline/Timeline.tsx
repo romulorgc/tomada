@@ -8,6 +8,7 @@ import { formatSpan, formatTimecode } from '@shared/format'
 import { zoomCounts } from '@shared/edits'
 import { moveLayoutSeg, moveZoom, resizeLayoutSeg, resizeZoom } from '@shared/edits'
 import { keptRanges } from '@shared/timeline'
+import { moveBlurRegion, resizeBlurRegion } from '@shared/blur'
 import { MAX_PX_PER_MS, clampPxPerMs, contentWidthPx, createTimeMap, fitPxPerMs, rulerTicks, scrollToReveal, visibleDisplayRange, zoomAround } from '@shared/timeline-view'
 import type { LayoutKind } from '@shared/types'
 import { CollapseIcon, FitIcon, MinusIcon, PlusIcon, ScissorsIcon, SplitIcon, ZoomInIcon } from '../../components/Icons'
@@ -98,6 +99,7 @@ export function Timeline() {
   const { store, derived, durationMs, engineRef, playback, hasScreen, hasCamera } = ctx
   const zooms = useDoc((s) => s.project.zooms)
   const layouts = useDoc((s) => s.project.layouts)
+  const blurRegions = useDoc(s => s.project.blurRegions)
   const cuts = useDoc((s) => s.project.cuts)
   const defaultLayout = useDoc((s) => s.project.style.defaultLayout)
   const isVertical = useDoc((s) => s.format === 'vertical')
@@ -216,12 +218,13 @@ export function Timeline() {
 
   // --- ímã -----------------------------------------------------------------------------------------------
   const getSnap = useCallback(
-    (skip?: { kind: 'zoom' | 'layout'; id: string }): number[] => {
+    (skip?: { kind: 'zoom' | 'layout' | 'blur'; id: string }): number[] => {
       const p = store.getState().project
       const out: number[] = [0, durationMs, playback.getState().sourceMs]
       for (const c of p.cuts) if (c.enabled) out.push(c.start, c.end)
       for (const z of p.zooms) if (!(skip?.kind === 'zoom' && skip.id === z.id)) out.push(z.start, z.end)
       for (const l of p.layouts) if (!(skip?.kind === 'layout' && skip.id === l.id)) out.push(l.start, l.end)
+      for (const r of p.blurRegions ?? []) if (!(skip?.kind === 'blur' && skip.id === r.id)) out.push(r.start, r.end)
       return out
     },
     [store, playback, durationMs]
@@ -278,6 +281,13 @@ export function Timeline() {
   )
 
   const counts = zoomCounts({ zooms })
+  const blurLane: LaneApi = {
+    kind: 'blur', empty: t.editor.blur.empty,
+    items: (blurRegions ?? []).map((r, i) => ({ id: r.id, start: r.start, end: r.end, label: <b>{t.editor.blur.region} {i + 1}</b>, title: t.editor.blur.modes[r.mode], aria: `${t.editor.blur.region} ${i + 1}: ${t.editor.blur.modes[r.mode]}` })),
+    move: (base, id, delta) => moveBlurRegion(base, id, delta, durationMs),
+    resize: (base, id, edge, to) => resizeBlurRegion(base, id, edge, to, durationMs),
+    create: (a, b) => ops.createBlurDrag(a, b)
+  }
   const cutMs = useMemo(() => durationMs - kept.reduce((acc, r) => acc + (r.end - r.start), 0), [durationMs, kept])
   const hasRange = Boolean(range && range.end - range.start > 0)
 
@@ -345,6 +355,7 @@ export function Timeline() {
           <div className="tl-label" data-track="layout">
             {t.editor.timeline.tracks.layout}
           </div>
+          <div className="tl-label" data-track="blur">{t.editor.tabs.blur}<small>{blurRegions?.length ?? 0}</small></div>
         </div>
         <div
           className="tl-scroll"
@@ -360,6 +371,7 @@ export function Timeline() {
             <VideoTrack view={view} getSnap={getSnap} onSnapGuide={setGuide} onSeek={seekSource} />
             <SegmentLane lane={zoomLane} view={view} getSnap={getSnap} onSnapGuide={setGuide} onSeek={seekSource} />
             <SegmentLane lane={layoutLane} view={view} getSnap={getSnap} onSnapGuide={setGuide} onSeek={seekSource} />
+            <SegmentLane lane={blurLane} view={view} getSnap={getSnap} onSnapGuide={setGuide} onSeek={seekSource} />
             {guide !== null ? <div className="tl-guide" data-testid="snap-guide" style={{ transform: `translateX(${view.toX(guide)}px)` }} /> : null}
             <Playhead view={view} />
           </div>

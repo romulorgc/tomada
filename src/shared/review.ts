@@ -67,7 +67,8 @@ export function reviewDocument(doc: Project, id: string): Project {
     if (item.layout) { p.style = { ...p.style, defaultLayout: item.layout }; p.layouts = p.layouts.filter((s) => s.origin === 'manual') }
     p.captions = { ...p.captions, ...(item.captionStyle ? { style: item.captionStyle, ...captionStyleDefaults(item.captionStyle, 'horizontal') } : {}), ...(item.captionsEnabled !== undefined ? { enabled: item.captionsEnabled } : {}) }
   }
-  return p
+  // Campos futuros/desconhecidos em edits não podem sobrepor uma proteção comum.
+  return { ...p, blurRegions: doc.blurRegions }
 }
 /** Alterar um item automático à mão o protege da regeneração; restaurações ficam lembradas. */
 export function preserveManualDecisions(prev: Project, next: Project): Project {

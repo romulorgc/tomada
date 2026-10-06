@@ -1201,7 +1201,7 @@
 }
 .tl-labels {
   display: grid;
-  grid-template-rows: var(--ruler-h) minmax(0, 1fr) var(--lane-h) var(--lane-h);
+  grid-template-rows: var(--ruler-h) minmax(0, 1fr) repeat(3, var(--lane-h));
   padding-bottom: var(--scrollbar-h);
   border-right: 1px solid var(--color-line);
   background: var(--color-panel);
@@ -1255,7 +1255,7 @@
 .tl-content {
   position: relative;
   display: grid;
-  grid-template-rows: var(--ruler-h) minmax(0, 1fr) var(--lane-h) var(--lane-h);
+  grid-template-rows: var(--ruler-h) minmax(0, 1fr) repeat(3, var(--lane-h));
   height: 100%;
   min-width: 100%;
 }
@@ -2669,3 +2669,13 @@ select.text-field {
   padding: 0 0.6rem;
   font-size: 0.6875rem;
 }
+/* Proteção de dados: seleção e alças existem só na interface. */
+.blur-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.blur-overlay[data-drawing="true"] { pointer-events: auto; cursor: crosshair; }
+.blur-selection { position: absolute; border: 2px solid #ffca72; pointer-events: auto; cursor: move; }
+.blur-selection i { position: absolute; width: 10px; height: 10px; background: #ffca72; border: 1px solid #111; }
+.blur-selection i[data-edge="nw"] { left: -5px; top: -5px; cursor: nwse-resize; }
+.blur-selection i[data-edge="ne"] { right: -5px; top: -5px; cursor: nesw-resize; }
+.blur-selection i[data-edge="sw"] { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.blur-selection i[data-edge="se"] { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.tl-seg[data-kind="blur"] { background: #6d441f; border-color: #d19b58; color: #fff3df; }

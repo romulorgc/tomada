@@ -10,9 +10,18 @@ import { writeFileAtomic } from './fs-utils'
 import type { Logger } from './logger'
 import { autopilotPrefsSchema } from '@shared/autopilot'
 import { projectSchema } from '@shared/project'
+import { recordingShortcutsSchema } from '@shared/shortcuts-config'
+import { exportDefaultsSchema, onboardingPrefsSchema, ownerCaptionSchema, ownerVerticalCaptionSchema, zoomPreferenceSchema } from '@shared/settings-defaults'
 
 // "loose": campos que este código não conhece (de uma versão futura, ou da M1b) sobrevivem.
 export const settingsSchema = z.looseObject({
+  shortcuts: recordingShortcutsSchema.optional(),
+  exportDefaults: exportDefaultsSchema.optional(),
+  onboarding: onboardingPrefsSchema.optional(),
+  ownerCaptionsHorizontal: ownerCaptionSchema.optional(),
+  ownerCaptionsVertical: ownerVerticalCaptionSchema.optional(),
+  ownerZoomPreset: zoomPreferenceSchema.optional(),
+  ownerVerticalZoomPreset: zoomPreferenceSchema.optional(),
   cameraCalibrations: z.array(z.object({ cameraId: z.string().min(1).max(500), micId: z.string().min(1).max(500), offsetMs: z.number().finite().min(-300).max(300), confidence: z.number().finite().min(3), calibratedAt: z.string() })).max(100).optional(),
   projectsDir: z.string().min(1).optional(),
   ffmpegPath: z.string().min(1).optional(),
@@ -75,5 +84,12 @@ export function applySettingsPatch(current: Settings, patch: Partial<Settings>):
   if (patch.autopilot !== undefined) next.autopilot = autopilotPrefsSchema.parse({ ...current.autopilot, ...patch.autopilot, steps: { ...current.autopilot?.steps, ...patch.autopilot.steps } })
   if (patch.ownerStyle !== undefined) next.ownerStyle = projectSchema.shape.style.parse(patch.ownerStyle)
   if (patch.ownerStyleAsset !== undefined) next.ownerStyleAsset = patch.ownerStyleAsset
+  for (const key of ['shortcuts', 'exportDefaults', 'onboarding', 'ownerCaptionsHorizontal', 'ownerCaptionsVertical', 'ownerZoomPreset', 'ownerVerticalZoomPreset'] as const) {
+    if (patch[key] !== undefined) Object.assign(next, { [key]: patch[key] })
+  }
+  // Os dois lugares da interface controlam a mesma escolha; nenhum deles pode ficar sem efeito.
+  if (patch.ownerCaptionsHorizontal || patch.ownerCaptionsVertical) next.autopilot = autopilotPrefsSchema.parse({ ...next.autopilot, ...(patch.ownerCaptionsHorizontal ? { captionsHorizontal: patch.ownerCaptionsHorizontal.enabled } : {}), ...(patch.ownerCaptionsVertical ? { captionsVertical: patch.ownerCaptionsVertical.enabled } : {}) })
+  if (patch.autopilot && !patch.ownerCaptionsHorizontal && next.ownerCaptionsHorizontal) next.ownerCaptionsHorizontal = { ...next.ownerCaptionsHorizontal, enabled: next.autopilot!.captionsHorizontal }
+  if (patch.autopilot && !patch.ownerCaptionsVertical && next.ownerCaptionsVertical) next.ownerCaptionsVertical = { ...next.ownerCaptionsVertical, enabled: next.autopilot!.captionsVertical }
   return next
 }

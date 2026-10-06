@@ -8,6 +8,8 @@ import { AiSettings, TranscriptionSettings } from './SettingsTranscription'
 import { CameraSyncSettings } from './SettingsCameraSync'
 import { SettingsAutopilot } from './SettingsAutopilot'
 import { SettingsCameraStyle } from './SettingsCameraStyle'
+import { SettingsDefaults, SettingsExportDefaults, SettingsShortcuts } from './SettingsDefaults'
+import { m5Settings } from '../i18n/m5-settings'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -120,7 +122,11 @@ export function Settings() {
   return (
     <div className="mx-auto w-full max-w-[64rem] px-10 pb-14 pt-9" data-testid="settings-view">
       <h1 className="mb-8 text-[1.75rem] font-[650] leading-none tracking-[-0.02em]">{t.settings.title}</h1>
-      <Section title={t.autopilot.title} help={t.autopilot.help}><SettingsAutopilot /></Section>
+      <Section title={m5Settings.setup.title} help={m5Settings.setup.help}><button type="button" className="btn" data-testid="diagnostics-open" onClick={() => useApp.getState().go({ name: 'setup' })}>{m5Settings.setup.open}</button></Section>
+      <Section title={t.autopilot.title} help={t.autopilot.help}><SettingsAutopilot view={view} changed={setView} /></Section>
+      <Section title={m5Settings.style.title} help={m5Settings.style.help}><SettingsDefaults view={view} changed={setView} /></Section>
+      <Section title={m5Settings.export.title} help={m5Settings.export.help}><SettingsExportDefaults settings={view.settings} /></Section>
+      <Section title={m5Settings.shortcuts.title} help={m5Settings.shortcuts.help}><SettingsShortcuts settings={view.settings} /></Section>
 
       <Section title={t.settings.projects.title} help={t.settings.projects.help} testId="settings-projects">
         <div className="flex items-start gap-3 rounded-thumb border border-line bg-surface px-4 py-3">

@@ -61,6 +61,7 @@ export function fakeTracker(result: Partial<TrackerResult> & { raw?: RawEvents }
     resume() {
       calls.push('resume')
     },
+    snapshot: () => structuredClone(result.raw ?? { cursor: [], clicks: [], keys: [], windowRects: [] }),
     async stop() {
       calls.push('stop')
       running = false
@@ -94,6 +95,7 @@ export function createFakeWorld(args: {
   source?: ResolvedSource
   failTracker?: boolean
   now?: () => Date
+  clock?: () => number
   /** Quanto a "Lixeira" demora (ms): prova a ORDEM entre apagar a gravação e devolver a janela. */
   trashDelayMs?: number
 }): FakeWorld {
@@ -152,6 +154,7 @@ export function createFakeWorld(args: {
             },
             pause: () => undefined,
             resume: () => undefined,
+            snapshot: () => ({ cursor: [], clicks: [], keys: [], windowRects: [] }),
             stop: async () => ({ raw: { cursor: [], clicks: [], keys: [], windowRects: [] }, stats: null, windowGone: false, error: null })
           } satisfies ReturnType<typeof fakeTracker>)
         : fakeTracker({ ...trackerResult })
@@ -165,7 +168,7 @@ export function createFakeWorld(args: {
       await rm(path, { recursive: true, force: true })
       calls.push('trash:feito')
     },
-    clock: () => (clockBase += 5),
+    clock: args.clock ?? (() => (clockBase += 5)),
     now: args.now ?? (() => new Date(2026, 9, 4, 15, 0, 0)),
     env: args.env ?? {},
     minFreeBytes: 1

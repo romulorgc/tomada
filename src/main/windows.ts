@@ -10,6 +10,7 @@ import type { Rect } from '@shared/types'
 import type { Logger } from './logger'
 import type { RecordingWindows } from './recording-service'
 import type { TeleprompterAction, TeleprompterState } from '@shared/script'
+import { DEFAULT_RECORDING_SHORTCUTS, type RecordingShortcuts } from '@shared/shortcuts-config'
 
 export type AuxWindowsDeps = {
   /** Caminho do preload compilado. */
@@ -20,6 +21,8 @@ export type AuxWindowsDeps = {
   rendererFile: string
   getMain(): BrowserWindow | null
   logger: Logger
+  icon?: string
+  shortcuts?(): RecordingShortcuts
 }
 
 export type AuxWindows = RecordingWindows & {
@@ -49,6 +52,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
   let countdownDone: ((completed: boolean) => void) | null = null
   let prompter: BrowserWindow | null = null
   let retakeKey: string | null = null
+  let recordingKeys: string[] = []
   const prompterKeys = ['Control+Alt+Space', 'Control+Alt+Right', 'Control+Alt+Left']
 
   const webPreferences = {
@@ -66,6 +70,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
   }
 
   const overlayDefaults = {
+    ...(deps.icon ? { icon: deps.icon } : {}),
     frame: false,
     transparent: true,
     resizable: false,
@@ -240,8 +245,10 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
     },
 
     registerHotkeys(handlers) {
-      const stop = 'CommandOrControl+Shift+R'
-      const pause = 'CommandOrControl+Shift+P'
+      const prefs = deps.shortcuts?.() ?? DEFAULT_RECORDING_SHORTCUTS
+      const stop = prefs.recordStop
+      const pause = prefs.pause
+      recordingKeys = [stop, pause]
       let ok = true
       try {
         ok = globalShortcut.register(stop, handlers.stop) && ok
@@ -255,11 +262,11 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
         ok = false
       }
       if (!ok) logger.warn('Algum atalho global não foi registrado (já em uso por outro programa?).')
-      return { stop: 'Ctrl+Shift+R', pause: 'Ctrl+Shift+P', ok }
+      return { stop, pause, ok }
     },
 
     unregisterHotkeys() {
-      for (const key of ['CommandOrControl+Shift+R', 'CommandOrControl+Shift+P', ...(retakeKey ? [retakeKey] : [])]) {
+      for (const key of [...recordingKeys, ...(retakeKey ? [retakeKey] : [])]) {
         try {
           globalShortcut.unregister(key)
         } catch {
@@ -267,6 +274,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
         }
       }
       retakeKey = null
+      recordingKeys = []
     },
 
     finishCountdown(completed) {

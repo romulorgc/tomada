@@ -16,7 +16,7 @@
 import { drawCaptions, drawHook, type TextLayout } from './caption-render'
 import { backgroundKey, coverCrop, gradientEndpoints } from './styles'
 import type { Scene, SceneBackdrop, SceneCamera, SceneCutout, SceneScreen, ShadowSpec } from './scene'
-import type { Background, Rect } from './types'
+import type { Background, BlurRegion, Rect } from './types'
 
 // ---------------------------------------------------------------------------
 // Interfaces estruturais do canvas
@@ -751,6 +751,69 @@ function drawBackdrop(ctx: Ctx2D, cache: RenderCache, b: SceneBackdrop, frame: F
 // Quadro
 
 /**
+ * Proteção DESTRUTIVA antes do recorte: reduz a região a no máximo 2×2 médias (forte)
+ * ou 8×8 (pixelado), quantizadas com passo de 16 por canal. A ampliação usa só esses valores; os
+ * pixels da região são substituídos antes de desenhar a tela ou o fundo do V-C. É uma operação
+ * muitos-para-um, sem camada original ou metadado de desfoque no arquivo codificado.
+ */
+export function protectScreen(cache: RenderCache, frame: FrameSource | null | undefined, regions: readonly BlurRegion[]): FrameSource | null | undefined {
+  if (!frame || regions.length === 0) return frame
+  const canvas = layerFor(cache, 'protected-screen', frame.w, frame.h)
+  const ctx = ctxOf(canvas)
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.globalAlpha = 1
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.drawImage(frame.image, 0, 0, frame.w, frame.h)
+  const tiny = layerFor(cache, 'privacy-sample', 8, 8)
+  const tc = ctxOf(tiny)
+  for (const region of regions) {
+    const r = region.rect
+    const x = Math.max(0, Math.floor(r.x * frame.w))
+    const y = Math.max(0, Math.floor(r.y * frame.h))
+    const w = Math.min(frame.w - x, Math.ceil((r.x + r.w) * frame.w) - x)
+    const h = Math.min(frame.h - y, Math.ceil((r.y + r.h) * frame.h) - y)
+    if (!(w > 0 && h > 0)) continue
+    if (region.mode === 'solid') {
+      ctx.fillStyle = '#111827'
+      ctx.fillRect(x, y, w, h)
+      continue
+    }
+    const max = region.mode === 'blur' ? 2 : 8
+    const tw = w >= h ? max : Math.max(1, Math.round(max * w / h))
+    const th = h >= w ? max : Math.max(1, Math.round(max * h / w))
+    tc.save()
+    tc.setTransform(1, 0, 0, 1, 0, 0)
+    tc.globalAlpha = 1
+    tc.globalCompositeOperation = 'copy'
+    tc.imageSmoothingEnabled = true
+    tc.imageSmoothingQuality = 'high'
+    tc.drawImage(frame.image, x, y, w, h, 0, 0, tw, th)
+    let averages: { data: Uint8ClampedArray }
+    try { averages = tc.getImageData(0, 0, tw, th) }
+    catch {
+      // Sem acesso aos pixels, proteja por tarja: jamais mantenha a região original.
+      tc.restore()
+      ctx.fillStyle = '#111827'
+      ctx.fillRect(x, y, w, h)
+      continue
+    }
+    for (let k = 0; k < averages.data.length; k++) averages.data[k] = k % 4 === 3 ? 255 : Math.min(255, Math.round(averages.data[k]! / 16) * 16)
+    tc.putImageData(averages as never, 0, 0)
+    tc.restore()
+    // Até uma amostra transparente na borda da interpolação deve revelar só a média,
+    // nunca o texto original que estava por baixo.
+    ctx.fillStyle = `rgb(${averages.data[0]},${averages.data[1]},${averages.data[2]})`
+    ctx.fillRect(x, y, w, h)
+    ctx.imageSmoothingEnabled = region.mode === 'blur'
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(tiny, 0, 0, tw, th, x, y, w, h)
+  }
+  ctx.restore()
+  return { image: canvas, w: frame.w, h: frame.h }
+}
+
+/**
  * Desenha o quadro da `scene` em `ctx`. O canvas precisa ter o tamanho de `scene.format`.
  * Faltando o quadro de uma fonte (ainda carregando), o retângulo dela sai escuro: nunca lança.
  */
@@ -762,10 +825,12 @@ export function renderFrame(ctx: Ctx2D, scene: Scene, frames: FrameSet, cache: R
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
 
-  ctx.drawImage(backgroundBitmap(cache, scene.background, w, h), 0, 0)
-  if (scene.backdrop) drawBackdrop(ctx, cache, scene.backdrop, frames.screen, w, h)
+  const protectedScreen = protectScreen(cache, frames.screen, scene.blurRegions ?? [])
 
-  if (scene.screen) drawScreen(ctx, cache, scene, scene.screen, frames.screen)
+  ctx.drawImage(backgroundBitmap(cache, scene.background, w, h), 0, 0)
+  if (scene.backdrop) drawBackdrop(ctx, cache, scene.backdrop, protectedScreen, w, h)
+
+  if (scene.screen) drawScreen(ctx, cache, scene, scene.screen, protectedScreen)
   if (scene.camera) drawCamera(ctx, cache, scene.camera, frames.camera, frames.matte)
   if (scene.hook) drawHook(ctx, cache, scene.hook)
   if (scene.captions) drawCaptions(ctx, cache, scene.captions)

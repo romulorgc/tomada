@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ExportOptions } from '@shared/export'
 import type { ExportProgress } from '@shared/ipc'
+import type { DiskEstimate } from '@shared/disk'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
 
@@ -17,6 +18,7 @@ export type ExportController = {
   open: boolean
   setOpen(open: boolean): void
   start(options: ExportOptions): Promise<void>
+  diskSpace(options: ExportOptions): Promise<DiskEstimate>
   cancel(): Promise<void>
   /** Esquece o resultado anterior (volta ao formulário). */
   reset(): void
@@ -59,14 +61,24 @@ export function useExportController(projectId: string, flush: () => Promise<void
     }
   }, [projectId, notify, itemId])
 
+  // O cálculo de espaço e a exportação usam a mesma pasta/identidade do item.
+  const requestFor = useCallback((options: ExportOptions) => ({projectId, ...options, ...(itemId && itemId !== 'youtube' ? {clipId:itemId} : {})}), [projectId,itemId])
+  const diskSpace = useCallback(async (options: ExportOptions) => {
+    await flush()
+    return window.tomada.exporter.diskSpace(requestFor(options))
+  }, [flush,requestFor])
+
   const start = useCallback(
     async (options: ExportOptions) => {
       setCancelling(false)
       setProgress(null)
+      let saved = false
       try {
         await flush()
-        await window.tomada.exporter.start({ projectId, ...options, ...(itemId && itemId !== 'youtube' ? {clipId:itemId} : {}) })
+        saved = true
+        await window.tomada.exporter.start(requestFor(options))
       } catch (err) {
+        if (!openRef.current) notify({ kind: 'error', text: saved ? t.editor.export.failedTitle : t.editor.export.saveFailed, detail: messageOf(err) })
         setProgress({
           exportId: '',
           projectId,
@@ -81,7 +93,7 @@ export function useExportController(projectId: string, flush: () => Promise<void
         })
       }
     },
-    [flush, projectId, itemId]
+    [flush, projectId, requestFor, notify]
   )
 
   const cancel = useCallback(async () => {
@@ -101,5 +113,5 @@ export function useExportController(projectId: string, flush: () => Promise<void
   }, [])
 
   const busy = progress !== null && !FINAL.has(progress.phase)
-  return { progress, busy, cancelling, open, setOpen, start, cancel, reset }
+  return { progress, busy, cancelling, open, setOpen, start, diskSpace, cancel, reset }
 }

@@ -34,7 +34,7 @@ export const COALESCE_MS = 900
 
 export type SaveStatus = 'saved' | 'saving' | 'error'
 
-export type SelectionKind = 'zoom' | 'layout' | 'cut'
+export type SelectionKind = 'zoom' | 'layout' | 'cut' | 'blur'
 export type Selection = { kind: SelectionKind; id: string } | null
 /** Intervalo marcado arrastando na trilha de vídeo (ms de ORIGEM). */
 export type TimeRange = { start: number; end: number }
@@ -66,6 +66,7 @@ export type EditorState = {
   format: FormatKind
   /** Mostra na prévia as zonas da interface das plataformas (só o vertical; nunca vai para a exportação). */
   safeGuide: boolean
+  blurDrawing: boolean
   undoCount: number
   redoCount: number
   saveStatus: SaveStatus
@@ -80,6 +81,7 @@ export type EditorState = {
   /** Troca o formato aberto (16:9 ou 9:16). Não é um passo de desfazer. */
   setFormat(format: FormatKind): void
   setSafeGuide(on: boolean): void
+  setBlurDrawing(on: boolean): void
   /** Começa um gesto contínuo (arraste): tudo até `end()` vira UM passo de desfazer. */
   begin(): void
   end(): void
@@ -98,9 +100,11 @@ export type EditorStore = StoreApi<EditorState>
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /** A seleção ainda aponta para algo que existe no documento? */
-export function selectionExists(project: Pick<Project, 'zooms' | 'layouts' | 'cuts'>, selection: Selection): boolean {
+export function selectionExists(project: Pick<Project, 'zooms' | 'layouts' | 'cuts' | 'blurRegions'>, selection: Selection): boolean {
   if (!selection) return true
   switch (selection.kind) {
+    case 'blur':
+      return Boolean(project.blurRegions?.some(r => r.id === selection.id))
     case 'zoom':
       return project.zooms.some((z) => z.id === selection.id)
     case 'layout':
@@ -148,7 +152,7 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
       dirty = true
       if (get().saveStatus !== 'saving') set({ saveStatus: 'saving' })
       if (timer !== undefined) clearTimeout(timer)
-      timer = setTimeout(() => void get().flush(), debounceMs)
+      timer = setTimeout(() => void get().flush().catch(() => undefined), debounceMs)
     }
 
     const fixSelection = (doc: Project): Pick<EditorState, 'selection'> | Record<string, never> =>
@@ -184,6 +188,7 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
       doc: deps.project,
       format: 'horizontal',
       safeGuide: false,
+      blurDrawing: false,
       undoCount: 0,
       redoCount: 0,
       saveStatus: 'saved',
@@ -211,6 +216,7 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
       },
 
       setSafeGuide: (on) => set({ safeGuide: on }),
+      setBlurDrawing: (on) => set({ blurDrawing: on }),
 
       begin() {
         if (group) return
@@ -259,22 +265,25 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
         if (timer !== undefined) clearTimeout(timer)
         timer = undefined
         if (!dirty) return inflight
-        dirty = false
-        const doc = get().doc
         set({ saveStatus: 'saving' })
-        inflight = inflight.then(async () => {
+        inflight = inflight.catch(() => undefined).then(async () => {
+          const doc = get().doc
+          dirty = false
           try {
             await deps.save(doc, lastSubmitted)
             lastSubmitted = doc
+            dirty = get().doc !== doc
             if (!dirty) set({ saveStatus: 'saved', saveError: null })
           } catch (err) {
             dirty = true // a próxima mudança (ou um novo flush) tenta de novo
             const message = messageOf(err)
             set({ saveStatus: 'error', saveError: message })
             deps.onSaveError?.(message)
+            throw err
           }
         })
-        return inflight
+        // Uma edição durante o save também precisa chegar ao disco antes de liberar a exportação.
+        return inflight.then(() => dirty ? get().flush() : undefined)
       },
 
       dispose() {

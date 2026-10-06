@@ -7,7 +7,8 @@ import { isAbsolute } from 'node:path'
 import { z } from 'zod'
 import { autopilotPrefsSchema } from '@shared/autopilot'
 import { projectSchema } from '@shared/project'
-import { normalizeDictionary } from '@shared/dictionary'
+import { DEFAULT_DICTIONARY, normalizeDictionary } from '@shared/dictionary'
+import { DEFAULT_RECORDING_SHORTCUTS, validateRecordingShortcuts, type RecordingShortcuts } from '@shared/shortcuts-config'
 import type { LlmStoredPrefs, Settings, SettingsView } from '@shared/ipc'
 import { normalizeRecordPrefs, type RecordPrefs } from '@shared/recording'
 import { DEFAULT_TRANSCRIPTION_PREFS, type TranscriptionPrefs } from '@shared/transcription'
@@ -18,6 +19,7 @@ import { applySettingsPatch, loadSettings, saveSettings, settingsSchema } from '
 import type { CameraCalibration } from '@shared/camera-sync'
 
 export interface AppState {
+  recordingShortcuts(): RecordingShortcuts
   saveCameraCalibration(value: CameraCalibration): Promise<void>
   settings(): Settings
   view(): SettingsView
@@ -34,12 +36,20 @@ export interface AppState {
   updateTranscriptionPrefs(patch: Partial<TranscriptionPrefs>): Promise<TranscriptionPrefs>
   /** Qual motor transcreve (padrão: faster-whisper; o outro só por arquivo de ajustes ou `TOMADA_TRANSCRIBER`). */
   transcriptionEngine(): 'faster-whisper' | 'whisper-cpp'
+  setTranscriptionEngine(engine: 'faster-whisper' | 'whisper-cpp'): Promise<SettingsView>
   /** Ajustes da IA, COM a chave cifrada: só o processo principal usa; `view()` nunca a devolve. */
   llmPrefs(): LlmStoredPrefs
   updateLlmPrefs(patch: LlmStoredPrefs): Promise<void>
 }
 
 const patchSchema = z.object({
+  shortcuts: settingsSchema.shape.shortcuts,
+  exportDefaults: settingsSchema.shape.exportDefaults,
+  onboarding: settingsSchema.shape.onboarding,
+  ownerCaptionsHorizontal: settingsSchema.shape.ownerCaptionsHorizontal,
+  ownerCaptionsVertical: settingsSchema.shape.ownerCaptionsVertical,
+  ownerZoomPreset: settingsSchema.shape.ownerZoomPreset,
+  ownerVerticalZoomPreset: settingsSchema.shape.ownerVerticalZoomPreset,
   projectsDir: z.string().max(1000).optional(),
   ffmpegPath: z.string().max(1000).optional(),
   autopilot: autopilotPrefsSchema.optional(),
@@ -55,6 +65,10 @@ export async function createAppState(args: {
 }): Promise<AppState> {
   const env = args.env ?? process.env
   let current = await loadSettings(args.file, args.logger)
+  if (current.shortcuts) {
+    try { current.shortcuts = validateRecordingShortcuts(current.shortcuts, normalizeRecordPrefs(current.record).retakeShortcut) }
+    catch (err) { args.logger.warn('Atalhos guardados têm conflito; usando os padrões.', err); delete current.shortcuts }
+  }
 
   // Toda gravação de ajustes entra numa FILA: cada uma parte do estado que a anterior deixou. Sem isso,
   // dois pedidos quase juntos (a tela Gravar manda um por controle que muda) liam o mesmo `current`,
@@ -97,7 +111,12 @@ export async function createAppState(args: {
 
     async update(rawPatch) {
       const patch = patchSchema.parse(rawPatch)
+      // Zod pode preencher defaults de esquemas aninhados opcionais; ausência no patch nunca é mudança.
+      for (const key of Object.keys(patch) as (keyof typeof patch)[]) if (!Object.hasOwn(rawPatch, key)) delete patch[key]
       return serialized(async () => {
+        // O schema tem defaults para leitura; no IPC parcial eles não substituem escolhas já guardadas.
+        if (patch.autopilot) patch.autopilot = autopilotPrefsSchema.parse({ ...current.autopilot, ...rawPatch.autopilot, steps: { ...current.autopilot?.steps, ...rawPatch.autopilot?.steps } })
+        if (patch.shortcuts) patch.shortcuts = validateRecordingShortcuts(patch.shortcuts, normalizeRecordPrefs(current.record).retakeShortcut)
         const next = applySettingsPatch(current, patch)
 
         // Valida ANTES de gravar: ajuste ruim não pode ficar guardado.
@@ -126,7 +145,8 @@ export async function createAppState(args: {
 
     recordPrefs: () => normalizeRecordPrefs(current.record),
 
-    dictionary: () => normalizeDictionary(current.dictionary),
+    dictionary: () => normalizeDictionary(current.dictionary ?? [...DEFAULT_DICTIONARY]),
+    recordingShortcuts: () => validateRecordingShortcuts(current.shortcuts ?? DEFAULT_RECORDING_SHORTCUTS, normalizeRecordPrefs(current.record).retakeShortcut),
 
     setDictionary: (terms) =>
       serialized(async () => {
@@ -151,6 +171,12 @@ export async function createAppState(args: {
       }),
 
     transcriptionEngine: () => current.transcription?.engine ?? 'faster-whisper',
+    setTranscriptionEngine: (engine) => serialized(async () => {
+      const clean = z.enum(['faster-whisper', 'whisper-cpp']).parse(engine)
+      const next: Settings = { ...current, transcription: { ...current.transcription, engine: clean } }
+      await saveSettings(args.file, next); current = next
+      return view()
+    }),
 
     llmPrefs: () => ({ ...current.llm }),
 
@@ -175,6 +201,7 @@ export async function createAppState(args: {
       serialized(async () => {
         const previous = normalizeRecordPrefs(current.record)
         const merged = normalizeRecordPrefs({ ...previous, ...patch })
+        validateRecordingShortcuts(current.shortcuts ?? DEFAULT_RECORDING_SHORTCUTS, merged.retakeShortcut)
         const next: Settings = { ...current, record: merged }
         // Esses filtros alteram buffers/latência: o par deve ser recalibrado no novo modo de áudio.
         if (merged.echoCancellation !== previous.echoCancellation || merged.noiseSuppression !== previous.noiseSuppression) delete next.cameraCalibrations

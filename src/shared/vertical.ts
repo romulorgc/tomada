@@ -154,8 +154,8 @@ export const VERTICAL_CAPTION_DEFAULTS: Required<Pick<CaptionStyle, 'enabled' | 
   box: false
 }
 
-/** Os campos de legenda que cada formato tem só para si (as cores valem para os dois). */
-export const FORMAT_CAPTION_KEYS = ['enabled', 'style', 'wordsPerLine', 'position', 'box', 'size', 'positionY', 'uppercase', 'highlightWord'] as const
+/** Os campos de legenda de cada formato; cores próprias são opcionais para preservar projetos antigos. */
+export const FORMAT_CAPTION_KEYS = ['enabled', 'style', 'wordsPerLine', 'position', 'box', 'size', 'positionY', 'uppercase', 'highlightWord', 'highlightColor', 'textColor'] as const
 
 export function defaultVerticalEdit(): VerticalEdit {
   return { layout: 'screen-focus', layouts: [], zooms: [] }
@@ -170,7 +170,7 @@ function perFormatCaptions(captions: Partial<CaptionStyle> | undefined): Partial
 /**
  * O documento como o formato o enxerga. No horizontal é o próprio documento (mesmo objeto). No vertical, `zooms`,
  * `layouts`, `zoomPreset`, `style.defaultLayout`, a bolha da câmera e os campos de legenda de cada formato vêm de
- * `project.vertical`: o resto (cortes, texto, fundo, cores) é o mesmo. É sobre esta visão que `evaluateScene`,
+ * `project.vertical`: o resto (cortes, texto, fundo) é o mesmo; cores ausentes herdam as do horizontal. É sobre esta visão que `evaluateScene`,
  * a linha do tempo e os painéis trabalham: o código dos dois formatos é um só.
  */
 export function projectForFormat(doc: Project, kind: FormatSpec['kind']): Project {
@@ -178,9 +178,9 @@ export function projectForFormat(doc: Project, kind: FormatSpec['kind']): Projec
   const v = doc.vertical
   const per = { ...VERTICAL_CAPTION_DEFAULTS, ...perFormatCaptions(v?.captions) }
   const captions: CaptionStyle = {
-    ...per,
     highlightColor: doc.captions.highlightColor,
-    ...(doc.captions.textColor !== undefined ? { textColor: doc.captions.textColor } : {})
+    ...(doc.captions.textColor !== undefined ? { textColor: doc.captions.textColor } : {}),
+    ...per
   }
   const view: Project = {
     ...doc,
@@ -207,6 +207,9 @@ export function mergeFormatView(doc: Project, view: Project, kind: FormatSpec['k
   const { zooms, layouts, zoomPreset, autoExclusions, vertical: viewVertical, captions, style: viewStyle, ...rest } = view
   const { stackCameraTop, ...style } = viewStyle
   const base = doc.vertical ?? defaultVerticalEdit()
+  const ownCaptions = perFormatCaptions(captions)
+  // Editar outro campo não transforma uma cor herdada em uma escolha independente.
+  for (const key of ['highlightColor', 'textColor'] as const) if (base.captions?.[key] === undefined && captions[key] === doc.captions[key]) delete ownCaptions[key]
   const vertical: VerticalEdit = {
     ...base,
     autoExclusions,
@@ -214,7 +217,7 @@ export function mergeFormatView(doc: Project, view: Project, kind: FormatSpec['k
     layouts,
     zooms,
     camera: { corner: style.camera.corner, size: style.camera.size },
-    captions: perFormatCaptions(captions)
+    captions: ownCaptions
   }
   if (stackCameraTop) vertical.cameraTop = true
   else delete vertical.cameraTop
@@ -224,17 +227,13 @@ export function mergeFormatView(doc: Project, view: Project, kind: FormatSpec['k
   if (hook !== undefined && hook !== '') vertical.hook = hook
   else delete vertical.hook
 
-  const nextCaptions: CaptionStyle = { ...doc.captions, highlightColor: captions.highlightColor }
-  if (captions.textColor !== undefined) nextCaptions.textColor = captions.textColor
-  else delete nextCaptions.textColor
-
   const next: Project = {
     ...rest,
     autoExclusions:doc.autoExclusions,
     zooms: doc.zooms,
     layouts: doc.layouts,
     style: { ...style, defaultLayout: doc.style.defaultLayout, camera: { ...style.camera, corner: doc.style.camera.corner, size: doc.style.camera.size } },
-    captions: nextCaptions,
+    captions: doc.captions,
     vertical
   }
   if (doc.zoomPreset !== undefined) next.zoomPreset = doc.zoomPreset

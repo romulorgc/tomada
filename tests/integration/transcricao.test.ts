@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFi
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { IpcEvents } from '@shared/ipc'
+import { DEFAULT_DICTIONARY } from '@shared/dictionary'
 import { parseProject } from '@shared/project'
 import { parseTranscript } from '@shared/transcript'
 import type { PrepareSnapshot, TranscriptionJob } from '@shared/transcription'
@@ -421,7 +422,7 @@ describe('IPC da transcrição e da IA', () => {
     await handlers['settings:update']({ llm: { apiKeyEnc: 'cifrado:invasor' }, dictionary: ['x'], transcription: { engine: 'whisper-cpp' } } as never)
     const onDisk = readFileSync(file, 'utf8')
     expect(onDisk).not.toContain('invasor')
-    expect(await handlers['dictionary:get']()).toEqual([])
+    expect(await handlers['dictionary:get']()).toEqual(DEFAULT_DICTIONARY)
   })
 
   it('dicionário: limpa, sem repetido, e persiste na gravação do arquivo', async () => {

@@ -51,7 +51,7 @@ async function fetchText(url: string | null): Promise<string | undefined> {
 }
 
 const TIMELINE_KEY = 'tomada.editor.timelineHeight'
-const MIN_TIMELINE_PX = 176
+const MIN_TIMELINE_PX = 212
 
 function readSavedHeight(): number | null {
   try {
@@ -158,8 +158,14 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
     () =>
       createEditorStore({
         project: detail.project,
-        save: (p,lastSubmitted) => {
+        save: async (p,lastSubmitted) => {
           if (!itemId) return window.tomada.projects.save(detail.id,p,lastSubmitted)
+          // O editor da Revisão salva os demais ajustes por item. A proteção é comum:
+          // envia só essa diferença à escrita com merge, antes de reexportar o item.
+          if (JSON.stringify(p.blurRegions ?? []) !== JSON.stringify(lastSubmitted?.blurRegions ?? [])) {
+            const base = lastSubmitted ?? detail.project
+            await window.tomada.projects.save(detail.id, {...base, blurRegions:p.blurRegions ?? []}, base)
+          }
           const view = projectForFormat(p,itemId === 'youtube' ? 'horizontal' : 'vertical')
           return window.tomada.review.update(detail.id,itemId,{title:p.title,hook:view.vertical?.hook,edits:{cuts:view.cuts,zooms:view.zooms,layouts:view.layouts,captions:view.captions,style:view.style,wordFixes:view.wordFixes ?? {},mutes:view.mutes ?? [],meta:view.meta ?? {},zoomPreset:view.zoomPreset,autoExclusions:view.autoExclusions}})
         },
@@ -181,7 +187,10 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
     () =>
       createClipQueue({
         projectId: detail.id,
-        flush: () => store.getState().flush(),
+        flush: async () => {
+          await store.getState().flush()
+          if (store.getState().saveStatus !== 'saved') throw new Error(t.editor.export.saveFailed)
+        },
         startExport: (req) => window.tomada.exporter.start(req),
         cancelExport: (id) => window.tomada.exporter.cancel(id),
         onProgress: (listener) => window.tomada.on('export:progress', listener),
@@ -578,13 +587,18 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   }, [transcript.status, transcript.data, detail.id, store, durationMs, notify])
 
   // --- exportação ---------------------------------------------------------------------------------------------
-  const flush = useCallback(() => store.getState().flush(), [store])
+  const flush = useCallback(async () => {
+    try {
+      await store.getState().flush()
+      if (store.getState().saveStatus !== 'saved') throw new Error(t.editor.export.saveFailed)
+    } catch (err) { throw new Error(`${t.editor.export.saveFailed}. ${err instanceof Error ? err.message : String(err)}`) }
+  }, [store])
   const exporter = useExportController(detail.id, flush,itemId)
 
   // Ao fechar o projeto, o que ainda não foi gravado vai para o disco.
   useEffect(
     () => () => {
-      void store.getState().flush()
+      void store.getState().flush().catch(() => undefined)
       store.getState().dispose()
     },
     [store]
@@ -595,6 +609,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       .getState()
       .flush()
       .then(() => go(itemId ? { name:'review',id:detail.id } : { name: 'library' }))
+      .catch(() => undefined)
   }, [store, go, itemId, detail.id])
 
   const value = useMemo<EditorCtx>(

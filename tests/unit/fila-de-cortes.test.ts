@@ -79,13 +79,13 @@ function harness(script: Record<string, Script>, over: Partial<QueueDeps> = {}) 
 const entries = (...ids: string[]) => ids.map((id, k) => ({ clipId: id, title: `Corte ${id}`, number: k + 1 }))
 
 describe('fila de exportação dos cortes', () => {
-  it('exporta um por vez, na ordem, e cada item guarda o arquivo e o texto; salva o projeto UMA vez antes', async () => {
+  it('exporta um por vez, na ordem, e cada item guarda o arquivo e o texto; confere save antes de cada corte', async () => {
     const h = harness({})
     const q = createClipQueue(h.deps)
     const seen: number[] = []
     q.subscribe((s) => seen.push(s.items.filter((i) => i.state === 'running').length))
     await q.getState().start(entries('a', 'b', 'c'))
-    expect(h.calls).toEqual(['flush', 'start a', 'start b', 'start c'])
+    expect(h.calls).toEqual(['flush', 'flush', 'start a', 'flush', 'start b', 'flush', 'start c'])
     expect(Math.max(...seen)).toBe(1) // nunca dois ao mesmo tempo
     const s = q.getState()
     expect(s.running).toBe(false)
@@ -214,8 +214,8 @@ describe('fila de exportação dos cortes', () => {
     await q.getState().start(entries('a', 'b'))
     expect(h.started).toEqual([])
     expect(q.getState().items.map((i) => [i.state, i.message])).toEqual([
-      ['error', 'Não consegui salvar o projeto antes de exportar: disco cheio'],
-      ['error', 'Não consegui salvar o projeto antes de exportar: disco cheio']
+      ['error', 'Não consegui salvar o projeto; nada foi exportado. disco cheio'],
+      ['error', 'Não consegui salvar o projeto; nada foi exportado. disco cheio']
     ])
   })
 

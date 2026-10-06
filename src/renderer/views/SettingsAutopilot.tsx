@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react'
 import { DEFAULT_AUTOPILOT, PIPELINE_STEPS, type AutopilotPrefs } from '@shared/autopilot'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
+import type { SettingsView } from '@shared/ipc'
 const T = t.autopilot
-export function SettingsAutopilot() {
+export function SettingsAutopilot({ view, changed }: { view?: SettingsView; changed?(view: SettingsView): void } = {}) {
   const [prefs,setPrefs] = useState(DEFAULT_AUTOPILOT)
   const notify = useApp((s) => s.notify)
-  useEffect(() => { void window.tomada.settings.get().then((s) => setPrefs({ ...DEFAULT_AUTOPILOT,...s.settings.autopilot })).catch((e:unknown) => notify({kind:'error',text:T.error,detail:String(e)})) },[notify])
+  useEffect(() => { if (view) setPrefs({ ...DEFAULT_AUTOPILOT, ...view.settings.autopilot }); else void window.tomada.settings.get().then((s) => setPrefs({ ...DEFAULT_AUTOPILOT,...s.settings.autopilot })).catch((e:unknown) => notify({kind:'error',text:T.error,detail:String(e)})) },[notify, view])
   const update = async (patch:Partial<AutopilotPrefs>) => {
-    try { const settings = await window.tomada.settings.update({autopilot:{...prefs,...patch,steps:{...prefs.steps,...patch.steps}}}); setPrefs({...DEFAULT_AUTOPILOT,...settings.settings.autopilot}) }
+    try { const settings = await window.tomada.settings.update({autopilot:{...prefs,...patch,steps:{...prefs.steps,...patch.steps}}}); setPrefs({...DEFAULT_AUTOPILOT,...settings.settings.autopilot}); changed?.(settings) }
     catch(e) { notify({kind:'error',text:T.error,detail:String(e)}) }
   }
   return <div className="grid gap-4" data-testid="settings-autopilot"><label className="grid gap-2">{T.mode}<select className="rounded-control border border-line bg-surface p-2" value={prefs.mode} data-testid="autopilot-mode" onChange={(e) => void update({mode:e.target.value as AutopilotPrefs['mode']})}><option value="everything">{T.everything}</option><option value="prepare">{T.prepare}</option><option value="nothing">{T.nothing}</option></select></label>
