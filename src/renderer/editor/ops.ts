@@ -19,7 +19,7 @@ export const QUICK_ZOOM_MS = 2000
 export type EditorOps = ReturnType<typeof useEditorOps>
 
 export function useEditorOps() {
-  const { store, playback, engineRef, durationMs, transcript, text } = useEditor()
+  const { store, playback, engineRef, durationMs, transcript, text, itemId } = useEditor()
   const words = transcript.data?.words ?? null
   return useMemo(() => {
     const st = () => store.getState()
@@ -64,7 +64,11 @@ export function useEditorOps() {
         const clean = value.replace(/\s+/g, ' ').trim()
         return st().change((p) => {
           const fixes = { ...(p.wordFixes ?? {}) }
-          if (clean.length === 0 || clean === original.trim()) delete fixes[String(word.i)]
+          if (clean.length === 0 || clean === original.trim()) {
+            // O item herda a edição comum; ausência de chave a reaplicaria ao salvar/reabrir.
+            if (itemId) fixes[String(word.i)] = original.trim()
+            else delete fixes[String(word.i)]
+          }
           else fixes[String(word.i)] = clean
           const next = { ...p }
           if (Object.keys(fixes).length > 0) next.wordFixes = fixes
@@ -204,5 +208,5 @@ export function useEditorOps() {
       engine: () => engineRef.current
     }
     return ops
-  }, [store, playback, engineRef, durationMs, words, text])
+  }, [store, playback, engineRef, durationMs, words, text, itemId])
 }

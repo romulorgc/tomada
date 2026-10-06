@@ -623,6 +623,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   const value = useMemo<EditorCtx>(
     () => ({
       detail,
+      itemId,
       store,
       playback,
       engineRef,
@@ -649,7 +650,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, store, playback, cursorData, rawData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
+    [detail, itemId, store, playback, cursorData, rawData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (
