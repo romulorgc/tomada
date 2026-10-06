@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { FIXTURES_DIR } from '../helpers/fs'
-import { launchTomada, type Session } from './helpers'
+import { launchTomada, setContentSize, shot, type Session } from './helpers'
 
 /**
  * CASO REAL do usuário (06/10/2026): fone USB com o volume de entrada do Windows em 0% (faixa 0 a +23,8 dB) e fala em -38 dBFS de pico.
@@ -44,6 +44,7 @@ test('volume de entrada no mínimo e fala em -38 dBFS: aviso alto com o nome do 
     TOMADA_TEST_HIDDEN: '1',
     TOMADA_TEST_MIC_VOLUME: JSON.stringify({ name: 'Microfone (USB PnP Sound Device)', db: 0, minDb: 0, maxDb: 23.8125, stepDb: 0.1875 })
   } })
+  await setContentSize(session, 1280, 900)
   await session.page.getByTestId('nav-record').click()
   const check = session.page.getByTestId('mic-level-check')
   await expect(session.page.getByTestId('mic-name')).toHaveText('Microfone (USB PnP Sound Device)')
@@ -56,6 +57,7 @@ test('volume de entrada no mínimo e fala em -38 dBFS: aviso alto com o nome do 
   await expect(warning).toContainText('no mínimo')
   await expect(warning).toContainText('dBFS de pico', { timeout: 20_000 })
   await expect(check).toHaveAttribute('data-status', 'too-low')
+  await shot(session.page, 'mic-baixo-aviso')
 
   await session.page.getByTestId('mic-adjust').click()
   await expect(session.page.getByTestId('mic-adjust-status')).toBeVisible()
@@ -65,6 +67,7 @@ test('volume de entrada no mínimo e fala em -38 dBFS: aviso alto com o nome do 
   await expect(result).toHaveAttribute('data-outcome', 'at-max')
   await expect(result).toContainText('chegou ao máximo')
   await expect(session.page.getByTestId('mic-windows-volume')).toContainText('100%')
+  await shot(session.page, 'mic-baixo-ajustado')
 })
 
 test('microfone com a voz em nível normal (-12 dBFS de pico) e volume de entrada a 85%: só mostra o nome, sem aviso', async () => {
