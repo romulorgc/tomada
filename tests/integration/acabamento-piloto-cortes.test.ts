@@ -40,11 +40,13 @@ describe('quantidade e nota dos cortes no piloto', () => {
     expect(w.project().clips.every((c) => !w.project().review?.items[c.id]?.lowScore)).toBe(true)
   })
 
-  it('mantém o piso de 50 na entrega de reserva mesmo com a nota configurada abaixo de 50', async () => {
+  it('com a nota configurada abaixo de 50 entrega o que a alcança e nunca desce além dela', async () => {
     const provider = createMockProvider({ recorded: [{ task: 'clips', match: '', response: { clips: [clipResponse(45, 0), clipResponse(29, 1), clipResponse(20, 2)] } }] })
     const w = await pilotWorld({ provider })
     w.prefs.minScore = 30
     await w.service.start('acabamento')
-    expect(w.project().clips).toEqual([])
+    const doc = w.project()
+    expect(doc.clips.map((c) => c.score)).toEqual([45])
+    expect(doc.review?.items[doc.clips[0]!.id]?.lowScore).toBeFalsy()
   })
 })
