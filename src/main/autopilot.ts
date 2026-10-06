@@ -131,6 +131,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     // cliques no espaço dele; um clique fora do recorte, na barra de abas, não abre zoom e o foco de um zoom é lido dentro do recorte).
     return applyScreenCrop(prepareEvents(eventsFromText(texts), durationMs), project)
   }
+  const automaticExportEnabled = (itemId: string, prefs = deps.prefs()): boolean => prefs.mode === 'everything' && prefs.steps[itemId === 'youtube' ? 'youtube' : 'clipExports'] !== false
   async function exportItem(id: string, itemId: string): Promise<void> {
     // Cada exportação nasce de uma revisão da edição do item. Se o usuário ajustar durante a exportação (updateItem sobe a revisão
     // e deixa o item "queued"), o fim da exportação antiga não pode apagar essa pendência: a reexportação ainda precisa rodar.
@@ -203,7 +204,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
               const first = t.words.find((w) => w.i === correction.i), last = t.words.find((w) => w.i === (correction.last ?? correction.i))
               return first && last && (!ranges || ranges.some((r) => r.start < last.end && r.end > first.start))
             })
-            if (changed) items[itemId] = { ...item, phase: 'queued', revision: (item.revision ?? 0) + 1, exportPath: undefined, textPath: undefined, error: undefined }
+            if (changed) items[itemId] = { ...item, phase: automaticExportEnabled(itemId, prefs) ? 'queued' : undefined, revision: (item.revision ?? 0) + 1, exportPath: undefined, textPath: undefined, error: undefined }
           }
           return { ...next, review: { ...next.review, items } }
         })
@@ -593,7 +594,12 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         if (project.autopilot?.status === 'running' || (pending && !project.autopilot)) await service.start(entry.id).catch(() => undefined)
         else if (pending) await settleIntent(entry.id)
         const latest = (await deps.store.read(entry.id)).project
-        for (const [itemId,item] of Object.entries(latest.review?.items ?? {})) if (item.phase === 'queued' || item.phase === 'exporting') void enqueue(() => exportItem(entry.id,itemId))
+        for (const [itemId,item] of Object.entries(latest.review?.items ?? {})) {
+          if (item.phase !== 'queued' && item.phase !== 'exporting') continue
+          if (automaticExportEnabled(itemId)) void enqueue(() => exportItem(entry.id,itemId))
+          // Uma fila de versão anterior também obedece aos ajustes atuais. Sem arquivo pronto, o botão Exportar permite o pedido explícito.
+          else await change(entry.id, (p) => updateReviewItem(p, itemId, { phase: undefined, exportPath: undefined, textPath: undefined, error: undefined }, false))
+        }
       }
     },
     async idle() { await queue },
