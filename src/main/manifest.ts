@@ -7,6 +7,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { ProcessStepId, StopReason } from '@shared/ipc'
+import { cameraCaptureInfoSchema, type CameraCaptureInfo } from '@shared/camera-quality'
 import type { FrameRate, Interval, RecordMode } from '@shared/recording'
 import type { CameraStyleChoice, CaptureInfo, Project, Rect, Size } from '@shared/types'
 import type { VideoScript } from '@shared/script'
@@ -45,6 +46,10 @@ export type ManifestCamera = {
   hasVideo: boolean
   hasAudio: boolean
   size: Size | null
+  /** O que a abertura da câmera decidiu (degrau, qps medidos): o aviso de poucos qps do processamento fala disto. */
+  capture?: CameraCaptureInfo
+  /** Quadros por segundo REALMENTE gravados no bruto (medidos no passo "camera" do processamento). */
+  measured?: { fps: number; width: number; height: number }
 }
 
 export type ManifestClock = {
@@ -129,6 +134,8 @@ export async function readManifest(dir: string): Promise<RecordingManifest> {
   for (const p of parsed.pauses) if (!finite(p?.start) || !finite(p?.end) || p.end < p.start) throw new Error('Pausa inválida no manifesto de gravação.')
   for (const value of [parsed.endedAt, parsed.recordedMs, parsed.lastChunkAt, parsed.openPauseAt]) if (value !== null && value !== undefined && !finite(value)) throw new Error('Tempo inválido no manifesto de gravação.')
   if (parsed.autopilotPending !== undefined && typeof parsed.autopilotPending !== 'boolean') throw new Error('Intenção do piloto inválida no manifesto de gravação.')
+  // O que a abertura da câmera decidiu é só informação para o aviso: se não bate com o formato, some (o aviso fala do que sabe).
+  if (parsed.camera && parsed.camera.capture !== undefined && !cameraCaptureInfoSchema.safeParse(parsed.camera.capture).success) delete parsed.camera.capture
   if (parsed.cameraStyle !== undefined && parsed.cameraStyle !== 'side-by-side' && parsed.cameraStyle !== 'presenter') throw new Error('Estilo da câmera inválido no manifesto de gravação.')
   return parsed
 }

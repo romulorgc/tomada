@@ -14,6 +14,7 @@ import { z } from 'zod'
 import { videoScriptSchema, type VideoScript } from './script'
 import { normalizePoint } from './geometry'
 import { FULL_RECT, sanitizeRect } from './crop'
+import { CAMERA_QUALITIES, DEFAULT_CAMERA_QUALITY, type CameraQuality } from './camera-quality'
 import type { CameraStyleChoice, ClickEvent, ContentRectSample, CursorSample, KeyEvent, MouseButton, Rect, Size, WindowRectSample } from './types'
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,8 @@ export type RecordPrefs = {
   showBubble: boolean
   /** Moldura-guia sobre a prévia da câmera (onde ficam a cabeça, o tronco e as mãos), para o layout Apresentador. Só na prévia: não vai para o vídeo. */
   framingGuide: boolean
+  /** Qualidade da câmera (Ajustes): "Máxima" abre o 4K quando a luz deixa a câmera sustentar 30 qps; "Alta" fica no 1080p. */
+  cameraQuality: CameraQuality
   /** Estilo da câmera (só com tela + câmera): quadro ao lado ou apresentador recortado. Lembra a última escolha; Ajustes mostra o mesmo padrão. */
   cameraStyle: CameraStyleChoice
   /** Já escolhemos câmera e microfone padrão na primeira abertura? (null ≠ "nunca escolheu") */
@@ -69,6 +72,7 @@ export const DEFAULT_RECORD_PREFS: RecordPrefs = {
   showBubble: true,
   framingGuide: true,
   cameraStyle: 'side-by-side',
+  cameraQuality: DEFAULT_CAMERA_QUALITY,
   setupDone: false,
   hideCursor: true,
   retakeShortcut: 'Ctrl+Alt+Z',
@@ -90,6 +94,7 @@ const recordPrefsSchema = z.looseObject({
   showBubble: z.boolean().catch(DEFAULT_RECORD_PREFS.showBubble),
   framingGuide: z.boolean().catch(DEFAULT_RECORD_PREFS.framingGuide),
   cameraStyle: z.enum(['side-by-side', 'presenter']).catch(DEFAULT_RECORD_PREFS.cameraStyle),
+  cameraQuality: z.enum(CAMERA_QUALITIES as [CameraQuality, ...CameraQuality[]]).catch(DEFAULT_RECORD_PREFS.cameraQuality),
   setupDone: z.boolean().catch(DEFAULT_RECORD_PREFS.setupDone),
   hideCursor: z.boolean().catch(DEFAULT_RECORD_PREFS.hideCursor),
   retakeShortcut: retakeShortcutSchema.catch(DEFAULT_RECORD_PREFS.retakeShortcut),
@@ -114,6 +119,7 @@ export function normalizeRecordPrefs(raw: unknown): RecordPrefs {
     showBubble: parsed.showBubble,
     framingGuide: parsed.framingGuide,
     cameraStyle: parsed.cameraStyle,
+    cameraQuality: parsed.cameraQuality,
     setupDone: parsed.setupDone,
     hideCursor: parsed.hideCursor,
     retakeShortcut: parsed.retakeShortcut,
@@ -135,6 +141,8 @@ export type RecordRequest = {
   hideCursor: boolean
   /** Só com tela + câmera. Ausente = quadro ao lado. */
   cameraStyle?: CameraStyleChoice
+  /** Qualidade da câmera; ausente = Máxima. */
+  cameraQuality?: CameraQuality
   script?: VideoScript
   retakeShortcut?: string
 }
@@ -150,6 +158,7 @@ export const recordRequestSchema = z.object({
   showBubble: z.boolean(),
   hideCursor: z.boolean(),
   cameraStyle: z.enum(['side-by-side', 'presenter']).optional(),
+  cameraQuality: z.enum(CAMERA_QUALITIES as [CameraQuality, ...CameraQuality[]]).optional(),
   script: videoScriptSchema.optional(),
   retakeShortcut: retakeShortcutSchema.optional()
 })

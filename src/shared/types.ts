@@ -10,6 +10,7 @@
  */
 
 import type { PipelineState } from './autopilot'
+import type { CameraCaptureReport } from './camera-quality'
 import type { ReviewState } from './review'
 import type { VideoScript } from './script'
 import type { RetakeMark } from './retake-marker'
@@ -388,6 +389,8 @@ export type Project = {
   retakeMarks?: RetakeMark[]
   /** O estilo da câmera escolhido ao gravar (ausente = quadro ao lado). */
   cameraStyle?: CameraStyleChoice
+  /** O que a câmera entregou ao gravar (medido no arquivo bruto); `warning` aparece na Revisão quando foram poucos qps. */
+  cameraCapture?: CameraCaptureReport
 }
 
 /**

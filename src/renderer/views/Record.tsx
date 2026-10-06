@@ -37,6 +37,7 @@ function requestFromPrefs(prefs: RecordPrefs, script: VideoScript | null): Recor
     systemAudio: mode === 'camera' ? false : prefs.systemAudio,
     showBubble: prefs.showBubble,
     hideCursor: prefs.hideCursor,
+    cameraQuality: prefs.cameraQuality,
     ...(mode === 'screen-camera' ? { cameraStyle: prefs.cameraStyle } : {}),
     retakeShortcut: prefs.retakeShortcut,
     ...(script ? { script } : {})

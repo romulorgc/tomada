@@ -11,6 +11,7 @@ import { z } from 'zod'
 import { videoScriptSchema } from './script'
 import { retakeMarkSchema } from './retake-marker'
 import { pipelineSchema } from './autopilot'
+import { cameraCaptureReportSchema } from './camera-quality'
 import { reviewItemSchema } from './review-schema'
 import type { CaptionStyle, CaptionStyleId, CaptureInfo, Project, Src, Style } from './types'
 
@@ -323,7 +324,8 @@ export const projectSchema = z.looseObject({
   meta: metaSchema.optional(),
   script: videoScriptSchema.optional(),
   retakeMarks: z.array(retakeMarkSchema).optional(),
-  cameraStyle: z.enum(['side-by-side', 'presenter']).optional()
+  cameraStyle: z.enum(['side-by-side', 'presenter']).optional(),
+  cameraCapture: cameraCaptureReportSchema.optional()
 })
 
 // Garante em tempo de compilação que o esquema produz o tipo `Project`.

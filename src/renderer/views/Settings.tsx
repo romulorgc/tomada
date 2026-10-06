@@ -8,6 +8,7 @@ import { AiSettings, TranscriptionSettings } from './SettingsTranscription'
 import { CameraSyncSettings } from './SettingsCameraSync'
 import { SettingsAutopilot } from './SettingsAutopilot'
 import { SettingsCameraStyle } from './SettingsCameraStyle'
+import { SettingsCameraQuality } from './SettingsCameraQuality'
 import { SettingsDefaults, SettingsExportDefaults, SettingsShortcuts } from './SettingsDefaults'
 import { m5Settings } from '../i18n/m5-settings'
 
@@ -228,6 +229,10 @@ export function Settings() {
 
       <Section title={t.settings.cameraStyle.title} help={t.settings.cameraStyle.help} testId="settings-camera-style">
         <SettingsCameraStyle />
+      </Section>
+
+      <Section title={t.settings.cameraQuality.title} help={t.settings.cameraQuality.help} testId="settings-camera-quality">
+        <SettingsCameraQuality />
       </Section>
 
       <Section title={t.settings.cameraSync.title} help={t.settings.cameraSync.help} testId="settings-camera-sync">
