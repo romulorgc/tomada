@@ -378,49 +378,92 @@ describe('consertos da revisão independente da M4d', () => {
   })
 })
 
-/** O serviço da câmera (M4c) como o piloto o enxerga: espera da fila, o recorte que já vale e o pedido de análise. */
-function makeCamera(matte: boolean, hold?: Promise<void>) {
+/** O serviço da câmera (M4c) como o piloto o enxerga: espera da fila, o recorte que já vale, o pedido de análise e o estado dos trabalhos. */
+function makeCamera(opts: { matte?: boolean; hold?: Promise<void>; analyzeError?: string; jobError?: string } = {}) {
   return {
-    idle: vi.fn(async () => { await hold }),
-    result: vi.fn(async (_id: string, kind: string) => (matte && kind === 'matte' ? 'tomada-media://p/media/camera-matte.mp4' : null)),
-    analyze: vi.fn(async () => ({ id: 'trabalho' }))
+    idle: vi.fn(async () => { await opts.hold }),
+    result: vi.fn(async (_id: string, kind: string) => (opts.matte && kind === 'matte' ? 'tomada-media://p/media/camera-matte.mp4' : null)),
+    analyze: vi.fn(async () => { if (opts.analyzeError) throw new Error(opts.analyzeError); return { id: 'trabalho' } }),
+    view: vi.fn(async () => ({ jobs: opts.jobError ? [{ projectId: id, kind: 'matte', state: 'error', fraction: 0, error: opts.jobError }] : [] }))
   }
 }
 
-describe('piloto automático × câmera da M4c (quadro ao lado e apresentador recortado)', () => {
-  const withCamera = (doc: Project): Project => {
+describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c)', () => {
+  const withCamera = (doc: Project, style?: 'side-by-side' | 'presenter'): Project => {
     doc.sources.camera = { path: 'media/camera.mp4', w: 1280, h: 720, fps: 30, durationMs: 20_000 }
+    if (style) doc.cameraStyle = style
     return doc
   }
   /** Fala corrida de 1 s a 12 s, sem nada acontecendo na tela: o automático escolhe o layout com a câmera. */
   const talk: Transcript = { ...transcript, words: Array.from({ length: 36 }, (_, i) => ({ i, text: `p${i}`, start: 1000 + i * 300, end: 1000 + i * 300 + 280, prob: 1, kind: 'word' as const })), vad: [{ start: 1000, end: 12_000 }] }
+  const layoutsOf = (p: Project) => ({ horizontal: new Set(p.layouts.map((l) => l.layout)), vertical: new Set(p.vertical!.layouts.map((l) => l.layout)) })
+  const detailOf = (p: Project) => p.autopilot!.steps.find((step) => step.id === 'layouts')!.detail ?? ''
 
-  it('sem o recorte do fundo, a fala sem atividade vira lado a lado no 16:9 e V-B no vertical', async () => {
-    const doc = withCamera(baseProject())
-    finishedPipeline(doc)
-    const w = await world(doc, { transcript: talk, camera: makeCamera(false) })
-    await w.service.retry(id, 'layouts')
-    const stored = w.project()
-    expect(stored.layouts.length).toBeGreaterThan(0)
-    expect(stored.layouts.every((l) => l.layout === 'side-by-side')).toBe(true)
-    expect(stored.vertical!.layouts.length).toBeGreaterThan(0)
-    expect(stored.vertical!.layouts.every((l) => l.layout === 'stack')).toBe(true)
+  it('Apresentador: pede o recorte do fundo ao começar, espera, e a fala sem atividade vira Apresentador (16:9) e V-D (9:16)', async () => {
+    const doc = withCamera(baseProject(), 'presenter')
+    const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
+    await w.service.start(id)
+    expect(w.camera!.analyze).toHaveBeenCalledWith(id, 'matte')
+    expect(w.camera!.idle).toHaveBeenCalled()
+    const { horizontal, vertical } = layoutsOf(w.project())
+    expect([...horizontal]).toEqual(['presenter'])
+    expect([...vertical]).toEqual(['presenter'])
+    expect(detailOf(w.project())).not.toMatch(/recorte do fundo falhou/)
   })
-  it('com o recorte do fundo pronto, o automático escolhe o Apresentador (16:9) e o V-D (9:16) onde a câmera aparece', async () => {
+  it('Quadro ao lado: lado a lado no 16:9 e V-B no 9:16, e nunca pede o recorte nem escolhe Apresentador, mesmo com um recorte antigo pronto', async () => {
+    const doc = withCamera(baseProject(), 'side-by-side')
+    const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
+    await w.service.start(id)
+    expect(w.camera!.analyze).not.toHaveBeenCalledWith(id, 'matte')
+    const { horizontal, vertical } = layoutsOf(w.project())
+    expect([...horizontal]).toEqual(['side-by-side'])
+    expect([...vertical]).toEqual(['stack'])
+  })
+  it('projeto antigo, sem o campo do estilo, é Quadro ao lado', async () => {
     const doc = withCamera(baseProject())
-    finishedPipeline(doc)
-    const w = await world(doc, { transcript: talk, camera: makeCamera(true) })
-    await w.service.retry(id, 'layouts')
-    const stored = w.project()
-    expect(stored.layouts.length).toBeGreaterThan(0)
-    expect(stored.layouts.every((l) => l.layout === 'presenter')).toBe(true)
-    expect(stored.vertical!.layouts.length).toBeGreaterThan(0)
-    expect(stored.vertical!.layouts.every((l) => l.layout === 'presenter')).toBe(true)
+    expect(doc.cameraStyle).toBeUndefined()
+    const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
+    await w.service.start(id)
+    expect(w.camera!.analyze).not.toHaveBeenCalledWith(id, 'matte')
+    const { horizontal, vertical } = layoutsOf(w.project())
+    expect([...horizontal]).toEqual(['side-by-side'])
+    expect([...vertical]).toEqual(['stack'])
+  })
+  it('Apresentador com o motor do recorte sem preparo: cai no quadro ao lado e V-B e a Revisão mostra o motivo e o caminho', async () => {
+    const doc = withCamera(baseProject(), 'presenter')
+    const w = await world(doc, { transcript: talk, camera: makeCamera({ analyzeError: 'O recorte do fundo ainda não foi preparado neste computador.' }) })
+    await w.service.start(id)
+    const { horizontal, vertical } = layoutsOf(w.project())
+    expect([...horizontal]).toEqual(['side-by-side'])
+    expect([...vertical]).toEqual(['stack'])
+    const detail = detailOf(w.project())
+    expect(detail).toContain('O recorte do fundo falhou; usei o quadro ao lado.')
+    expect(detail).toContain('ainda não foi preparado')
+    expect(detail).toContain('Câmera → Recortar de novo')
+    expect(w.project().autopilot!.steps.find((step) => step.id === 'layouts')!.status).toBe('done')
+  })
+  it('Apresentador com o recorte que falhou no meio: o erro do trabalho aparece no motivo', async () => {
+    const doc = withCamera(baseProject(), 'presenter')
+    const w = await world(doc, { transcript: talk, camera: makeCamera({ jobError: 'A placa de vídeo ficou sem memória.' }) })
+    await w.service.start(id)
+    const detail = detailOf(w.project())
+    expect(detail).toContain('O recorte do fundo falhou; usei o quadro ao lado.')
+    expect(detail).toContain('A placa de vídeo ficou sem memória.')
+    expect([...layoutsOf(w.project()).vertical]).toEqual(['stack'])
+  })
+  it('as escolhas manuais de layout do usuário continuam preservadas nos dois estilos', async () => {
+    for (const style of ['presenter', 'side-by-side'] as const) {
+      const doc = withCamera(baseProject(), style)
+      doc.layouts = [{ id: 'meu-layout', start: 1000, end: 4000, layout: 'screen', origin: 'manual' }]
+      const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
+      await w.service.start(id)
+      expect(w.project().layouts.find((l) => l.id === 'meu-layout')).toMatchObject({ layout: 'screen', origin: 'manual' })
+    }
   })
   it('a Revisão aceita escolher o Apresentador por item e pede o recorte do fundo ao serviço da câmera', async () => {
     const doc = withCamera(baseProject())
     addClip(doc)
-    const w = await world(doc, { camera: makeCamera(false) })
+    const w = await world(doc, { camera: makeCamera() })
     const handlers = createHandlers({ autopilot: w.service } as HandlerDeps)
     await handlers['review:update'](id, 'clip-1', { layout: 'presenter' }, false)
     expect(itemOf(w.project(), 'clip-1').layout).toBe('presenter')
@@ -434,7 +477,7 @@ describe('piloto automático × câmera da M4c (quadro ao lado e apresentador re
     finishedPipeline(doc)
     let release!: () => void
     const hold = new Promise<void>((resolve) => { release = resolve })
-    const w = await world(doc, { camera: makeCamera(false, hold) })
+    const w = await world(doc, { camera: makeCamera({ hold }) })
     const exporting = w.service.reexport(id, 'youtube')
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(w.start).not.toHaveBeenCalled()

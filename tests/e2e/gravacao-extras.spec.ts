@@ -257,6 +257,9 @@ test('moldura-guia na prévia da câmera: aparece com a dica, só na prévia, e 
   await page.getByTestId('nav-record').click()
   await expect(page.getByTestId('camera-preview')).toHaveAttribute('data-live', 'true', { timeout: 20_000 })
   const guide = page.getByTestId('framing-guide')
+  // a moldura é do estilo Apresentador recortado: no Quadro ao lado (padrão) ela não aparece
+  await expect(guide).toHaveCount(0)
+  await page.getByTestId('camera-style-presenter').click()
   await expect(guide).toBeVisible()
   await expect(guide).toContainText('tronco e as mãos')
   await expect(guide).toContainText('luz de frente')

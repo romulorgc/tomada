@@ -302,7 +302,8 @@ export const projectSchema = z.looseObject({
   review: z.looseObject({ items: z.record(z.string(), reviewItemSchema.extend({ edits: z.object({ cuts: z.array(cutSchema), zooms: z.array(zoomSchema), layouts: z.array(layoutSegSchema), captions: captionStyleSchema, style: styleSchema, autoExclusions:autoExclusionsSchema.optional(), wordFixes:z.record(z.string(),z.string()).optional(), mutes:z.array(muteSchema).optional(), meta:metaSchema.optional(), zoomPreset:z.enum(['subtle','moderate','intense','off']).optional() }).optional() })), metaOrigin: z.enum(['auto','manual']).optional(), titleOrigin: z.enum(['auto','manual']).optional() }).optional(),
   meta: metaSchema.optional(),
   script: videoScriptSchema.optional(),
-  retakeMarks: z.array(retakeMarkSchema).optional()
+  retakeMarks: z.array(retakeMarkSchema).optional(),
+  cameraStyle: z.enum(['side-by-side', 'presenter']).optional()
 })
 
 // Garante em tempo de compilação que o esquema produz o tipo `Project`.

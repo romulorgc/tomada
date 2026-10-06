@@ -496,6 +496,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           saved: null,
           processedAt: null,
           ...(request.script ? { script: request.script } : {}),
+          ...(request.mode === 'screen-camera' && hasVideo && request.cameraStyle ? { cameraStyle: request.cameraStyle } : {}),
           retakeMarks: []
         }
         await writeManifest(dir, manifest)

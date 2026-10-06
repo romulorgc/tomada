@@ -8,7 +8,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ProcessStepId, StopReason } from '@shared/ipc'
 import type { FrameRate, Interval, RecordMode } from '@shared/recording'
-import type { CaptureInfo, Project, Rect, Size } from '@shared/types'
+import type { CameraStyleChoice, CaptureInfo, Project, Rect, Size } from '@shared/types'
 import type { VideoScript } from '@shared/script'
 import type { RetakeMark } from '@shared/retake-marker'
 import { writeFileAtomic } from './fs-utils'
@@ -87,6 +87,8 @@ export type RecordingManifest = {
    * apagado pelo piloto quando o estado dele já está no project.json: fechar o app no intervalo não perde a intenção.
    */
   autopilotPending?: boolean
+  /** O estilo da câmera escolhido na tela Gravar (só com tela + câmera). Ausente = quadro ao lado. */
+  cameraStyle?: CameraStyleChoice
   script?: VideoScript
   retakeMarks?: RetakeMark[]
   processing?: { done: ProcessStepId[]; sources: Project['sources'] }

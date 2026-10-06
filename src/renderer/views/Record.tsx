@@ -265,6 +265,7 @@ export function Record() {
       systemAudio: mode === 'camera' ? false : prefs.systemAudio,
       showBubble: prefs.showBubble,
       hideCursor: prefs.hideCursor,
+      ...(mode === 'screen-camera' ? { cameraStyle: prefs.cameraStyle } : {}),
       retakeShortcut: prefs.retakeShortcut,
       ...(script ? { script } : {})
     }
@@ -391,7 +392,7 @@ export function Record() {
               <div className="mb-3 flex items-center gap-2 text-muted">
                 <CameraIcon size={18} /> <span className="text-[0.9375rem] font-medium">{t.record.modes.camera}</span>
               </div>
-              <CameraPreview stream={preview.stream} loading={preview.loading} guide={prefs.framingGuide} />
+              <CameraPreview stream={preview.stream} loading={preview.loading} />
             </section>
           )}
           <ScriptPanel script={script} onChange={setScript} prefs={prefs} setPrefs={setPrefs} disabled={!idle} />
@@ -415,8 +416,24 @@ export function Record() {
                   </option>
                 ))}
               </select>
-              {prefs.mode === 'screen-camera' ? <CameraPreview stream={preview.stream} loading={preview.loading} guide={prefs.framingGuide} /> : null}
+              {prefs.mode === 'screen-camera' ? <CameraPreview stream={preview.stream} loading={preview.loading} guide={prefs.framingGuide && prefs.cameraStyle === 'presenter'} /> : null}
               {lists.cameras.length === 0 ? <p className="text-[0.8125rem] text-muted">{t.record.camera.noDevices}</p> : null}
+            </Field>
+          ) : null}
+
+          {mode === 'screen-camera' ? (
+            <Field title={t.record.cameraStyle.title} help={t.record.cameraStyle.help[prefs.cameraStyle]}>
+              <Segmented
+                label={t.record.cameraStyle.title}
+                value={prefs.cameraStyle}
+                options={[
+                  { value: 'side-by-side' as const, label: t.record.cameraStyle['side-by-side'] },
+                  { value: 'presenter' as const, label: t.record.cameraStyle.presenter }
+                ]}
+                onChange={(cameraStyle) => setPrefs({ cameraStyle })}
+                testPrefix="camera-style"
+                disabled={!idle}
+              />
             </Field>
           ) : null}
 
@@ -472,7 +489,7 @@ export function Record() {
             <div className="mt-3 grid gap-3">
               <Switch checked={prefs.noiseSuppression} onChange={(v) => setPrefs({ noiseSuppression: v })} label={t.record.advanced.noiseSuppression} testId="noise-toggle" disabled={!idle} />
               <Switch checked={prefs.echoCancellation} onChange={(v) => setPrefs({ echoCancellation: v })} label={t.record.advanced.echoCancellation} testId="echo-toggle" disabled={!idle} />
-              {wantsCamera ? <Switch checked={prefs.framingGuide} onChange={(v) => setPrefs({ framingGuide: v })} label={t.record.advanced.framingGuide} testId="guide-toggle" disabled={!idle} /> : null}
+              {mode === 'screen-camera' && prefs.cameraStyle === 'presenter' ? <Switch checked={prefs.framingGuide} onChange={(v) => setPrefs({ framingGuide: v })} label={t.record.advanced.framingGuide} testId="guide-toggle" disabled={!idle} /> : null}
               {prefs.mode === 'screen-camera' ? <Switch checked={prefs.showBubble} onChange={(v) => setPrefs({ showBubble: v })} label={t.record.advanced.bubble} testId="bubble-toggle" disabled={!idle} /> : null}
               <label className="grid gap-1 text-[0.8125rem] text-muted">{t.preparation.retakeShortcut}<select className="field" value={prefs.retakeShortcut} disabled={!idle} onChange={(e) => setPrefs({ retakeShortcut: e.target.value })} data-testid="retake-shortcut">{['Ctrl+Alt+Z', 'Ctrl+Alt+X', 'Ctrl+Alt+E', 'Ctrl+Shift+E', 'Alt+Shift+E'].map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
             </div>

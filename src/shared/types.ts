@@ -218,6 +218,13 @@ export type CaptionStyle = {
   highlightWord?: boolean
 }
 
+/**
+ * Como a câmera aparece, escolhido na tela Gravar (M4c): `side-by-side` = o rosto num quadro ao lado da tela, COM o fundo da webcam;
+ * `presenter` = o apresentador recortado, SEM o fundo. O piloto automático decide os layouts por esta escolha, nunca pela existência
+ * do recorte. Ausente (projetos antigos) = `side-by-side`.
+ */
+export type CameraStyleChoice = 'side-by-side' | 'presenter'
+
 export type ClipFormat = 'vertical' | 'horizontal'
 /** O layout de um corte vertical: `auto` segue a escolha por atividade do projeto; os outros fixam o layout no corte todo. */
 export type VerticalLayout = 'auto' | 'stack' | 'screen-focus' | 'screen-wide' | 'camera' | 'presenter'
@@ -357,6 +364,8 @@ export type Project = {
   meta?: ProjectMeta
   script?: VideoScript
   retakeMarks?: RetakeMark[]
+  /** O estilo da câmera escolhido ao gravar (ausente = quadro ao lado). */
+  cameraStyle?: CameraStyleChoice
 }
 
 /**

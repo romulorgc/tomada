@@ -13,7 +13,7 @@
 import { z } from 'zod'
 import { videoScriptSchema, type VideoScript } from './script'
 import { normalizePoint } from './geometry'
-import type { ClickEvent, CursorSample, KeyEvent, MouseButton, Rect, Size, WindowRectSample } from './types'
+import type { CameraStyleChoice, ClickEvent, CursorSample, KeyEvent, MouseButton, Rect, Size, WindowRectSample } from './types'
 
 // ---------------------------------------------------------------------------
 // Preferências e pedido de gravação
@@ -40,6 +40,8 @@ export type RecordPrefs = {
   showBubble: boolean
   /** Moldura-guia sobre a prévia da câmera (onde ficam a cabeça, o tronco e as mãos), para o layout Apresentador. Só na prévia: não vai para o vídeo. */
   framingGuide: boolean
+  /** Estilo da câmera (só com tela + câmera): quadro ao lado ou apresentador recortado. Lembra a última escolha; Ajustes mostra o mesmo padrão. */
+  cameraStyle: CameraStyleChoice
   /** Já escolhemos câmera e microfone padrão na primeira abertura? (null ≠ "nunca escolheu") */
   setupDone: boolean
   /**
@@ -65,6 +67,7 @@ export const DEFAULT_RECORD_PREFS: RecordPrefs = {
   echoCancellation: false,
   showBubble: true,
   framingGuide: true,
+  cameraStyle: 'side-by-side',
   setupDone: false,
   hideCursor: true,
   retakeShortcut: 'Ctrl+Alt+Z',
@@ -85,6 +88,7 @@ const recordPrefsSchema = z.looseObject({
   echoCancellation: z.boolean().catch(DEFAULT_RECORD_PREFS.echoCancellation),
   showBubble: z.boolean().catch(DEFAULT_RECORD_PREFS.showBubble),
   framingGuide: z.boolean().catch(DEFAULT_RECORD_PREFS.framingGuide),
+  cameraStyle: z.enum(['side-by-side', 'presenter']).catch(DEFAULT_RECORD_PREFS.cameraStyle),
   setupDone: z.boolean().catch(DEFAULT_RECORD_PREFS.setupDone),
   hideCursor: z.boolean().catch(DEFAULT_RECORD_PREFS.hideCursor),
   retakeShortcut: retakeShortcutSchema.catch(DEFAULT_RECORD_PREFS.retakeShortcut),
@@ -108,6 +112,7 @@ export function normalizeRecordPrefs(raw: unknown): RecordPrefs {
     echoCancellation: parsed.echoCancellation,
     showBubble: parsed.showBubble,
     framingGuide: parsed.framingGuide,
+    cameraStyle: parsed.cameraStyle,
     setupDone: parsed.setupDone,
     hideCursor: parsed.hideCursor,
     retakeShortcut: parsed.retakeShortcut,
@@ -127,6 +132,8 @@ export type RecordRequest = {
   showBubble: boolean
   /** Pede `cursor: 'never'` na captura (o Chromium pode ignorar; vale o que a trilha informar). */
   hideCursor: boolean
+  /** Só com tela + câmera. Ausente = quadro ao lado. */
+  cameraStyle?: CameraStyleChoice
   script?: VideoScript
   retakeShortcut?: string
 }
@@ -141,6 +148,7 @@ export const recordRequestSchema = z.object({
   systemAudio: z.boolean(),
   showBubble: z.boolean(),
   hideCursor: z.boolean(),
+  cameraStyle: z.enum(['side-by-side', 'presenter']).optional(),
   script: videoScriptSchema.optional(),
   retakeShortcut: retakeShortcutSchema.optional()
 })

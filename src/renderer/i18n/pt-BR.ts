@@ -817,6 +817,15 @@ export const ptBR = {
       off: 'Sem câmera: só a tela e o som.',
       noDevices: 'Nenhuma câmera encontrada.'
     },
+    cameraStyle: {
+      title: 'Estilo da câmera',
+      'side-by-side': 'Quadro ao lado',
+      presenter: 'Apresentador recortado',
+      help: {
+        'side-by-side': 'Seu rosto num quadro ao lado da tela, com o fundo da webcam.',
+        presenter: 'Você sem o fundo, na frente da tela. Mostre o tronco e as mãos, com a luz de frente.'
+      }
+    },
     mic: {
       title: 'Microfone',
       none: 'Sem microfone',
@@ -960,6 +969,10 @@ export const ptBR = {
   bubble: { label: 'Bolha da câmera', error: 'Câmera indisponível' },
 
   settings: {
+    cameraStyle: {
+      title: 'Estilo da câmera',
+      help: 'O estilo que a tela Gravar usa quando você grava a tela com a câmera. Você escolhe de novo a cada gravação.'
+    },
     cameraSync: {
       unresolvedDevice: 'Não consegui identificar o aparelho físico. Escolha a câmera e o microfone pelo nome, em vez do dispositivo padrão, e tente novamente.',
       title: 'Calibrar sincronia',

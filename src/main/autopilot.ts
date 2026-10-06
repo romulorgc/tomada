@@ -50,7 +50,7 @@ export type AutopilotDeps = {
   prefs(): AutopilotPrefs; ownerStyle?(): Project['style'] | undefined
   ownerBackground?(): Promise<string | undefined>
   /** O serviço da câmera (M4c): o piloto espera a análise do rosto e do recorte do fundo e escolhe o Apresentador quando o recorte já existe. */
-  camera?: Pick<CameraService, 'idle' | 'result' | 'analyze'>
+  camera?: Pick<CameraService, 'idle' | 'result' | 'analyze' | 'view'>
   emit(state: PipelineState): void; ready(id: string, clips: number,youtube?:boolean): void
 }
 /** Saída que o app gravou em exports/postar, com o que ele viu ao gravar (para provar depois que continua intacta). */
@@ -155,6 +155,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       case 'transcribe': {
         if (await deps.transcription.getTranscript(id)) return 'Transcrição já disponível.'
         await deps.exporter.idle()
+        // A placa é uma só: o recorte do fundo (Apresentador), se foi pedido logo depois de gravar, termina antes da transcrição.
+        await deps.camera?.idle()
         await deps.transcription.start(id)
         await deps.transcription.idle()
         const t = await transcript(id)
@@ -195,8 +197,15 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       case 'layouts': {
         const t = await deps.transcription.getTranscript(id)
         const e = await events(dir, duration)
-        // Com o recorte do fundo já pronto (M4c), a fala sem atividade vira Apresentador (16:9) e V-D (9:16) em vez de lado a lado e V-B.
-        const hasMatte = Boolean(await deps.camera?.result(id, 'matte').catch(() => null))
+        // Quem decide é o ESTILO da câmera escolhido ao gravar, nunca a existência do recorte: Apresentador pede o recorte do fundo e a
+        // fala sem atividade vira Apresentador (16:9) e V-D (9:16); Quadro ao lado (e projeto antigo) fica no lado a lado e no V-B.
+        let hasMatte = false
+        let notice = ''
+        if (project.cameraStyle === 'presenter' && project.sources.camera) {
+          const matte = await ensureMatte(id)
+          hasMatte = matte.ok
+          if (!matte.ok) notice = `O recorte do fundo falhou; usei o quadro ao lado. Motivo: ${matte.reason.replace(/[.\s]+$/, '')}. No editor: Câmera → Recortar de novo. `
+        }
         const automatic = autoVerticalLayouts({ ...(hasMatte ? { hasMatte } : {}), durationMs: duration, hasCamera: !!project.sources.camera && !project.style.camera.hidden, clicks: e.clicks, keys: e.keys, cursor: e.grid, speech: speechRanges(t?.words), kept: keptRanges(duration, project.cuts) })
         await regenerate(id, (p) => {
           const v = p.vertical ?? defaultVerticalEdit()
@@ -204,7 +213,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           const h = automatic.map((s) => ({ ...s, id: `h-${s.id}`, layout: s.layout === 'presenter' ? 'presenter' as const : s.layout === 'stack' && p.sources.camera ? 'side-by-side' as const : 'bubble' as const }))
           return { ...p, layouts: fit(h.filter((s) => !p.autoExclusions?.layouts?.includes(s.id)), p.layouts.filter((s) => s.origin !== 'auto')), vertical: { ...v, layouts: fit(automatic.filter((s) => !v.autoExclusions?.layouts?.includes(s.id)), v.layouts.filter((s) => s.origin !== 'auto')) } }
         })
-        return 'Layouts escolhidos pela atividade da tela nos dois formatos.'
+        return `${notice}Layouts escolhidos pela atividade da tela nos dois formatos.`
       }
       case 'captions': {
         await change(id, (p) => {
@@ -295,6 +304,17 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       await writeManifest(found.dir, found.manifest)
     } catch (err) { deps.logger.warn('Piloto automático: não consegui assentar a intenção no manifesto; a retomada vai tentar de novo.', err) }
   }
+  /** Pede o recorte do fundo (Apresentador), espera a fila da câmera e confere que ele existe; senão devolve o motivo. */
+  async function ensureMatte(id: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!deps.camera) return { ok: false, reason: 'O serviço da câmera não está disponível.' }
+    try {
+      await deps.camera.analyze(id, 'matte')
+      await deps.camera.idle()
+    } catch (err) { return { ok: false, reason: err instanceof Error ? err.message : String(err) } }
+    if (await deps.camera.result(id, 'matte').catch(() => null)) return { ok: true }
+    const job = (await deps.camera.view().catch(() => null))?.jobs.find((j) => j.projectId === id && j.kind === 'matte')
+    return { ok: false, reason: job?.error ?? 'o recorte não ficou pronto' }
+  }
   async function run(id: string): Promise<void> {
     const { project } = await deps.store.read(id)
     const state = project.autopilot ?? newPipeline(id)
@@ -331,6 +351,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         await change(id, (p) => p.autopilot ? p : ({ ...p, ...(prefs.mode === 'nothing' ? {} : {autopilot:newPipeline(id,startedAt)}), style: { ...(style ?? p.style),cursor:{...(style?.cursor ?? p.style.cursor),mode:p.style.cursor.mode} }, captions:{...p.captions,enabled:prefs.steps.captions === false ? false : prefs.captionsHorizontal}, vertical:{...(p.vertical ?? defaultVerticalEdit()),captions:{...p.vertical?.captions,enabled:prefs.steps.captions === false ? false : prefs.captionsVertical},...(prefs.steps.zooms === false ? {zoomPreset:'off'} : {})},...(prefs.steps.zooms === false ? {zoomPreset:'off'} : {}) }))
         await settleIntent(id)
         if (prefs.mode === 'nothing') return
+        // Apresentador: o recorte do fundo começa logo depois da gravação, na fila da câmera, atrás da análise do rosto.
+        if (before.cameraStyle === 'presenter' && before.sources.camera) void deps.camera?.analyze(id, 'matte').catch(() => undefined)
         await enqueue(() => run(id))
       } finally { active.delete(id) }
     },

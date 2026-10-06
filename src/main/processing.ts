@@ -225,6 +225,7 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
         if (reason) note(`${reason} ${calibration ? 'Apliquei a calibração deste par de câmera e microfone.' : 'A correção ficou em 0 ms.'}`)
       }
       if (manifest.script) project.script = manifest.script
+      if (manifest.cameraStyle) project.cameraStyle = manifest.cameraStyle
       project.retakeMarks = manifest.retakeMarks ?? []
       const text = serializeProject(project)
       parseProject(text) // o que escrevemos precisa passar pelo mesmo esquema de quem lê

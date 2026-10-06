@@ -53,6 +53,22 @@ describe('preferências da tela Gravar', () => {
     expect(normalizeRecordPrefs({ mode: 'tudo' }).mode).toBe('screen-camera')
   })
 
+  it('estilo da câmera: padrão Quadro ao lado, lembra o Apresentador e valor ruim volta ao padrão', () => {
+    expect(DEFAULT_RECORD_PREFS.cameraStyle).toBe('side-by-side')
+    expect(normalizeRecordPrefs({}).cameraStyle).toBe('side-by-side')
+    expect(normalizeRecordPrefs({ cameraStyle: 'presenter' }).cameraStyle).toBe('presenter')
+    expect(normalizeRecordPrefs({ cameraStyle: 'green-screen' }).cameraStyle).toBe('side-by-side')
+    expect(normalizeRecordPrefs({ cameraStyle: 7 }).cameraStyle).toBe('side-by-side')
+  })
+
+  it('o pedido de gravação aceita o estilo da câmera (opcional) e recusa valor desconhecido', () => {
+    const base = { mode: 'screen-camera', sourceId: 'screen:0:0', fps: 30, cameraId: 'c', micId: 'm', systemAudio: false, showBubble: true, hideCursor: true }
+    expect(recordRequestSchema.safeParse(base).success).toBe(true)
+    expect(recordRequestSchema.safeParse({ ...base, cameraStyle: 'presenter' }).success).toBe(true)
+    expect(recordRequestSchema.safeParse({ ...base, cameraStyle: 'side-by-side' }).success).toBe(true)
+    expect(recordRequestSchema.safeParse({ ...base, cameraStyle: 'tella' }).success).toBe(false)
+  })
+
   it('padrão do som: supressão de ruído ligada, eco desligado, cursor escondido pedido', () => {
     expect(DEFAULT_RECORD_PREFS.noiseSuppression).toBe(true)
     expect(DEFAULT_RECORD_PREFS.echoCancellation).toBe(false)

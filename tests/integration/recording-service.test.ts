@@ -205,6 +205,27 @@ describe('fluxo completo: tela + câmera', () => {
     expect(manifest.processedAt).toBeTruthy()
   }, 120_000)
 
+  it('o estilo da câmera escolhido antes de gravar vai para o manifesto e para o projeto; sem escolha ou sem câmera o campo não existe', async () => {
+    const { world, root } = newWorld()
+    const { prepared } = await record(world, { ...baseRequest, cameraStyle: 'presenter' })
+    expect((await waitDone(world)).status).toBe('done')
+    const dir = join(root, prepared.folder)
+    expect(JSON.parse(readFileSync(join(dir, 'raw/recording.json'), 'utf8')).cameraStyle).toBe('presenter')
+    expect(parseProject(readFileSync(join(dir, 'project.json'), 'utf8')).cameraStyle).toBe('presenter')
+
+    const old = newWorld()
+    const legacy = await record(old.world, baseRequest)
+    expect((await waitDone(old.world)).status).toBe('done')
+    const legacyDir = join(old.root, legacy.prepared.folder)
+    expect(JSON.parse(readFileSync(join(legacyDir, 'raw/recording.json'), 'utf8')).cameraStyle).toBeUndefined()
+    expect(parseProject(readFileSync(join(legacyDir, 'project.json'), 'utf8')).cameraStyle).toBeUndefined()
+
+    const screenOnly = newWorld()
+    const noCamera = await record(screenOnly.world, { ...baseRequest, mode: 'screen', cameraId: null, cameraStyle: 'presenter' }, { files: { screen: rawScreen, mic: rawMic }, info: { cameraHasVideo: false, cameraSize: null } })
+    expect((await waitDone(screenOnly.world)).status).toBe('done')
+    expect(JSON.parse(readFileSync(join(screenOnly.root, noCamera.prepared.folder, 'raw/recording.json'), 'utf8')).cameraStyle).toBeUndefined()
+  }, 180_000)
+
   it('captura de janela: window.jsonl, retângulo da moldura, nome da janela', async () => {
     const { world, root } = newWorld({ source: WINDOW_SOURCE })
     const { prepared } = await record(world, { ...baseRequest, sourceId: 'window:4242:0', mode: 'screen', cameraId: null }, { raw: rawEvents('window'), files: { screen: rawScreen, mic: rawMic }, info: { cameraHasVideo: false, cameraSize: null, frame: { w: 984, h: 742 } } })
