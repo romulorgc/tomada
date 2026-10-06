@@ -98,8 +98,9 @@ test('exporta o vertical 1080×1920 com a legenda Destaque: arquivo conferido, p
   expect(withCaptions.report!.audioVideoDiffMs).toBeLessThan(50)
   expect(Number(probe.format.bit_rate)).toBeLessThan(10_500_000) // 10 Mbps pedidos
   expect(readFileSync(fileA).subarray(0, 4096).includes(Buffer.from('moov'))).toBe(true)
-  expect(Number(audio.bit_rate)).toBeGreaterThan(150_000) // AAC a 192 kbps (o do 16:9 é 384)
-  expect(Number(audio.bit_rate)).toBeLessThan(260_000)
+  // Pedido 320k é conferido na integração; o AAC nativo usa menos bits em voz com pausas.
+  expect(Number(audio.bit_rate)).toBeGreaterThan(150_000)
+  expect(Number(audio.bit_rate)).toBeLessThan(380_000)
 
   // (2) o MESMO vídeo sem legenda (a tela sintética já tem texto amarelo: só a diferença prova a legenda)
   editProject(s, (p) => {

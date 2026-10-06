@@ -59,6 +59,7 @@ import type { Logger } from './logger'
 import type { OutputDirs } from './path-guard'
 import { assertDocumentPaths, isInside, resolveProjectFile } from './project-files'
 import { createTmpDirIn, removeTmpDir, type ExclusiveDir } from './safe-output'
+import { measureVoiceNoise } from './voice-noise'
 
 /** Diferença máxima aceita entre a duração do áudio e a do vídeo (ms). */
 export const MAX_AV_DIFF_MS = 50
@@ -349,9 +350,18 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     const voice = hasVoice ? { input: inputs.push(voicePath!) - 1, offsetMs: project.sync.cameraOffsetMs, channels: 1 as const } : null
     const system = hasSystem ? { input: inputs.push(systemPath!) - 1, offsetMs: project.sync.screenOffsetMs, channels: 2 as const } : null
 
+    // Mede a fonte intacta: os cortes de silêncio não podem apagar a referência do redutor.
+    const noise = hasVoice ? await measureVoiceNoise(ff, { voicePath: voicePath!, words: run.words,
+      offsetMs: project.sync.cameraOffsetMs, signal }) : null
+    const noiseFloorDb = noise?.noiseFloorDb ?? null
+    if (noise) {
+      logger.info(`Exportação: piso da voz ${noise.measuredDb?.toFixed(2) ?? 'sem medição'} dBFS, ${noise.silenceMs} ms de silêncio (${noise.source}).`)
+      if (noiseFloorDb === null) logger.warn('Exportação: sem piso de silêncio utilizável; redução de ruído desativada para preservar a voz.')
+    }
+
     // passe 1: mede (ffmpeg imprime o JSON do loudnorm no stderr)
     const voiceMutes = project.mutes?.filter((m) => m.enabled).map((m) => ({ start: m.start, end: m.end }))
-    const graph1 = buildAudioGraph({ kept, voice, system, mode: 'measure', ...(voiceMutes?.length ? { voiceMutes } : {}) })
+    const graph1 = buildAudioGraph({ kept, voice, system, noiseFloorDb, mode: 'measure', ...(voiceMutes?.length ? { voiceMutes } : {}) })
     const graphFile1 = await run.tmp!.file('audio-medir.txt')
     await writeFile(graphFile1, graph1.graph, 'utf8')
     const measureRun = await ff.run(buildMeasureArgs({ inputs, graphFile: graphFile1 }), {
@@ -365,7 +375,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     if (!measured) logger.warn('Exportação: o primeiro passe do loudnorm não deu medição válida (faixa muda?); usando o passe único.')
 
     // passe 2: aplica
-    const graph2 = buildAudioGraph({ kept, voice, system, mode: 'final', measured, ...(voiceMutes?.length ? { voiceMutes } : {}) })
+    const graph2 = buildAudioGraph({ kept, voice, system, noiseFloorDb, mode: 'final', measured, ...(voiceMutes?.length ? { voiceMutes } : {}) })
     const graphFile2 = await run.tmp!.file('audio-final.txt')
     await writeFile(graphFile2, graph2.graph, 'utf8')
     await ff.run(buildAudioArgs({ inputs, graphFile: graphFile2, output: run.audioPath, durationMs: outMs, ...(bitrate ? { bitrate } : {}) }), {
@@ -601,7 +611,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       await assertDocumentPaths(dir, project)
       const durationMs = outputDuration(projectDurationMs(project), project.cuts)
       const outDir = await chooseOutputDir(dir, request.dir, asked.clipId ? 'cortes' : undefined)
-      return checkDiskSpace(outDir, estimateExportBytes(durationMs, exportBitrate(request.resolution, request.fps, request.format), request.format === 'vertical' ? 192_000 : 384_000), durationMs, 'O vídeo e o arquivo final coexistem durante a exportação. A estimativa inclui áudio e 20% de folga.')
+      return checkDiskSpace(outDir, estimateExportBytes(durationMs, exportBitrate(request.resolution, request.fps, request.format), 320_000), durationMs, 'O vídeo e o arquivo final coexistem durante a exportação. A estimativa inclui áudio e 20% de folga.')
     },
     async start(asked) {
       if (preparing) throw new ExportError('Já há uma exportação em andamento. Espere terminar ou cancele.')
@@ -664,7 +674,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
 
         const id = randomUUID()
         const exportsDir = await chooseOutputDir(dir, request.dir, clip ? 'cortes' : undefined)
-        const disk = await checkDiskSpace(exportsDir, estimateExportBytes(outMs, exportBitrate(request.resolution, request.fps, request.format), request.format === 'vertical' ? 192_000 : 384_000), outMs, 'O vídeo e o arquivo final coexistem durante a exportação. A estimativa inclui áudio e 20% de folga.')
+        const disk = await checkDiskSpace(exportsDir, estimateExportBytes(outMs, exportBitrate(request.resolution, request.fps, request.format), 320_000), outMs, 'O vídeo e o arquivo final coexistem durante a exportação. A estimativa inclui áudio e 20% de folga.')
         if (disk.status !== 'ok') logger.warn(diskWarning(disk))
         const stem = clip ? `${String(clipNumber).padStart(2, '0')} - ${sanitizeFileName(project.title, 'Corte')}` : exportFileName(project.title, request).replace(/\.mp4$/, '')
         const unique = uniqueName(stem, (n) => existsSync(join(exportsDir, `${n}.mp4`)))
