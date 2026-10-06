@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createBlurRegion } from '@shared/blur'
 import { BUBBLE_TARGET, PRESENTER_TARGET, cameraCropRect } from '@shared/face'
 import { createProject, defaultStyle } from '@shared/project'
 import { createRenderCache, renderFrame, type CanvasFactory, type Ctx2D, type FrameSet } from '@shared/render'
@@ -363,4 +364,51 @@ describe('render: apresentador recortado com a máscara', () => {
       expect(ops.some((o) => o.op === 'multiply' || o.op === 'lighter' || o.op === 'lighten')).toBe(false)
     }
   })
+})
+
+// A proteção (desfoque de dado sensível, M5a) é da TELA e vale em todos os layouts com câmera da M4c.
+describe('render: o desfoque protege a tela nos layouts do quadro ao lado e do apresentador', () => {
+  const SCREEN_ID = -1
+  const CAMERA_ID = -2
+  const MATTE_ID = -3
+  const frames = (): FrameSet => ({ screen: { image: { __id: SCREEN_ID }, w: 1920, h: 1080 }, camera: { image: { __id: CAMERA_ID }, w: 1920, h: 1080 }, matte: { image: { __id: MATTE_ID }, w: 1920, h: 1080 } }) as never
+  const protectedProject = (layout: Style['defaultLayout'], withRegion: boolean): Project => {
+    const p = project(layout)
+    return withRegion ? createBlurRegion(p, { x: 0.2, y: 0.2, w: 0.3, h: 0.2 }, 0, 20_000, 20_000)! : p
+  }
+  const fromOf = (ops: Op[], id: number): Set<number> => new Set(ops.filter((o) => o.kind === 'drawImage' && o.from === id).map((o) => o.canvas))
+  const render = (p: Project, format: FormatSpec) => {
+    const r = recorder()
+    const cache = createRenderCache(r.factory)
+    cache.images.clear()
+    renderFrame(r.main, evaluateScene(p, deriveProject(p, data, format), 5000, format), frames(), cache)
+    return r.ops
+  }
+
+  const cases: Array<[string, Style['defaultLayout'], FormatSpec]> = [
+    ['quadro ao lado (Tella, 16:9)', 'side-by-side', H],
+    ['Apresentador 16:9 com o recorte da câmera', 'presenter', H],
+    ['V-D (Apresentador vertical) com o recorte da câmera', 'presenter', V]
+  ]
+  for (const [name, layout, format] of cases) {
+    it(`${name}: o quadro cru da tela só entra nas camadas da proteção; o que compõe o quadro final é a camada protegida`, () => {
+      const p = protectedProject(layout, true)
+      const scene = evaluateScene(p, deriveProject(p, data, format), 5000, format)
+      expect(scene.blurRegions).toHaveLength(1)
+      expect(scene.camera).toBeTruthy()
+      const ops = render(p, format)
+      // protectScreen é a primeira coisa de renderFrame a criar camadas: a protegida (1) e a amostra do pixelado/desfoque (2).
+      // O cru não vai a mais nenhuma camada nem direto ao quadro final (0); drawScreen/drawBackdrop recebem a protegida.
+      expect([...fromOf(ops, SCREEN_ID)].sort()).toEqual([1, 2])
+      expect(ops.some((o) => o.kind === 'drawImage' && o.from === 1 && o.canvas !== 1)).toBe(true)
+      // a câmera e o recorte do fundo seguem como antes (a proteção não os toca)
+      expect(fromOf(ops, CAMERA_ID).size).toBeGreaterThan(0)
+      if (layout === 'presenter') expect(fromOf(ops, MATTE_ID).size).toBeGreaterThan(0)
+    })
+    it(`${name}: sem região de desfoque a cena não leva proteção e a tela é desenhada como antes`, () => {
+      const p = protectedProject(layout, false)
+      expect(evaluateScene(p, deriveProject(p, data, format), 5000, format).blurRegions ?? []).toHaveLength(0)
+      expect(fromOf(render(p, format), SCREEN_ID).size).toBeGreaterThan(0)
+    })
+  }
 })

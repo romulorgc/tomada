@@ -330,7 +330,7 @@ describe('consertos da revisão independente da M4d', () => {
   // --- 2. A intenção de rodar o piloto sobrevive ao fechamento do app ------------------------------------------
   async function writePendingManifest(dir: string, pending: boolean): Promise<void> {
     await mkdir(join(dir, 'raw'), { recursive: true })
-    const manifest = { version: 1, sessionId: id, processedAt: '2026-10-05T12:00:00Z', ...(pending ? { autopilotPending: true } : {}) } as unknown as RecordingManifest
+    const manifest = { version: 1, sessionId: id, folder: 'raw', title: 'Gravação', createdAt: '2026-10-05T11:00:00Z', pauses: [], notes: [], processedAt: '2026-10-05T12:00:00Z', ...(pending ? { autopilotPending: true } : {}) } as unknown as RecordingManifest
     await writeFile(join(dir, MANIFEST_PATH), JSON.stringify(manifest))
   }
   it('reabrir o app depois do processamento e antes do start retoma o piloto que ainda não tinha estado', async () => {
