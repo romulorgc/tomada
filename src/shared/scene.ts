@@ -38,6 +38,7 @@ import { CENTER_BOX, CENTER_ZOOM_MAX, HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL
 import { ZOOM_SCALE_SPRING } from './spring'
 import { computeCameraPath, sampleCameraPath, visibleRect, type CameraPath } from './zoom'
 import { fitRect } from './geometry'
+import { FOCUS_SPRING, actionFocusAt, buildActionFocus } from './action-focus'
 import { activeBlurRegions } from './blur'
 import type { BlurRegion } from './types'
 
@@ -283,9 +284,22 @@ export function deriveProject(project: Project, rawData: CursorData, format: For
         paths[key] = { view: f.view, path: TRIVIAL_PATH }
         continue
       }
-      const max = key === 'screen-center' || key === 'stack' || key === 'presenter' ? CENTER_ZOOM_MAX : Infinity
+      // A janela quadrada (Tela ao centro, metade de tela do V-B, faixa do V-D) enquadra a AÇÃO em vez de seguir o cursor e nunca amplia
+      // além de 1:1: a janela mostra `source` px da página num quadrado de `dest` px, e um zoom z amplia z·dest/source.
+      const square = key === 'screen-center' || key === 'stack' || key === 'presenter'
+      let max = Infinity
+      let focus: Pick<Parameters<typeof computeCameraPath>[2], 'focusAt' | 'spring'> = {}
+      if (square && baseSize) {
+        const dest = layoutGeometry(key as LayoutKind, project.style, format, { screen: baseSize, camera: cameraSize }).screen
+        const source = f.view.h * baseSize.h
+        const oneToOne = dest && source > 0 ? Math.max(1, source / Math.min(dest.w, dest.h)) : 1
+        max = Math.min(CENTER_ZOOM_MAX, oneToOne)
+        const steps = buildActionFocus({ clicks: data.clicks, keys: data.keys, cursor: data.grid, view: f.view })
+        // sem nenhuma ação (só passeio do cursor) a janela segue o cursor, como o V-A
+        if (steps) focus = { focusAt: (t) => actionFocusAt(steps, t), spring: FOCUS_SPRING }
+      }
       const zooms = project.zooms.map((z) => ({ ...z, scale: Math.min(max, 1 + (z.scale - 1) * f.gain) }))
-      paths[key] = { view: f.view, path: computeCameraPath({ zooms }, data.grid, { durationMs, view: f.view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.vertical }) }
+      paths[key] = { view: f.view, path: computeCameraPath({ zooms }, data.grid, { durationMs, view: f.view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.vertical, ...focus }) }
     }
   }
   const main = paths.main ?? paths[mainKey] ?? Object.values(paths)[0] ?? { view: { w: 1, h: 1 }, path: TRIVIAL_PATH }
