@@ -386,6 +386,16 @@ export function autoVerticalLayouts(input: ActivityInput): LayoutSeg[] {
 }
 
 /**
+ * Fixa o layout de um corte vertical DEPOIS de `ensureVertical`. `reviewDocument` já fixa o layout do corte (ou o escolhido na
+ * Revisão), mas um vertical nunca gerado fica com zooms e layouts vazios e o `ensureVertical` da exportação gera segmentos por
+ * atividade que prevaleceriam sobre o layout fixo. Aqui os segmentos que não são do usuário saem; os manuais ficam.
+ */
+export function pinVerticalLayout(project: Project, layout: LayoutKind): Project {
+  const v = project.vertical ?? defaultVerticalEdit()
+  return { ...project, vertical: { ...v, layout, layouts: v.layouts.filter((s) => s.origin === 'manual') } }
+}
+
+/**
  * Entrar no 9:16 pela primeira vez: zooms do preset padrão do vertical (escala e teto de vertical) e layouts escolhidos pela atividade.
  * Se o vertical já foi editado ou gerado, devolve o mesmo documento. "Nunca gerado" = sem edição vertical, ou com ela vazia e sem
  * preset (um ajuste de legenda no 9:16 antes da geração cria o bloco vazio). Chamar com `history: false` no editor.

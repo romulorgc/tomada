@@ -14,6 +14,8 @@ export type ReviewItem = {
   disabledCutIds?: string[]; disabledZoomIds?: string[]; disabledLayoutIds?: string[]; keptFillerCutIds?: string[]
   enabledCutIds?:string[]; enabledReasons?:CutReason[]
   restoreAutoZooms?:boolean; restoreAutoLayouts?:boolean
+  /** Revisão da edição que pede exportação: sobe a cada ajuste que reexporta; uma exportação só encerra a revisão em que nasceu. */
+  revision?: number
   title?: string; hook?: string; text?: string
   edits?: { cuts: Cut[]; zooms: Zoom[]; layouts: LayoutSeg[]; captions: CaptionStyle; style: Style; wordFixes?: Project['wordFixes']; mutes?: Project['mutes']; meta?: Project['meta']; zoomPreset?: Project['zoomPreset']; autoExclusions?:Project['autoExclusions'] }
 }
@@ -77,4 +79,47 @@ export function preserveManualDecisions(prev: Project, next: Project): Project {
   const items = {...next.review?.items}
   if(captionChanged) items.youtube = {...itemOf(next,'youtube'),origin:'manual',captionsEnabled:next.captions.enabled,captionStyle:next.captions.style}
   return { ...next, cuts: mark(prev.cuts, next.cuts), layouts: mark(prev.layouts, next.layouts), zooms: mark(prev.zooms, next.zooms), ...(next.vertical ? { vertical: { ...next.vertical, layouts: mark(prev.vertical?.layouts ?? [], next.vertical.layouts), zooms: mark(prev.vertical?.zooms ?? [], next.vertical.zooms) } } : {}), clips: next.clips.map((c) => { const old = prev.clips.find((s) => s.id === c.id); return old && JSON.stringify(old) !== JSON.stringify(c) ? { ...c, source: 'manual' } : c }), review: { ...next.review, items, ...(prev.meta !== next.meta && JSON.stringify(prev.meta) !== JSON.stringify(next.meta) ? { metaOrigin: 'manual' } : {}), ...(prev.title !== next.title ? { titleOrigin: 'manual' } : {}) } }
+}
+
+type SnapshotSeg = { id: string; start: number; end: number; origin?: 'auto' | 'manual' }
+const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+/** O documento do item ANTES da fotografia: é o que a regeneração mexe e o que a fotografia copiou. */
+function itemBase(doc: Project, id: string): Project | null {
+  const clip = id === 'youtube' ? null : doc.clips.find((c) => c.id === id)
+  if (id !== 'youtube' && !clip) return null
+  return clip ? projectForFormat(withClipLayout(clipDocument(doc, clip), clip.layoutV), 'vertical') : doc
+}
+/**
+ * A fotografia por item (`edits`) guarda listas inteiras de cortes, zooms e layouts. Quando a regeneração troca os automáticos
+ * do documento (`prev` → `next`), a cópia automática que a fotografia guarda ficaria velha e a reexportação a usaria no lugar
+ * da nova. Aqui a fotografia passa a valer só pelas DECISÕES do usuário:
+ *  - entrada automática IGUAL à do documento anterior é só cópia: sai e entra a nova do documento;
+ *  - entrada que o usuário mexeu (difere do anterior) ou manual fica como está;
+ *  - automática que o usuário tirou (existia antes e não está na fotografia) não volta, nem a excluída pelo editor.
+ */
+export function refreshReviewSnapshots(prev: Project, next: Project): Project {
+  const items = next.review?.items
+  if (!items || !Object.values(items).some((item) => item.edits)) return next
+  const overlaps = (a: SnapshotSeg, b: SnapshotSeg): boolean => a.start < b.end && a.end > b.start
+  const rebase = <T extends SnapshotSeg>(snapshot: readonly T[], old: readonly T[], fresh: readonly T[], automatic: (s: T) => boolean, excluded: readonly string[], clash: (kept: T, added: T) => boolean): T[] => {
+    const copy = (s: T): boolean => automatic(s) && old.some((o) => automatic(o) && sameJson(o, s))
+    const removed = new Set(old.filter((o) => automatic(o) && !snapshot.some((s) => s.id === o.id)).map((o) => o.id))
+    const kept = snapshot.filter((s) => !copy(s))
+    const added = fresh.filter((f) => automatic(f) && !excluded.includes(f.id) && !removed.has(f.id) && !kept.some((k) => k.id === f.id || clash(k, f)))
+    return [...kept, ...added].sort((a, b) => a.start - b.start)
+  }
+  const out: Record<string, ReviewItem> = {}
+  for (const [id, item] of Object.entries(items)) {
+    const before = item.edits ? itemBase(prev, id) : null
+    const after = item.edits ? itemBase(next, id) : null
+    if (!item.edits || !before || !after) { out[id] = item; continue }
+    const e = item.edits
+    out[id] = { ...item, edits: {
+      ...e,
+      cuts: rebase(e.cuts, before.cuts, after.cuts, (c) => c.origin !== 'manual', [], (k, f) => k.origin === 'manual' && k.reason === f.reason && overlaps(k, f)),
+      zooms: rebase(e.zooms, before.zooms, after.zooms, (z) => z.origin === 'auto', e.autoExclusions?.zooms ?? [], overlaps),
+      layouts: rebase(e.layouts, before.layouts, after.layouts, (l) => l.origin === 'auto', e.autoExclusions?.layouts ?? [], overlaps)
+    } }
+  }
+  return { ...next, review: { ...next.review, items: out } }
 }

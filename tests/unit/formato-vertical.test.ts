@@ -4,6 +4,7 @@ import { createEditorStore } from '@shared/editor-store'
 import { createProject, parseProject, serializeProject } from '@shared/project'
 import { DEFAULT_VERTICAL_ZOOM_PRESET, VERTICAL_ZOOM_MAX_PER_MIN, VERTICAL_ZOOM_SCALE, ZOOM_PRESETS, zoomPresetFor } from '@shared/zoom'
 import { keptRanges } from '@shared/timeline'
+import { reviewDocument, updateReviewItem } from '@shared/review'
 import {
   FORMAT_CAPTION_KEYS,
   MIN_DWELL_MS,
@@ -14,6 +15,7 @@ import {
   enforceMinDwell,
   ensureVertical,
   mergeFormatView,
+  pinVerticalLayout,
   projectForFormat,
   screenActivity,
   speechRanges
@@ -391,6 +393,29 @@ describe('ensureVertical: entrar no 9:16 pela primeira vez', () => {
     expect(next.vertical!.layout).toBe('screen-focus')
     expect(next.zooms).toEqual(d.zooms) // o 16:9 não é tocado
     expect(next.layouts).toEqual(d.layouts)
+  })
+
+  it('layout fixo do corte vence os layouts automáticos que o vertical nunca gerado ganha ao exportar', () => {
+    const d = doc()
+    d.clips = [{ id: 'c1', title: 'Corte', hook: '', ranges: [{ start: 0, end: D }], score: 80, reason: 'x', format: 'vertical', layoutV: 'camera' }]
+    const reviewed = reviewDocument(d, 'c1')
+    // sem fixar de novo depois do ensure, os segmentos automáticos prevalecem sobre o layout do corte (o defeito)
+    const ensured = ensureVertical(reviewed, data, { durationMs: D, words: speech(0, D) })
+    expect(ensured.vertical!.layouts.length).toBeGreaterThan(0)
+    const pinned = pinVerticalLayout(ensured, 'camera')
+    expect(pinned.vertical!.layout).toBe('camera')
+    expect(pinned.vertical!.layouts).toEqual([])
+    expect(pinned.vertical!.zooms.length).toBeGreaterThan(0) // os zooms do vertical novo continuam
+  })
+
+  it('layout escolhido na Revisão (item) também vence os automáticos e preserva os segmentos manuais', () => {
+    const d = doc()
+    d.clips = [{ id: 'c1', title: 'Corte', hook: '', ranges: [{ start: 0, end: D }], score: 80, reason: 'x', format: 'vertical', layoutV: 'auto' }]
+    d.vertical = { layout: 'screen-focus', layouts: [{ id: 'meu', start: 1000, end: 2000, layout: 'stack', origin: 'manual' }, { id: 'auto-velho', start: 5000, end: 6000, layout: 'stack', origin: 'auto' }], zooms: [] }
+    const reviewed = reviewDocument(updateReviewItem(d, 'c1', { layout: 'camera' }), 'c1')
+    const pinned = pinVerticalLayout(ensureVertical(reviewed, data, { durationMs: D, words: speech(0, D) }), 'camera')
+    expect(pinned.vertical!.layout).toBe('camera')
+    expect(pinned.vertical!.layouts.map((s) => s.id)).toEqual(['meu'])
   })
 
   it('só gera uma vez: se o vertical já tem edição, devolve o MESMO documento', () => {

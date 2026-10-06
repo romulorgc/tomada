@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createAutopilot } from '../../src/main/autopilot'
@@ -9,6 +9,7 @@ import type { TranscriptionService } from '../../src/main/transcription/service'
 import type { LlmManager } from '../../src/main/llm/manager'
 import { createMemoryLogger } from '../../src/main/logger'
 import { DEFAULT_AUTOPILOT, newPipeline } from '../../src/shared/autopilot'
+import { MANIFEST_PATH, type RecordingManifest } from '../../src/main/manifest'
 import { createProject } from '../../src/shared/project'
 import { itemOf, reviewDocument, type ReviewItem } from '../../src/shared/review'
 import { defaultVerticalEdit, projectForFormat } from '../../src/shared/vertical'
@@ -36,7 +37,7 @@ function addClip(doc: Project): void {
   doc.clips = [{ id: 'clip-1', title: 'Agenda', hook: 'Organize agora', ranges: [{ start: 0, end: 20_000 }], score: 80, reason: 'Demonstração sintética', format: 'vertical', layoutV: 'auto', source: 'manual' }]
 }
 
-async function world(initial: Project) {
+async function world(initial: Project, options: { gate?: Promise<void> } = {}) {
   const dir = tmp()
   await Promise.all(['media', 'events', 'exports'].map((folder) => mkdir(join(dir, folder), { recursive: true })))
   let stored = structuredClone(initial)
@@ -60,7 +61,7 @@ async function world(initial: Project) {
     exportState = { exportId, projectId: id, phase: 'done', fraction: 1, frame: 600, totalFrames: 600, renderFps: null, etaMs: 0, audioReady: true, outputPath: join(dir, 'exports', `${exportId}.mp4`) }
     return { exportId }
   })
-  const exporter = { start, idle: vi.fn(async () => undefined), status: () => exportState } satisfies Pick<ExportService, 'start' | 'idle' | 'status'>
+  const exporter = { start, idle: vi.fn(async () => { if (options.gate && exportCount === 1) await options.gate }), status: () => exportState } satisfies Pick<ExportService, 'start' | 'idle' | 'status'>
   const transcription = { getTranscript: vi.fn(async () => structuredClone(transcript)), idle: vi.fn(async () => undefined), start: vi.fn(async () => undefined) } satisfies Pick<TranscriptionService, 'getTranscript' | 'idle' | 'start'>
   const prefs = structuredClone(DEFAULT_AUTOPILOT)
   const ready = vi.fn()
@@ -145,7 +146,8 @@ describe('integração dos ajustes e da retomada do piloto automático', () => {
     expect(automatic).toContain('00:35 Resultado local')
     expect(automatic).not.toContain('global antigo')
     expect(automatic).not.toContain('00:30 Agenda local')
-    const outputs = JSON.parse(await readFile(join(folder, 'arquivos.json'), 'utf8')) as string[]
+    // o manifesto guarda o caminho e o que o app viu ao gravar (tamanho e data), para só apagar o que continua intacto
+    const outputs = (JSON.parse(await readFile(join(folder, 'arquivos.json'), 'utf8')) as { path: string; size: number; mtimeMs: number }[]).map((entry) => entry.path)
     const mp4 = outputs.find((path) => path.endsWith('.mp4'))!
     expect(await readFile(join(w.dir, mp4), 'utf8')).toBe('arquivo sintético para testar cópia')
     await w.service.updateItem(id, 'youtube', { text: 'Texto manual temporário' }, false)
@@ -223,5 +225,154 @@ describe('integração dos ajustes e da retomada do piloto automático', () => {
     expect(result.captions.enabled).toBe(false)
     expect(stored.style.camera).toEqual(doc.style.camera)
     expect(w.start).not.toHaveBeenCalled()
+  })
+})
+
+describe('consertos da revisão independente da M4d', () => {
+  // --- 1. Abrir pasta para postar nunca sobrescreve o que não é saída comprovada do app -------------------------
+  async function approvedWorld() {
+    const doc = baseProject()
+    doc.review = { items: { youtube: { origin: 'manual', decision: 'approved', phase: 'ready', exportPath: 'exports/youtube.mp4', textPath: 'exports/youtube.txt' } } }
+    const w = await world(doc)
+    await writeFile(join(w.dir, 'exports/youtube.mp4'), 'vídeo gerado pelo app')
+    await writeFile(join(w.dir, 'exports/youtube.txt'), 'texto')
+    await mkdir(join(w.dir, 'exports/postar'), { recursive: true })
+    return w
+  }
+  it('pasta para postar não substitui o YouTube.txt nem o MP4 que o usuário já tinha na pasta', async () => {
+    const w = await approvedWorld()
+    const folder = join(w.dir, 'exports/postar')
+    const stem = 'youtube - Agenda de teste'
+    await writeFile(join(folder, 'YouTube.txt'), 'texto escrito pelo usuário')
+    await writeFile(join(folder, `${stem}.mp4`), 'vídeo do usuário com o mesmo nome')
+    await w.service.postingFolder(id)
+    expect(await readFile(join(folder, 'YouTube.txt'), 'utf8')).toBe('texto escrito pelo usuário')
+    expect(await readFile(join(folder, `${stem}.mp4`), 'utf8')).toBe('vídeo do usuário com o mesmo nome')
+    const names = await readdir(folder)
+    expect(names).toContain('YouTube (2).txt')
+    expect(names).toContain(`${stem} (2).mp4`)
+    expect(await readFile(join(folder, `${stem} (2).mp4`), 'utf8')).toBe('vídeo gerado pelo app')
+  })
+  it('pasta para postar refaz só as saídas do app e preserva o que o usuário editou depois', async () => {
+    const w = await approvedWorld()
+    const folder = join(w.dir, 'exports/postar')
+    await w.service.postingFolder(id)
+    const first = (await readdir(folder)).filter((name) => name !== 'arquivos.json').sort()
+    expect(first).toEqual(['YouTube.txt', 'youtube - Agenda de teste.mp4'])
+    // chamar de novo substitui as saídas intactas do app, sem acumular cópias
+    await w.service.postingFolder(id)
+    expect((await readdir(folder)).filter((name) => name !== 'arquivos.json').sort()).toEqual(first)
+    // o usuário ajusta o texto gerado: a próxima montagem o guarda e escreve o dela ao lado
+    await writeFile(join(folder, 'YouTube.txt'), 'meu ajuste no texto')
+    await w.service.postingFolder(id)
+    expect(await readFile(join(folder, 'YouTube.txt'), 'utf8')).toBe('meu ajuste no texto')
+    expect((await readdir(folder)).filter((name) => name !== 'arquivos.json')).toContain('YouTube (2).txt')
+  })
+
+  // --- 2. A intenção de rodar o piloto sobrevive ao fechamento do app ------------------------------------------
+  async function writePendingManifest(dir: string, pending: boolean): Promise<void> {
+    await mkdir(join(dir, 'raw'), { recursive: true })
+    const manifest = { version: 1, sessionId: id, processedAt: '2026-10-05T12:00:00Z', ...(pending ? { autopilotPending: true } : {}) } as unknown as RecordingManifest
+    await writeFile(join(dir, MANIFEST_PATH), JSON.stringify(manifest))
+  }
+  it('reabrir o app depois do processamento e antes do start retoma o piloto que ainda não tinha estado', async () => {
+    const w = await world(baseProject())
+    await writePendingManifest(w.dir, true)
+    expect(w.project().autopilot).toBeUndefined()
+    await w.service.resume()
+    await w.service.idle()
+    expect(w.project().autopilot).toMatchObject({ status: 'done' })
+    expect(w.ready).toHaveBeenCalledOnce()
+    expect(JSON.parse(await readFile(join(w.dir, MANIFEST_PATH), 'utf8')).autopilotPending).toBeUndefined()
+    // já assentado: uma nova reabertura não recomeça nada
+    w.ready.mockClear()
+    await w.service.resume()
+    await w.service.idle()
+    expect(w.ready).not.toHaveBeenCalled()
+  })
+  it('gravação sem intenção pendente continua sem piloto ao reabrir (projeto antigo ou piloto em "Nada")', async () => {
+    const w = await world(baseProject())
+    await writePendingManifest(w.dir, false)
+    await w.service.resume()
+    await w.service.idle()
+    expect(w.project().autopilot).toBeUndefined()
+    expect(w.ready).not.toHaveBeenCalled()
+  })
+  it('no modo Nada o start assenta a intenção para a reabertura não reaplicar o estilo do usuário', async () => {
+    const w = await world(baseProject())
+    w.prefs.mode = 'nothing'
+    await writePendingManifest(w.dir, true)
+    await w.service.start(id)
+    expect(w.project().autopilot).toBeUndefined()
+    expect(JSON.parse(await readFile(join(w.dir, MANIFEST_PATH), 'utf8')).autopilotPending).toBeUndefined()
+  })
+
+  // --- 3. Uma exportação antiga não apaga a pendência da reexportação mais nova --------------------------------
+  it('exportação antiga que termina depois de um ajuste não marca o item como pronto', async () => {
+    const doc = baseProject()
+    finishedPipeline(doc)
+    doc.review = { items: { youtube: { origin: 'auto', decision: 'pending', phase: 'ready', exportPath: 'exports/antigo.mp4' } } }
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const w = await world(doc, { gate })
+    const first = w.service.reexport(id, 'youtube')
+    await vi.waitFor(() => expect(w.start).toHaveBeenCalledTimes(1))
+    await w.service.updateItem(id, 'youtube', { captionsEnabled: true }, true)
+    expect(itemOf(w.project(), 'youtube').phase).toBe('queued')
+    release()
+    await first
+    await w.service.idle()
+    // nenhum instante gravado apontou o item como pronto com o vídeo da exportação antiga (o app podia fechar ali)
+    expect(w.write.mock.calls.some(([, saved]) => { const item = itemOf(saved as Project, 'youtube'); return item.phase === 'ready' && item.exportPath === 'exports/export-1.mp4' })).toBe(false)
+    expect(w.start).toHaveBeenCalledTimes(2)
+    expect(w.rendered[1]!.captions.enabled).toBe(true)
+    expect(itemOf(w.project(), 'youtube')).toMatchObject({ phase: 'ready', exportPath: 'exports/export-2.mp4' })
+  })
+  it('exportação antiga que falha depois de um ajuste também não troca a pendência por erro', async () => {
+    const doc = baseProject()
+    finishedPipeline(doc)
+    doc.review = { items: { youtube: { origin: 'auto', decision: 'pending', phase: 'ready', exportPath: 'exports/antigo.mp4' } } }
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const w = await world(doc, { gate })
+    w.start.mockImplementationOnce(async () => { await gate; throw new Error('falha da exportação antiga') })
+    const first = w.service.reexport(id, 'youtube').catch(() => undefined)
+    await vi.waitFor(() => expect(w.start).toHaveBeenCalledTimes(1))
+    await w.service.updateItem(id, 'youtube', { captionsEnabled: true }, true)
+    release()
+    await first
+    await w.service.idle()
+    expect(w.write.mock.calls.some(([, saved]) => itemOf(saved as Project, 'youtube').phase === 'error')).toBe(false)
+    expect(itemOf(w.project(), 'youtube')).toMatchObject({ phase: 'ready' })
+  })
+
+  // --- 4. A fotografia do item acompanha a regeneração e guarda só as decisões do usuário --------------------------
+  it('refazer zooms atualiza os automáticos da fotografia do item e conserva o zoom manual', async () => {
+    const doc = baseProject()
+    finishedPipeline(doc)
+    const antigo = { id: 'auto-antigo', start: 500, end: 1500, scale: 1.2, focus: 'auto' as const, origin: 'auto' as const }
+    const manual = { id: 'manual', start: 10_000, end: 11_000, scale: 1.3, focus: 'auto' as const, origin: 'manual' as const }
+    doc.zooms = [antigo, manual]
+    doc.review = { items: { youtube: { origin: 'manual', decision: 'pending', phase: 'ready', exportPath: 'exports/antigo.mp4', title: 'Só mudei o título', edits: { cuts: [], zooms: [antigo, manual], layouts: [], captions: doc.captions, style: doc.style } } } }
+    const w = await world(doc)
+    await writeFile(join(w.dir, 'events/clicks.jsonl'), `${JSON.stringify({ t: 3000, x: 0.5, y: 0.5, button: 'left' })}\n`)
+    await w.service.retry(id, 'zooms')
+    expect(w.rendered[0]!.zooms.some((zoom) => zoom.id === 'auto-antigo')).toBe(false)
+    expect(w.rendered[0]!.zooms.some((zoom) => zoom.origin === 'auto')).toBe(true)
+    expect(w.rendered[0]!.zooms).toContainEqual(manual)
+    expect(w.rendered[0]!.title).toBe('Só mudei o título')
+  })
+
+  // --- 5. Os identificadores dos cortes não se repetem depois de limpar de novo ----------------------------------
+  it('limpar de novo com um corte manual "cut-1" não repete o identificador nos automáticos', async () => {
+    const doc = baseProject()
+    finishedPipeline(doc)
+    doc.cuts = [{ id: 'cut-1', start: 10_000, end: 11_000, reason: 'manual', enabled: true, origin: 'manual' }]
+    const w = await world(doc)
+    await w.service.retry(id, 'clean')
+    const cuts = w.project().cuts
+    expect(new Set(cuts.map((cut) => cut.id)).size).toBe(cuts.length)
+    expect(cuts.filter((cut) => cut.origin === 'auto').length).toBeGreaterThan(0)
+    expect(cuts.find((cut) => cut.id === 'cut-1')).toMatchObject({ start: 10_000, end: 11_000, origin: 'manual', reason: 'manual' })
   })
 })

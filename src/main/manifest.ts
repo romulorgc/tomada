@@ -82,6 +82,11 @@ export type RecordingManifest = {
   notes: string[]
   saved: ManifestSaved | null
   processedAt: string | null
+  /**
+   * O piloto automático ainda precisa começar para esta gravação. Gravado junto com `processedAt` (no mesmo arquivo atômico) e
+   * apagado pelo piloto quando o estado dele já está no project.json: fechar o app no intervalo não perde a intenção.
+   */
+  autopilotPending?: boolean
   script?: VideoScript
   retakeMarks?: RetakeMark[]
   processing?: { done: ProcessStepId[]; sources: Project['sources'] }

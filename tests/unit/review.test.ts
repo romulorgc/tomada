@@ -1,6 +1,8 @@
-import { expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { createProject } from '../../src/shared/project'
-import { reviewDocument, updateReviewItem, preserveManualDecisions, type ReviewItem } from '../../src/shared/review'
+import { reviewDocument, updateReviewItem, preserveManualDecisions, refreshReviewSnapshots, type ReviewItem } from '../../src/shared/review'
+import { defaultVerticalEdit } from '../../src/shared/vertical'
+import type { Project, Zoom } from '../../src/shared/types'
 
 it('legenda por corte desligada continua desligada mesmo com estilo de legenda próprio', () => {
   const doc = createProject({ title: 'Teste', sources: { screen: { path: 'media/screen.mp4', w: 1920, h: 1080, fps: 30, durationMs: 20000 } } })
@@ -74,4 +76,52 @@ it('reativar decisão ou categoria recupera o corte automático removido da foto
   const off = updateReviewItem(doc,'youtube',{edits:{cuts:[],zooms:[],layouts:[],captions:doc.captions,style:doc.style}})
   expect(reviewDocument(updateReviewItem(off,'youtube',{enabledCutIds:['s']}),'youtube').cuts.map((c) => c.id)).toEqual(['s'])
   expect(reviewDocument(updateReviewItem(off,'youtube',{enabledReasons:['silence']}),'youtube').cuts.map((c) => c.id)).toEqual(['s'])
+})
+
+describe('refreshReviewSnapshots: a fotografia do item guarda só as decisões do usuário', () => {
+  const zoom = (id: string, start: number, over: Partial<Zoom> = {}): Zoom => ({ id, start, end: start + 1000, scale: 1.5, focus: 'auto', origin: 'auto', ...over })
+  const withSnapshot = (doc: Project, edits: Partial<NonNullable<ReviewItem['edits']>>, id = 'youtube'): Project =>
+    updateReviewItem(doc, id, { edits: { cuts: doc.cuts, zooms: doc.zooms, layouts: doc.layouts, captions: doc.captions, style: doc.style, ...edits } })
+
+  it('cópias automáticas viram as novas do documento; o zoom manual e o ajustado à mão ficam', () => {
+    const prev = createProject({ title: 'Teste' })
+    prev.zooms = [zoom('a1', 0), zoom('a2', 2000), zoom('m1', 4000, { origin: 'manual' })]
+    // o usuário mexeu na escala do a2 dentro da fotografia
+    const withEdit = withSnapshot(prev, { zooms: [zoom('a1', 0), zoom('a2', 2000, { scale: 1.9 }), zoom('m1', 4000, { origin: 'manual' })] })
+    const next = { ...withEdit, zooms: [zoom('n1', 100), zoom('m1', 4000, { origin: 'manual' })] }
+    const view = reviewDocument(refreshReviewSnapshots(withEdit, next), 'youtube')
+    expect(view.zooms.map((z) => z.id).sort()).toEqual(['a2', 'm1', 'n1'])
+    expect(view.zooms.find((z) => z.id === 'a2')?.scale).toBeCloseTo(1.9)
+  })
+  it('automático que o usuário tirou da fotografia não volta, nem o excluído pelo editor', () => {
+    const prev = createProject({ title: 'Teste' })
+    prev.zooms = [zoom('a1', 0), zoom('a2', 2000)]
+    prev.layouts = [{ id: 'l1', start: 0, end: 1000, layout: 'screen', origin: 'auto' }]
+    const withEdit = withSnapshot(prev, { zooms: [zoom('a1', 0)], layouts: [], autoExclusions: { layouts: ['l-novo'] } })
+    const next = { ...withEdit, zooms: [zoom('a1', 0), zoom('a2', 2000), zoom('a3', 6000)], layouts: [{ id: 'l1', start: 0, end: 1000, layout: 'screen' as const, origin: 'auto' as const }, { id: 'l-novo', start: 3000, end: 4000, layout: 'camera' as const, origin: 'auto' as const }, { id: 'l2', start: 5000, end: 6000, layout: 'camera' as const, origin: 'auto' as const }] }
+    const view = reviewDocument(refreshReviewSnapshots(withEdit, next), 'youtube')
+    expect(view.zooms.map((z) => z.id)).toEqual(['a1', 'a3'])
+    expect(view.layouts.map((l) => l.id)).toEqual(['l2'])
+  })
+  it('limpar de novo troca os cortes automáticos da fotografia e mantém o corte manual dela', () => {
+    const prev = createProject({ title: 'Teste' })
+    prev.cuts = [{ id: 'cut-1', start: 0, end: 300, reason: 'silence', enabled: true, origin: 'auto' }]
+    const withEdit = withSnapshot(prev, { cuts: [...prev.cuts, { id: 'meu', start: 900, end: 1000, reason: 'manual', enabled: true, origin: 'manual' }] })
+    const next = { ...withEdit, cuts: [{ id: 'cut-1', start: 0, end: 500, reason: 'silence' as const, enabled: true, origin: 'auto' as const }] }
+    const view = reviewDocument(refreshReviewSnapshots(withEdit, next), 'youtube')
+    expect(view.cuts.map((c) => [c.id, c.end])).toEqual([['cut-1', 500], ['meu', 1000]])
+  })
+  it('corte vertical: a fotografia acompanha os automáticos do vertical do projeto', () => {
+    const prev = createProject({ title: 'Teste', sources: { screen: { path: 'media/screen.mp4', w: 1920, h: 1080, fps: 30, durationMs: 20_000 } } })
+    prev.clips = [{ id: 'clip-1', title: 'Corte', hook: 'Gancho', ranges: [{ start: 0, end: 20_000 }], score: 80, reason: 'x', format: 'vertical', layoutV: 'auto' }]
+    prev.vertical = { ...defaultVerticalEdit(), zooms: [zoom('v1', 1000)] }
+    const withEdit = withSnapshot(prev, { zooms: [zoom('v1', 1000)] }, 'clip-1')
+    const next = { ...withEdit, vertical: { ...withEdit.vertical!, zooms: [zoom('v2', 3000)] } }
+    const view = reviewDocument(refreshReviewSnapshots(withEdit, next), 'clip-1')
+    expect(view.vertical?.zooms.map((z) => z.id)).toEqual(['v2'])
+  })
+  it('sem fotografia, devolve o mesmo documento', () => {
+    const doc = createProject({ title: 'Teste' })
+    expect(refreshReviewSnapshots(doc, doc)).toBe(doc)
+  })
 })

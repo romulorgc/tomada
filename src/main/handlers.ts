@@ -133,7 +133,7 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
       // O valor padrão do documento não é uma alteração de aprovação vinda da interface.
       if(!Object.hasOwn(patch,'decision')) delete clean.decision
       // Caminhos e estado de exportação pertencem ao main; a interface só muda decisões de edição.
-      for (const key of ['exportPath','textPath','phase','error','origin'] as const) delete clean[key]
+      for (const key of ['exportPath','textPath','phase','error','origin','revision'] as const) delete clean[key]
       return deps.autopilot.updateItem(id,itemId,clean,Boolean(reexport))
     },
     'review:export': async (id,itemId) => { store.dirOf(id); void deps.autopilot?.reexport(id,itemId) },

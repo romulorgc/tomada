@@ -17,7 +17,7 @@ import type { VideoScript, TeleprompterAction, TeleprompterConfig, TeleprompterS
 import type { RetakeMark } from './retake-marker'
 import type { PreflightResult } from './preflight'
 import type { LlmStatus, PrepareSnapshot, RetakesResult, TranscriptionJob, TranscriptionPrefs, TranscriptionView } from './transcription'
-import type { Project, ProjectSummary, Size, Transcript, VerticalLayout, Word } from './types'
+import type { LayoutKind, Project, ProjectSummary, Size, Transcript, Word } from './types'
 
 // --- Tipos que atravessam a ponte ---------------------------------------------
 
@@ -281,8 +281,11 @@ export type ExportJob = {
   project: Project
   /** 16:9 ou vertical (o vertical é 1080×1920). */
   format: 'horizontal' | 'vertical'
-  /** Exportação de um corte vertical: o layout fixo do corte (`auto` ou ausente = a escolha por atividade do projeto). */
-  clipLayout?: VerticalLayout
+  /**
+   * Exportação de um corte vertical: o layout FIXO do corte (o escolhido na Revisão ou o do corte); ausente = a escolha por
+   * atividade do projeto. A janela o reaplica depois de gerar o vertical nunca aberto (`pinVerticalLayout`).
+   */
+  clipLayout?: LayoutKind
   width: number
   height: number
   fps: number

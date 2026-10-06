@@ -230,6 +230,7 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
       parseProject(text) // o que escrevemos precisa passar pelo mesmo esquema de quem lê
       await writeFileAtomic(join(dir, PROJECT_FILE), text)
       manifest.processedAt = new Date().toISOString()
+      manifest.autopilotPending = true
       manifest.notes = [...ctx.notes]
       await writeManifest(dir, manifest)
       return undefined

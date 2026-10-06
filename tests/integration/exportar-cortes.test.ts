@@ -138,10 +138,22 @@ describe('exportar um corte vertical', () => {
     })
     const done = await run(request({ clipId: 'clip-1' }))
     expect(done.phase).toBe('done')
-    expect(jobs[0]!.clipLayout).toBeUndefined() // documento já tem o layout; renderer não sobrescreve a revisão
+    // o layout fixo viaja para a janela: ela o reaplica DEPOIS de gerar o vertical nunca aberto (senão os automáticos vencem)
+    expect(jobs[0]!.clipLayout).toBe('screen-wide')
     expect(jobs[0]!.project.vertical!.layout).toBe('screen-wide')
     expect(jobs[0]!.project.vertical!.captions).toMatchObject({ style: 'clean' })
     expect(jobs[0]!.project.vertical!.captions?.enabled).toBeUndefined()
+  })
+
+  it('o layout escolhido na Revisão vai para a janela no lugar do layout do corte', async () => {
+    const { jobs, request, run } = await build((p) => {
+      p.clips = [clipOf({ layoutV: 'screen-wide' })]
+      p.review = { items: { 'clip-1': { decision: 'pending', origin: 'manual', layout: 'camera' } } }
+    })
+    const done = await run(request({ clipId: 'clip-1' }))
+    expect(done.phase).toBe('done')
+    expect(jobs[0]!.clipLayout).toBe('camera')
+    expect(jobs[0]!.project.vertical!.layout).toBe('camera')
   })
 
   it('o número é a posição do corte na lista e o nome nunca sobrescreve: " (2)"', async () => {

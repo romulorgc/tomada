@@ -1,5 +1,6 @@
 /** Conecta os serviços existentes numa fila persistente; nunca há duas exportações do piloto em paralelo. */
-import { mkdir, readFile, copyFile, rm } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { mkdir, readFile, copyFile, rm, stat, writeFile } from 'node:fs/promises'
 import { relative } from 'node:path'
 import { newPipeline, runPipeline, type AutopilotPrefs, type PipelineState, type PipelineStepId } from '@shared/autopilot'
 import { computeClean, DEFAULT_CLEAN } from '@shared/clean'
@@ -10,7 +11,7 @@ import { eventsFromText, EVENT_FILES } from '@shared/events'
 import { sanitizeFileName } from '@shared/export'
 import { projectDurationMs } from '@shared/project'
 import { buildClipText, buildYoutubeText, fallbackClipMeta, heuristicChapters, keywordsOf } from '@shared/publish'
-import { itemOf, updateReviewItem, reviewDocument, type ReviewItem } from '@shared/review'
+import { itemOf, updateReviewItem, reviewDocument, refreshReviewSnapshots, type ReviewItem } from '@shared/review'
 import { keptRanges, outputDuration } from '@shared/timeline'
 import type { Project, ProjectSummary, Transcript } from '@shared/types'
 import { autoVerticalLayouts, defaultVerticalEdit, speechRanges } from '@shared/vertical'
@@ -26,6 +27,7 @@ import { generatePublish } from './llm/publish'
 import { detectRetakes } from './llm/retakes'
 import type { LlmManager } from './llm/manager'
 import type { Logger } from './logger'
+import { MANIFEST_PATH, readManifest, writeManifest } from './manifest'
 import { resolveProjectFile, assertDocumentPaths } from './project-files'
 import { ProjectNotFoundError, type ProjectStore } from './projects'
 import type { TranscriptionService } from './transcription/service'
@@ -47,6 +49,17 @@ export type AutopilotDeps = {
   prefs(): AutopilotPrefs; ownerStyle?(): Project['style'] | undefined
   ownerBackground?(): Promise<string | undefined>
   emit(state: PipelineState): void; ready(id: string, clips: number,youtube?:boolean): void
+}
+/** Saída que o app gravou em exports/postar, com o que ele viu ao gravar (para provar depois que continua intacta). */
+type PostedFile = { path: string; size?: number; mtimeMs?: number }
+async function readPostedManifest(file: string): Promise<PostedFile[]> {
+  if (!(await pathExists(file))) return []
+  try {
+    const old = JSON.parse(await readFile(file,'utf8')) as unknown
+    if (!Array.isArray(old)) return []
+    // Formato antigo (só o caminho) não prova que o arquivo continua o do app: entra sem tamanho e nunca é apagado.
+    return old.flatMap((entry): PostedFile[] => typeof entry === 'string' ? [{ path: entry }] : entry && typeof entry === 'object' && typeof (entry as PostedFile).path === 'string' ? [entry as PostedFile] : [])
+  } catch { return [] }
 }
 export function createAutopilot(deps: AutopilotDeps): AutopilotService {
   let queue: Promise<unknown> = Promise.resolve()
@@ -79,6 +92,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     writes = task.catch(() => undefined)
     return task
   }
+  /** Regenerar decisões automáticas também atualiza as cópias automáticas guardadas nas edições dos itens (o manual fica). */
+  const regenerate = (id: string, fn: (p: Project) => Project): Promise<Project> => change(id, (p) => refreshReviewSnapshots(p, fn(p)))
   const transcript = async (id: string): Promise<Transcript> => {
     const t = await deps.transcription.getTranscript(id)
     if (!t || t.words.length === 0) throw new Error('Sem transcrição com fala. Prepare a transcrição nos Ajustes e tente de novo.')
@@ -102,7 +117,11 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     return { ...e, grid: processCursor(e.cursor, e.clicks, { durationMs }) }
   }
   async function exportItem(id: string, itemId: string): Promise<void> {
-    await change(id, (p) => updateReviewItem(p, itemId, { phase: 'exporting', error: undefined }, false))
+    // Cada exportação nasce de uma revisão da edição do item. Se o usuário ajustar durante a exportação (updateItem sobe a revisão
+    // e deixa o item "queued"), o fim da exportação antiga não pode apagar essa pendência: a reexportação ainda precisa rodar.
+    let revision = 0
+    await change(id, (p) => { revision = itemOf(p, itemId).revision ?? 0; return updateReviewItem(p, itemId, { phase: 'exporting', error: undefined }, false) })
+    const settle = (p: Project, patch: Partial<ReviewItem>): Project => (itemOf(p, itemId).revision ?? 0) === revision ? updateReviewItem(p, itemId, patch, false) : p
     try {
       // Transcrição e exportação compartilham GPU; também esperamos a exportação manual que já estiver em voo.
       await deps.transcription.idle()
@@ -116,10 +135,10 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       await resolveProjectFile(dir, path)
       const textPath = done.textPath ? relative(dir, done.textPath).replaceAll('\\', '/') : undefined
       if (textPath) await resolveProjectFile(dir, textPath)
-      await change(id, (p) => updateReviewItem(p, itemId, { phase: 'ready', exportPath: path, textPath }, false))
+      await change(id, (p) => settle(p, { phase: 'ready', exportPath: path, textPath }))
       if (done.message) throw new Error(done.message)
     } catch (err) {
-      await change(id, (p) => updateReviewItem(p, itemId, { phase: 'error', error: err instanceof Error ? err.message : String(err) }, false))
+      await change(id, (p) => settle(p, { phase: 'error', error: err instanceof Error ? err.message : String(err) }))
       throw err
     }
   }
@@ -149,18 +168,19 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         } else notice = 'Sem IA: recomeços automáticos ficaram de fora; apliquei a heurística e as marcas de errei. '
         const options = { ...DEFAULT_CLEAN, retakes: true }
         const result = computeClean({ words: t.words, durationMs: duration, vad: t.vad, levels, retakes }, options)
-        await change(id, (p) => {
+        await regenerate(id, (p) => {
           const manual = p.cuts.filter((c) => c.origin === 'manual')
-          const plan = planClean({ ...p, cuts: p.cuts.filter((c) => c.origin !== 'manual') }, result, options, duration)
+          // planClean recebe TODOS os cortes: ele já preserva os manuais e conta os identificadores deles ao numerar os novos.
+          const plan = planClean(p, result, options, duration)
           const markerCuts = marker.cuts.filter((c) => !p.cuts.some((old) => old.id === c.id && (old.origin === 'manual' || !old.enabled)))
-          return { ...p, cuts: [...manual, ...plan.cuts.filter((c) => !manual.some((m) => m.reason === c.reason && m.start < c.end && m.end > c.start)).map((c) => ({ ...c, origin: c.origin ?? 'auto' as const })), ...markerCuts], mutes: plan.mutes, autoCleaned: true }
+          return { ...p, cuts: [...plan.cuts.filter((c) => c.origin === 'manual' || !manual.some((m) => m.reason === c.reason && m.start < c.end && m.end > c.start)).map((c) => ({ ...c, origin: c.origin ?? 'auto' as const })), ...markerCuts], mutes: plan.mutes, autoCleaned: true }
         })
         const fallback = marker.decisions.filter((d) => d.fallback).length
         return `${notice}${result.items.length} decisões de limpeza; ${marker.cuts.length} marca(s) de errei.${fallback ? ` ${fallback} marca(s) sem fronteira: últimos 6 s, confira na Revisão.` : ''}`
       }
       case 'zooms': {
         const e = await events(dir, duration)
-        await change(id, (p) => {
+        await regenerate(id, (p) => {
           const v = p.vertical ?? defaultVerticalEdit()
           const make = (kind: 'horizontal' | 'vertical', current: Project['zooms'], off: boolean, excluded?:string[]) => [...current.filter((z) => z.origin === 'manual'), ...(off ? [] : generateAutoZooms({ clicks: e.clicks, keys: e.keys, cursor: e.grid, duration, preset: zoomPresetFor(kind, 'moderate') }).filter((z) => !excluded?.includes(z.id) && !current.some((m) => m.origin === 'manual' && m.start < z.end && m.end > z.start)))]
           return { ...p, zoomPreset: p.zoomPreset === 'off' ? 'off' : 'moderate', zooms: make('horizontal', p.zooms, p.zoomPreset === 'off',p.autoExclusions?.zooms), vertical: { ...v, zoomPreset: v.zoomPreset === 'off' ? 'off' : 'moderate', zooms: make('vertical', v.zooms, v.zoomPreset === 'off',v.autoExclusions?.zooms) } }
@@ -171,7 +191,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         const t = await deps.transcription.getTranscript(id)
         const e = await events(dir, duration)
         const automatic = autoVerticalLayouts({ durationMs: duration, hasCamera: !!project.sources.camera && !project.style.camera.hidden, clicks: e.clicks, keys: e.keys, cursor: e.grid, speech: speechRanges(t?.words), kept: keptRanges(duration, project.cuts) })
-        await change(id, (p) => {
+        await regenerate(id, (p) => {
           const v = p.vertical ?? defaultVerticalEdit()
           const fit = (generated: typeof automatic, manual: typeof automatic) => [...manual, ...generated.filter((a) => !manual.some((m) => m.start < a.end && m.end > a.start)).map((s) => ({ ...s, origin: 'auto' as const }))].sort((a,b) => a.start-b.start)
           const h = automatic.map((s) => ({ ...s, id: `h-${s.id}`, layout: s.layout === 'stack' && p.sources.camera ? 'side-by-side' as const : 'bubble' as const }))
@@ -207,7 +227,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           notice += 'Gravação curta: versão vertical completa, abaixo da faixa habitual de cortes. '
         }
         const chosen = drafts.filter((c) => c.score >= prefs.minScore).sort((a,b) => b.score-a.score).slice(0, prefs.maxClips)
-        await change(id, (p) => {
+        await regenerate(id, (p) => {
           const kept = p.clips.filter((c) => c.source === 'manual' || itemOf(p,c.id).origin === 'manual')
           const merged = mergeSuggestedClips(kept, chosen)
           return { ...p, clips: merged.clips, review:{...p.review,items:Object.fromEntries(Object.entries(p.review?.items ?? {}).filter(([id]) => id === 'youtube' || merged.clips.some((c) => c.id === id)))} }
@@ -250,6 +270,24 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       }
     }
   }
+  /** O manifesto da gravação guarda "o piloto ainda precisa começar" desde antes de o processamento terminar. */
+  const readIntent = async (id: string): Promise<{ dir: string; manifest: Awaited<ReturnType<typeof readManifest>> } | null> => {
+    try {
+      const dir = deps.store.dirOf(id)
+      if (!(await pathExists(await resolveProjectFile(dir, MANIFEST_PATH)))) return null
+      return { dir, manifest: await readManifest(dir) }
+    } catch { return null }
+  }
+  const intentPending = async (id: string): Promise<boolean> => (await readIntent(id))?.manifest.autopilotPending === true
+  /** Assenta a intenção depois que o estado do piloto foi gravado no projeto (ou o modo "Nada" decidiu não rodar). */
+  const settleIntent = async (id: string): Promise<void> => {
+    const found = await readIntent(id)
+    if (!found?.manifest.autopilotPending) return
+    try {
+      delete found.manifest.autopilotPending
+      await writeManifest(found.dir, found.manifest)
+    } catch (err) { deps.logger.warn('Piloto automático: não consegui assentar a intenção no manifesto; a retomada vai tentar de novo.', err) }
+  }
   async function run(id: string): Promise<void> {
     const { project } = await deps.store.read(id)
     const state = project.autopilot ?? newPipeline(id)
@@ -267,7 +305,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       const merged = base ? mergeEditorProject(base,doc,current) : doc
       const items = Object.fromEntries(Object.entries({...current.review?.items,...merged.review?.items}).map(([itemId,item]) => {
         const fresh = current.review?.items[itemId]
-        return [itemId,{...item,...(fresh ? {phase:fresh.phase,exportPath:fresh.exportPath,textPath:fresh.textPath,error:fresh.error} : {})}]
+        return [itemId,{...item,...(fresh ? {phase:fresh.phase,exportPath:fresh.exportPath,textPath:fresh.textPath,error:fresh.error,revision:fresh.revision} : {})}]
       }))
       return {...merged,autopilot:current.autopilot,review:{...current.review,...merged.review,items}}
     },base ?? doc),
@@ -284,6 +322,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           else style = {...style,background:before.style.background}
         }
         await change(id, (p) => p.autopilot ? p : ({ ...p, ...(prefs.mode === 'nothing' ? {} : {autopilot:newPipeline(id,startedAt)}), style: { ...(style ?? p.style),cursor:{...(style?.cursor ?? p.style.cursor),mode:p.style.cursor.mode} }, captions:{...p.captions,enabled:prefs.steps.captions === false ? false : prefs.captionsHorizontal}, vertical:{...(p.vertical ?? defaultVerticalEdit()),captions:{...p.vertical?.captions,enabled:prefs.steps.captions === false ? false : prefs.captionsVertical},...(prefs.steps.zooms === false ? {zoomPreset:'off'} : {})},...(prefs.steps.zooms === false ? {zoomPreset:'off'} : {}) }))
+        await settleIntent(id)
         if (prefs.mode === 'nothing') return
         await enqueue(() => run(id))
       } finally { active.delete(id) }
@@ -315,7 +354,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         const words = t?.words.filter((w) => patch.keepFillers?.includes(w.text.toLowerCase().replace(/[^\p{L}]/gu,''))) ?? []
         patch.keptFillerCutIds = (itemOf(project,itemId).edits?.cuts ?? project.cuts).filter((c) => c.reason === 'filler' && c.origin !== 'manual' && words.some((w) => w.start < c.end && w.end > c.start)).map((c) => c.id)
       }
-      const result = await change(id,(p) => updateReviewItem(p,itemId,{ ...patch, ...(reexport ? { phase: 'queued' } : {}) }))
+      const result = await change(id,(p) => updateReviewItem(p,itemId,{ ...patch, ...(reexport ? { phase: 'queued', revision: (itemOf(p,itemId).revision ?? 0) + 1 } : {}) }))
       if (Object.hasOwn(patch,'text')) { const {dir} = await deps.store.read(id); const path = itemOf(result,itemId).textPath; if(path) await writeFileAtomic(await resolveProjectFile(dir,path),textOf(result,itemId,(await deps.transcription.getTranscript(id))?.words ?? null)) }
       if (reexport) void enqueue(() => exportItem(id,itemId))
       return result
@@ -327,19 +366,37 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       const folder = await resolveProjectFile(dir,'exports/postar')
       await mkdir(folder,{ recursive: true })
       const manifest = await resolveProjectFile(dir,'exports/postar/arquivos.json')
-      if (await pathExists(manifest)) {
-        const old = JSON.parse(await readFile(manifest,'utf8')) as unknown
-        if (Array.isArray(old)) for (const rel of old) if (typeof rel === 'string' && rel.startsWith('exports/postar/')) await rm(await resolveProjectFile(dir,rel),{ force: true })
+      // Só some o que o app comprovadamente gerou (está no manifesto) e continua como ele gravou (tamanho e data).
+      // O que o usuário criou ou editou na pasta nunca é apagado nem coberto.
+      for (const entry of await readPostedManifest(manifest)) {
+        if (!entry.path.startsWith('exports/postar/') || entry.size === undefined || entry.mtimeMs === undefined) continue
+        try {
+          const file = await resolveProjectFile(dir,entry.path)
+          const now = await stat(file)
+          if (now.isFile() && now.size === entry.size && Math.abs(now.mtimeMs - entry.mtimeMs) < 2) await rm(file,{ force: true })
+        } catch { /* sumiu ou não resolve: nada a apagar */ }
       }
-      const created: string[] = []
+      const created: PostedFile[] = []
+      // Criação exclusiva com nome livre ("nome (2)"): nunca sobrescreve um arquivo que já exista.
+      const place = async (stem: string, ext: string, write: (target: string) => Promise<void>): Promise<void> => {
+        for (let n = 1; n < 1000; n++) {
+          const rel = `exports/postar/${stem}${n === 1 ? '' : ` (${n})`}${ext}`
+          const target = await resolveProjectFile(dir,rel)
+          try { await write(target) } catch (err) { if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue; throw err }
+          const made = await stat(target)
+          created.push({ path: rel, size: made.size, mtimeMs: made.mtimeMs })
+          return
+        }
+        throw new Error(`Não achei nome livre para ${stem}${ext} em exports/postar.`)
+      }
       const texts: Record<string,string[]> = { YouTube: [], TikTok: [], Reels: [], Shorts: [] }
+      try {
       for (const [itemId,item] of Object.entries(project.review?.items ?? {})) {
         if (item.decision !== 'approved' || item.phase !== 'ready' || !item.exportPath) continue
         const c = project.clips.find((c) => c.id === itemId)
         const stem = `${sanitizeFileName(itemId)} - ${sanitizeFileName(item.title ?? c?.title ?? project.title)}`
-        const rel = `exports/postar/${stem}.mp4`
-        await copyFile(await resolveProjectFile(dir,item.exportPath),await resolveProjectFile(dir,rel))
-        created.push(rel)
+        const source = await resolveProjectFile(dir,item.exportPath)
+        await place(stem,'.mp4',(target) => copyFile(source,target,constants.COPYFILE_EXCL))
         if (itemId === 'youtube') {
           const t = await transcript(id)
           texts.YouTube!.push(textOf(project,itemId,t.words))
@@ -348,14 +405,21 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           for (const [platform,key] of [['TikTok','tiktok'],['Reels','reels'],['Shorts','shorts']] as const) texts[platform]!.push(item.text ?? `${item.title ?? c.title}\n${meta.caption ?? c.hook}\n${meta[key]?.join(' ') ?? ''}`)
         }
       }
-      for (const [platform,blocks] of Object.entries(texts)) if (blocks.length) { const rel = `exports/postar/${platform}.txt`; await writeFileAtomic(await resolveProjectFile(dir,rel),blocks.join('\n\n')); created.push(rel) }
-      await writeFileAtomic(manifest,JSON.stringify(created))
+      for (const [platform,blocks] of Object.entries(texts)) if (blocks.length) await place(platform,'.txt',(target) => writeFile(target,blocks.join('\n\n'),{ flag: 'wx' }))
+      } finally {
+        // Mesmo se algo falhar no meio, o manifesto lista o que já foi criado (senão ficaria órfão e nunca mais seria refeito).
+        await writeFileAtomic(manifest,JSON.stringify(created))
+      }
       return folder
     },
     async resume() {
       for (const entry of await deps.store.list()) {
         const { project } = await deps.store.read(entry.id)
-        if (project.autopilot?.status === 'running') await service.start(entry.id).catch(() => undefined)
+        // Fechar o app entre o fim do processamento e o primeiro estado do piloto deixava a gravação sem piloto e sem aviso:
+        // o processamento deixa a intenção no manifesto e a inicialização reconcilia aqui.
+        const pending = await intentPending(entry.id)
+        if (project.autopilot?.status === 'running' || (pending && !project.autopilot)) await service.start(entry.id).catch(() => undefined)
+        else if (pending) await settleIntent(entry.id)
         const latest = (await deps.store.read(entry.id)).project
         for (const [itemId,item] of Object.entries(latest.review?.items ?? {})) if (item.phase === 'queued' || item.phase === 'exporting') void enqueue(() => exportItem(entry.id,itemId))
       }

@@ -591,12 +591,15 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       const unique = uniqueName(stem, (n) => existsSync(join(exportsDir, `${n}.mp4`)))
       const finalPath = join(exportsDir, `${unique}.mp4`)
       const tmpDir = join(exportsDir, `.tmp-${id.slice(0, 8)}`)
+      const clipLayout = clip ? (itemOf(stored, clip.id).layout ?? (clip.layoutV !== 'auto' ? clip.layoutV : undefined)) : undefined
       const job: ExportJob = {
         exportId: id,
         projectId: request.projectId,
         project,
         format: format.kind,
-        // O layout do corte já foi aplicado por reviewDocument; não o reaplique na janela.
+        // O layout fixo do corte (o escolhido na Revisão ou o do corte) já está no documento por reviewDocument; vai também aqui
+        // para a janela reaplicá-lo DEPOIS de gerar o vertical nunca aberto, senão os layouts automáticos prevalecem.
+        ...(clipLayout ? { clipLayout } : {}),
         width: format.w,
         height: format.h,
         fps: request.fps,
