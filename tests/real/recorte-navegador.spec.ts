@@ -13,7 +13,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from '
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { eventsFromText } from '../../src/shared/events'
-import { resolveScreenCrop, stabilizeContentRects, type CropStep } from '../../src/shared/crop'
+import { CROP_GUARD_MS, isFullRect, resolveScreenCrop, stabilizeContentRects, type CropStep, type CropTimeline } from '../../src/shared/crop'
 import { parseProject } from '../../src/shared/project'
 import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, evaluateScene, prepareEvents } from '../../src/shared/scene'
 import type { ContentRectSample, Project, Rect as NRect } from '../../src/shared/types'
@@ -151,10 +151,15 @@ async function stopAndRead(s: Session, bar: Page): Promise<Done> {
 function copyTreeSafe(from: string, to: string): void {
   mkdirSync(to, { recursive: true })
   for (const e of readdirSync(from, { withFileTypes: true })) {
+    if (e.name.startsWith('.tmp')) continue // pastas temporárias do app, que somem enquanto se copia
     const a = join(from, e.name)
     const b = join(to, e.name)
-    if (e.isDirectory()) copyTreeSafe(a, b)
-    else copyFileSync(a, b)
+    try {
+      if (e.isDirectory()) copyTreeSafe(a, b)
+      else copyFileSync(a, b)
+    } catch {
+      // o arquivo sumiu no meio da cópia (o app limpando): é só depuração
+    }
   }
 }
 
@@ -184,7 +189,9 @@ const LAG_MS = 1600
  *     página que o vídeo não mostrou.
  */
 function checkContentRect(d: Done, label: string): { checks: Check[]; states: number } {
-  const steps = stabilizeContentRects(d.samples, { w: d.W, h: d.H })
+  const allSteps = stabilizeContentRects(d.samples, { w: d.W, h: d.H })
+  const fullWindows = fullFrameWindows(d)
+  const steps = allSteps.filter((st, i) => i === 0 || !isFullStep(d, st)) // a tela cheia fica de fora (ver isFullStep)
   const times: number[] = []
   for (let t = 300; t < d.recordedMs - 300; t += 300) times.push(t)
   const boxes = times.map((t) => {
@@ -196,24 +203,30 @@ function checkContentRect(d: Done, label: string): { checks: Check[]; states: nu
   })
   type State = { t: number; box: Rect }
   const states: State[] = []
-  boxes.forEach((b, i) => {
-    const next = boxes[i + 1]
-    if (!b || !next || edgeError(b, next) > 1.5) return
-    const last = states[states.length - 1]
-    if (last && edgeError(last.box, b) <= 1.5) return // o mesmo estado, só mais um quadro
-    states.push({ t: times[i]!, box: { x: b.x, y: b.y, w: b.w, h: b.h } })
-  })
+  // um ESTADO do vídeo é uma caixa que se mantém por pelo menos MIN_STATE_FRAMES quadros seguidos: a animação do F11 passa por
+  // tamanhos que duram menos que isso e que ninguém mede
+  let runStart = 0
+  for (let i = 1; i <= boxes.length; i++) {
+    const a = boxes[runStart]
+    const b = boxes[i]
+    if (a && b && edgeError(a, b) <= 1.5) continue
+    if (a && i - runStart >= MIN_STATE_FRAMES) states.push({ t: times[runStart]!, box: { x: a.x, y: a.y, w: a.w, h: a.h } })
+    runStart = i
+  }
   expect(states.length, `${label}: o vídeo tem estados estáveis da página pintada`).toBeGreaterThan(0)
 
   const expectedOf = (st: CropStep): Rect => px(d, st.rect)
   for (const st of states) {
+    // a animação de uma troca (F11) deixa quadros com tamanhos que ninguém mediu por até ~2 s: dentro dela o estado não conta
+    if (steps.slice(1).some((x) => st.t >= x.t - 600 && st.t <= x.t + 2000) || fullWindows.some((w) => st.t >= w.from && st.t <= w.to)) continue
     const best = Math.min(...steps.map((x) => edgeError(expectedOf(x), st.box)))
     expect(best, `${label}: o vídeo mostra a página ${JSON.stringify(st.box)} aos ${(st.t / 1000).toFixed(1)} s e o rastreador não mediu nada assim (medidos: ${steps.map((x) => JSON.stringify(expectedOf(x))).join(' ')})`).toBeLessThanOrEqual(TOL_PX)
   }
 
   const checks: Check[] = []
-  steps.forEach((step, i) => {
-    const end = i + 1 < steps.length ? steps[i + 1]!.t : d.recordedMs
+  steps.forEach((step) => {
+    const idx = allSteps.indexOf(step)
+    const end = idx + 1 < allSteps.length ? allSteps[idx + 1]!.t : d.recordedMs
     if (end - step.t < 1500) return
     const expected = expectedOf(step)
     const inWindow = states.filter((st) => st.t >= step.t - LEAD_MS && st.t <= end + LAG_MS)
@@ -224,6 +237,151 @@ function checkContentRect(d: Done, label: string): { checks: Check[]; states: nu
     checks.push({ step, error: best!.err, expected, painted: best!.st.box, videoMs: best!.st.t })
   })
   return { checks, states: states.length }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// A tela cheia (F11): a página é a janela toda, então NÃO há interface do navegador para o recorte expor. O quadro que o capturador do
+// Chrome entrega nesse estado às vezes vem com bordas pretas dele mesmo (medido numa gravação: o quadro de 1358×866 com a janela de
+// 1920×1080 encolhida no canto), e isso não é defeito do recorte nem da medida: os trechos de tela cheia ficam fora das conferências de
+// geometria e de pixels (o que vem depois deles, a página normal, continua conferido).
+const isFullStep = (d: Done, st: CropStep): boolean => isFullRect(st.rect, { w: d.W, h: d.H }, 6)
+
+/** Os trechos (ms, tempo dos eventos) em que a página medida é a janela toda. */
+function fullFrameWindows(d: Done): { from: number; to: number }[] {
+  const steps = stabilizeContentRects(d.samples, { w: d.W, h: d.H })
+  return steps.flatMap((st, i) => (i > 0 && isFullStep(d, st) ? [{ from: st.t - 150, to: (i + 1 < steps.length ? steps[i + 1]!.t : d.recordedMs) + 150 }] : []))
+}
+
+// Revisão da C1 (item 7): o recorte conferido em TODOS os instantes (início, transições, retomadas), não só no meio dos trechos longos
+
+const AUDIT_STEP_MS = 250
+/** Quadros seguidos com a mesma página para ela contar como um ESTADO do vídeo (e não como a animação de uma troca). */
+const MIN_STATE_FRAMES = 4
+/** O recorte já se protege contra o desencontro entre o vídeo e os eventos até esta folga (CROP_GUARD_MS). Acima dela o instante é de transição e o teste avisa. */
+const SYNC_TOL_MS = CROP_GUARD_MS
+
+type Lag = { step: number; eventMs: number; videoMs: number | null; lagMs: number | null }
+
+/** A caixa pintada do vídeo de origem a cada 100 ms (em metade da resolução): serve para achar QUANDO o vídeo mostra cada trecho medido. */
+function stateTrack(d: Done): { t: number; box: Rect | null }[] {
+  const W = Math.round(d.W / 2)
+  const H = Math.round(d.H / 2)
+  const raw = execFileSync('ffmpeg', ['-v', 'error', '-i', d.videoPath, '-vf', `fps=10,scale=${W}:${H}:flags=area`, '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'], { maxBuffer: 1 << 30, windowsHide: true })
+  const n = Math.floor(raw.length / (W * H * 3))
+  const out: { t: number; box: Rect | null }[] = []
+  for (let k = 0; k < n; k++) {
+    const b = colorBox(raw.subarray(k * W * H * 3, (k + 1) * W * H * 3), W, H, MAGENTA)
+    out.push({ t: k * 100, box: b ? { x: b.x * 2, y: b.y * 2, w: b.w * 2, h: b.h * 2 } : null })
+  }
+  return out
+}
+
+/** Para cada troca medida, quanto o vídeo demorou (ou adiantou) para mostrá-la. */
+function transitionLags(d: Done, track: { t: number; box: Rect | null }[]): Lag[] {
+  const steps = stabilizeContentRects(d.samples, { w: d.W, h: d.H })
+  return steps.slice(1).map((st, i) => {
+    const want = px(d, st.rect)
+    let video: number | null = null
+    for (let k = Math.max(0, Math.floor((st.t - 1500) / 100)); k < track.length - 2; k++) {
+      if ([0, 1, 2].every((j) => track[k + j]!.box && edgeError(track[k + j]!.box!, want) <= 6)) {
+        video = track[k]!.t
+        break
+      }
+    }
+    return { step: i + 1, eventMs: st.t, videoMs: video, lagMs: video === null ? null : video - st.t }
+  })
+}
+
+/** Os trechos de tempo em que o vídeo e os eventos discordam mais que a folga do recorte: neles a conferência estrita não vale. */
+function exemptWindows(lags: Lag[]): { from: number; to: number }[] {
+  return lags
+    .filter((l) => l.lagMs === null || Math.abs(l.lagMs) > SYNC_TOL_MS)
+    .map((l) => {
+      const v = l.videoMs ?? l.eventMs + 1500
+      return { from: Math.min(l.eventMs, v) - 150, to: Math.max(l.eventMs, v) + 300 }
+    })
+}
+const isExempt = (windows: { from: number; to: number }[], t: number): boolean => windows.some((w) => t >= w.from && t <= w.to)
+
+/**
+ * O recorte automático CABE na página que o vídeo mostra, em todos os instantes de 0,25 em 0,25 s (do primeiro quadro ao fim),
+ * com a tolerância de ±4 px. É o que impede a barra de abas de aparecer na abertura, nas transições e depois de uma retomada.
+ */
+function auditGeometry(d: Done, tl: CropTimeline, windows: { from: number; to: number }[], lags: Lag[], label: string): { checked: number; skipped: number; stable: Set<number>; moving: number[] } {
+  const times: number[] = []
+  for (let t = 0; t < d.recordedMs - 150; t += AUDIT_STEP_MS) times.push(t)
+  const boxes = times.map((t) => {
+    try {
+      const b = paintedBox(d, t)
+      return { x: b.x, y: b.y, w: b.w, h: b.h }
+    } catch {
+      return null // sem a cor da página (janela em movimento)
+    }
+  })
+  const same = (a: Rect | null | undefined, b: Rect | null | undefined): boolean => Boolean(a && b && edgeError(a, b) <= 2)
+  // Um quadro com a página PARADA faz parte de uma sequência de quadros com a mesma caixa. Quadro em movimento (a animação do F11 passa por tamanhos que
+  // ninguém mediu) não tem geometria para conferir, mas só pode existir PERTO de uma troca.
+  const stable = new Set<number>()
+  const moving: number[] = []
+  const runs: boolean[] = new Array(times.length).fill(false)
+  let start = 0
+  for (let i = 1; i <= times.length; i++) {
+    if (boxes[start] && same(boxes[start], boxes[i])) continue
+    if (boxes[start] && i - start >= MIN_STATE_FRAMES) for (let k = start; k < i; k++) runs[k] = true
+    start = i
+  }
+  times.forEach((t, i) => {
+    if (runs[i]) stable.add(t)
+    else moving.push(t)
+  })
+  const nearSwitch = (t: number): boolean => lags.some((l) => Math.abs(t - l.eventMs) <= 1200 || (l.videoMs !== null && Math.abs(t - l.videoMs) <= 1200))
+  for (const t of moving) expect(nearSwitch(t) || isExempt(windows, t), `${label}: o quadro de ${(t / 1000).toFixed(2)} s tem a página em movimento e nenhuma troca por perto`).toBe(true)
+
+  let checked = 0
+  let skipped = 0
+  times.forEach((t, i) => {
+    if (!stable.has(t) || isExempt(windows, t)) {
+      skipped++
+      return
+    }
+    const box = boxes[i]!
+    const c = px(d, tl.at(t))
+    const ok = c.x >= box.x - TOL_PX && c.y >= box.y - TOL_PX && c.x + c.w <= box.x + box.w + TOL_PX && c.y + c.h <= box.y + box.h + TOL_PX
+    expect(ok, `${label}: aos ${(t / 1000).toFixed(2)} s o recorte ${JSON.stringify(c)} sai da página pintada ${JSON.stringify(box)}`).toBe(true)
+    checked++
+  })
+  return { checked, skipped, stable, moving }
+}
+
+/**
+ * O vídeo EXPORTADO (16:9 ou vertical) não mostra a interface do navegador em nenhum instante: a fração de pixels do cartão que não
+ * são da página (borda suavizada, cursor, ripple) fica junto da mediana do próprio vídeo; a barra de abas e a de endereço pesariam
+ * mais de 10 pontos.
+ */
+function auditPixels(video: string, vertical: boolean, proj: Project, data: ReturnType<typeof prepareEvents>, windows: { from: number; to: number }[], stable: Set<number>, label: string, mode: 'clean' | 'measure' = 'clean'): { baseline: number; worst: number; worstAt: number; checked: number } {
+  const F = vertical ? VERTICAL_1080 : HORIZONTAL_1080
+  const W = vertical ? 540 : 960
+  const H = vertical ? 960 : 540
+  const k = W / F.w
+  const raw = execFileSync('ffmpeg', ['-v', 'error', '-i', video, '-vf', `fps=${1000 / AUDIT_STEP_MS},scale=${W}:${H}:flags=area`, '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'], { maxBuffer: 1 << 30, windowsHide: true })
+  const n = Math.floor(raw.length / (W * H * 3))
+  const derived = deriveProject(proj, data, F)
+  const fractions: { t: number; frac: number }[] = []
+  for (let i = 0; i < n; i++) {
+    const t = i * AUDIT_STEP_MS
+    if (isExempt(windows, t) || !stable.has(t)) continue // só quadros em que a página do vídeo de origem está parada
+    const dest = evaluateScene(proj, derived, t, F).screen!.dest
+    const region = { x: dest.x * k, y: dest.y * k, w: dest.w * k, h: dest.h * k }
+    fractions.push({ t, frac: nonPageFraction(raw.subarray(i * W * H * 3, (i + 1) * W * H * 3), W, region) })
+  }
+  const sorted = fractions.map((f) => f.frac).sort((a, b) => a - b)
+  const baseline = sorted[Math.floor(sorted.length / 2)] ?? 0
+  const worst = fractions.reduce((a, f) => (f.frac > a.frac ? f : a), { t: 0, frac: 0 })
+  expect(fractions.length, `${label}: quadros conferidos`).toBeGreaterThan(5)
+  if (mode === 'measure') return { baseline, worst: worst.frac, worstAt: worst.t, checked: fractions.length }
+  expect(baseline, `${label}: o vídeo exportado com recorte quase não tem pixel fora da página (mediana)`).toBeLessThan(0.04)
+  expect(worst.frac - baseline, `${label}: aos ${(worst.t / 1000).toFixed(2)} s o vídeo exportado mostra ${(worst.frac * 100).toFixed(1)}% de pixels fora da página (mediana ${(baseline * 100).toFixed(1)}%)`).toBeLessThan(0.025)
+  return { baseline, worst: worst.frac, worstAt: worst.t, checked: fractions.length }
 }
 
 /** Eventos e documento prontos para calcular a cena (a mesma conta do editor e da exportação). */
@@ -262,7 +420,7 @@ async function exportBoth(s: Session, id: string): Promise<{ h: string; v: strin
  * fração de pixels que não são da página é desprezível, no 16:9 e no vertical, em vários instantes); sem ele, a barra de abas e a de
  * endereço aparecem (a conferência não é cega).
  */
-async function checkExports(s: Session, d: Done, name: string): Promise<{ withCrop: number; without: number }> {
+async function checkExports(s: Session, d: Done, name: string, windows: { from: number; to: number }[], stable: Set<number>): Promise<{ withCrop: number; without: number }> {
   const id = readdirSync(s.projects)[0]!
   // instantes no MEIO dos três trechos medidos mais longos: longe das trocas de tamanho, que o vídeo mostra com atraso
   const allSteps = stabilizeContentRects(d.samples, { w: d.W, h: d.H })
@@ -297,9 +455,11 @@ async function checkExports(s: Session, d: Done, name: string): Promise<{ withCr
   const projCrop = parseProject(readFileSync(join(d.dir, 'project.json'), 'utf8'))
   const h1 = measure(withCrop.h, false, projCrop, 'com-recorte')
   const v1 = measure(withCrop.v, true, projCrop, 'com-recorte')
-  console.log(`[${name}] EXPORTAÇÃO COM recorte: pixels que não são da página — 16:9 ${(h1 * 100).toFixed(2)}%, vertical ${(v1 * 100).toFixed(2)}%`)
-  expect(h1, '16:9 com recorte: nenhum pixel da barra de abas').toBeLessThan(0.02)
-  expect(v1, 'vertical com recorte: nenhum pixel da barra de abas').toBeLessThan(0.02)
+  console.log(`[${name}] EXPORTAÇÃO COM recorte (meio dos trechos): pixels que não são da página — 16:9 ${(h1 * 100).toFixed(2)}%, vertical ${(v1 * 100).toFixed(2)}%`)
+  // todos os instantes, do primeiro quadro ao fim, nos dois formatos
+  const ah = auditPixels(withCrop.h, false, projCrop, data, windows, stable, `${name} 16:9`)
+  const av = auditPixels(withCrop.v, true, projCrop, data, windows, stable, `${name} vertical`)
+  console.log(`[${name}] AUDITORIA dos quadros exportados: 16:9 ${ah.checked} quadros (mediana ${(ah.baseline * 100).toFixed(2)}%, pior ${(ah.worst * 100).toFixed(2)}% aos ${(ah.worstAt / 1000).toFixed(2)} s); vertical ${av.checked} quadros (mediana ${(av.baseline * 100).toFixed(2)}%, pior ${(av.worst * 100).toFixed(2)}% aos ${(av.worstAt / 1000).toFixed(2)} s)`)
 
   // o mesmo projeto SEM recorte (o gravado pela interface, como o usuário faria em "Desligado")
   await s.page.evaluate(
@@ -311,12 +471,15 @@ async function checkExports(s: Session, d: Done, name: string): Promise<{ withCr
   for (const f of readdirSync(join(s.projects, id, 'exports'))) if (f.endsWith('.mp4')) rmFile(join(s.projects, id, 'exports', f))
   const without = await exportBoth(s, id)
   const projOff = { ...projCrop, screenCrop: { mode: 'off' as const } }
-  const h0 = measure(without.h, false, projOff, 'sem-recorte')
-  const v0 = measure(without.v, true, projOff, 'sem-recorte')
-  console.log(`[${name}] EXPORTAÇÃO SEM recorte: pixels que não são da página — 16:9 ${(h0 * 100).toFixed(2)}%, vertical ${(v0 * 100).toFixed(2)}%`)
-  expect(h0, '16:9 sem recorte mostra a interface do navegador (a conferência enxerga)').toBeGreaterThan(0.06)
-  expect(v0, 'vertical sem recorte mostra a interface do navegador').toBeGreaterThan(0.04)
-  return { withCrop: Math.max(h1, v1), without: Math.min(h0, v0) }
+  measure(without.h, false, projOff, 'sem-recorte') // só para a captura de tela do "antes"
+  measure(without.v, true, projOff, 'sem-recorte')
+  // a conferência não é cega: SEM o recorte, o pior quadro mostra a barra de abas e a de endereço (os mesmos quadros e a mesma conta)
+  const h0 = auditPixels(without.h, false, projOff, data, windows, stable, `${name} 16:9 sem recorte`, 'measure')
+  const v0 = auditPixels(without.v, true, projOff, data, windows, stable, `${name} vertical sem recorte`, 'measure')
+  console.log(`[${name}] EXPORTAÇÃO SEM recorte: pior quadro com pixels fora da página — 16:9 ${(h0.worst * 100).toFixed(2)}%, vertical ${(v0.worst * 100).toFixed(2)}%`)
+  expect(h0.worst, '16:9 sem recorte mostra a interface do navegador (a conferência enxerga)').toBeGreaterThan(0.06)
+  expect(v0.worst, 'vertical sem recorte mostra a interface do navegador').toBeGreaterThan(0.04)
+  return { withCrop: Math.max(h1, v1), without: Math.min(h0.worst, v0.worst) }
 }
 
 function rmFile(p: string): void {
@@ -359,6 +522,22 @@ for (const b of BROWSERS) {
   })
 }
 
+/** F12 e espera a página mudar de largura (abrir: encolhe; fechar: cresce); se a tecla se perdeu, aperta de novo (até 3 vezes). */
+async function toggleDevTools(opened: OpenedBrowser, wantOpen: boolean): Promise<void> {
+  const before = opened.page().w
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await pressKeyIn(opened.hwnd, VK_F12)
+    const deadline = Date.now() + 4000
+    while (Date.now() < deadline) {
+      const w = opened.page().w
+      if (wantOpen ? w < before * 0.7 : w > before * 1.3) return
+      await sleep(200)
+    }
+    console.log(`[devtools] tentativa ${attempt}: a página não mudou de largura (${before} px); apertando F12 de novo`)
+  }
+  throw new Error(`O F12 não ${wantOpen ? 'abriu' : 'fechou'} o DevTools do navegador de teste.`)
+}
+
 test('chrome: DevTools acoplado, tela cheia (F11) e janela redimensionada: o retângulo acompanha', async () => {
   const b = BROWSERS[0]!
   test.skip(!existsSync(b.exe), 'chrome não está instalado nesta máquina')
@@ -374,12 +553,12 @@ test('chrome: DevTools acoplado, tela cheia (F11) e janela redimensionada: o ret
   setWindowRect(opened.hwnd, { x: frame0.x - 8, y: frame0.y, w: Math.round(frame0.w * 0.85) + 16, h: frame0.h + 8 })
   await sleep(2200)
 
-  // DevTools acoplado (F12 com a janela de teste em primeiro plano)
-  await pressKeyIn(opened.hwnd, VK_F12)
+  // DevTools acoplado (F12 com a janela de teste em primeiro plano; a tecla só vale quando a página de fato mudou de largura)
+  await toggleDevTools(opened, true)
   await sleep(4500)
   const withTools = opened.page()
   console.log(`[chrome] com o DevTools: página ${JSON.stringify(withTools)}`)
-  await pressKeyIn(opened.hwnd, VK_F12)
+  await toggleDevTools(opened, false)
   await sleep(4500)
 
   // tela cheia (F11)
@@ -390,6 +569,47 @@ test('chrome: DevTools acoplado, tela cheia (F11) e janela redimensionada: o ret
 
   const d = await stopAndRead(s, bar)
   await verify(b, s, opened, d, ['resize', 'devtools', 'fullscreen'], 1)
+})
+
+test('chrome: F11, pausar, sair do F11 DURANTE a pausa e retomar: a página de depois da retomada vale (sem barra de abas no vídeo)', async () => {
+  const b = BROWSERS[0]!
+  test.skip(!existsSync(b.exe), 'chrome não está instalado nesta máquina')
+  test.setTimeout(360_000)
+  const { s, opened, bar } = await openAndPrepare(b)
+
+  await sleep(2500)
+  await clickButton(opened)
+  await sleep(1500)
+
+  // tela cheia (F11) e pausa
+  await pressKeyIn(opened.hwnd, VK_F11)
+  await sleep(4500)
+  await bar.getByTestId('bar-pause').click()
+  await expect(bar.getByTestId('bar')).toHaveAttribute('data-status', 'paused')
+  await sleep(700)
+
+  // sai da tela cheia DURANTE a pausa: o rastreador vê a janela voltar ao normal, mas nenhuma amostra cabe no vídeo
+  const fullPage = opened.page()
+  await activateByClick(opened.hwnd, { x: Math.round(fullPage.x + 40), y: Math.round(fullPage.y + fullPage.h - 40) })
+  await pressKeyIn(opened.hwnd, VK_F11)
+  await sleep(3000)
+  console.log(`[pausa] página depois de sair do F11, ainda pausado: ${JSON.stringify(opened.page())}`)
+
+  // retoma: a página de AGORA (normal) tem de valer, mesmo que o rastreador não meça de novo
+  await bar.getByTestId('bar-pause').click()
+  await expect(bar.getByTestId('bar')).toHaveAttribute('data-status', 'recording')
+  await sleep(5500)
+
+  const d = await stopAndRead(s, bar)
+  const manifest = JSON.parse(readFileSync(join(d.dir, 'raw/recording.json'), 'utf8')) as { pauses: { start: number; end: number }[] }
+  expect(manifest.pauses, 'a gravação teve uma pausa').toHaveLength(1)
+  const steps = stabilizeContentRects(d.samples, { w: d.W, h: d.H })
+  const last = steps[steps.length - 1]!
+  console.log(`[pausa] trechos da página (ms → caixa): ${steps.map((st) => `${Math.round(st.t)}: ${st.rect.x.toFixed(3)},${st.rect.y.toFixed(3)} ${st.rect.w.toFixed(3)}×${st.rect.h.toFixed(3)}`).join(' | ')}; gravado ${(d.recordedMs / 1000).toFixed(1)} s`)
+  // o último trecho é a página NORMAL (com a barra de abas fora dela), que começou na retomada, não a tela cheia
+  expect(last.rect.y, 'depois da retomada a página volta a ter as abas em cima (não é a tela cheia)').toBeGreaterThan(0.08)
+  expect(last.t, 'o trecho da retomada começa na retomada, não no fim').toBeLessThan(d.recordedMs - 4000)
+  await verify(b, s, opened, d, ['fullscreen', 'resume'], 1)
 })
 
 test('chrome: gravação de TELA com o navegador em primeiro plano — a página é registrada, o recorte NÃO liga sozinho e o editor oferece', async () => {
@@ -517,7 +737,7 @@ async function verify(b: TestBrowser, s: Session, opened: OpenedBrowser, d: Done
   expect(onButton, 'os cliques no botão ciano foram registrados sobre o botão no quadro').toBeGreaterThanOrEqual(buttonClicks)
 
   // o recorte que o editor e a exportação usam: dentro da área pintada, em todos os instantes conferidos
-  const tl = resolveScreenCrop(d.project.screenCrop, d.samples, { w: d.W, h: d.H })
+  const tl = resolveScreenCrop(d.project.screenCrop, d.samples, { w: d.W, h: d.H }, d.project.sources.screen!.durationMs)
   expect(tl, 'o recorte automático existe').not.toBeNull()
   for (const c of checks) {
     const eff = px(d, tl!.at(c.step.t + 700)) // depois da rampa de 200 ms do trecho
@@ -527,10 +747,19 @@ async function verify(b: TestBrowser, s: Session, opened: OpenedBrowser, d: Done
     expect(eff.y + eff.h).toBeLessThanOrEqual(c.painted.y + c.painted.h + TOL_PX)
   }
 
+  // o recorte cabe na página que o vídeo mostra em TODOS os instantes (início, transições, retomadas)
+  const track = stateTrack(d)
+  const lags = transitionLags(d, track)
+  const windows = [...exemptWindows(lags), ...fullFrameWindows(d)]
+  console.log(`[${name}] defasagem do vídeo em cada troca (ms): ${lags.map((l) => `${l.step}: ${l.lagMs === null ? 'não achada' : l.lagMs}`).join(' | ') || 'nenhuma troca'}; instantes dispensados: ${windows.length}`)
+  const audit = auditGeometry(d, tl!, windows, lags, name)
+  console.log(`[${name}] GEOMETRIA: o recorte cabe na página pintada em ${audit.checked} instantes (de 0,25 em 0,25 s, do primeiro quadro ao fim); ${audit.skipped} dispensados (em movimento perto de uma troca: ${audit.moving.length}; defasagem acima de ${SYNC_TOL_MS} ms)`)
+  expect(audit.checked, 'conferiu a maior parte da gravação').toBeGreaterThan(Math.floor(d.recordedMs / AUDIT_STEP_MS) * 0.5)
+
   // a folha de contato do vídeo gravado e as capturas antes/depois
   mkdirSync(SCREENS_DIR, { recursive: true })
   execFileSync(process.execPath, [join(process.cwd(), 'scripts', 'contact-sheet.mjs'), d.videoPath, join(SCREENS_DIR, `real-navegador-${name}-gravado.png`), '4', '3', '480'], { stdio: 'inherit' })
 
-  await checkExports(s, d, name)
+  await checkExports(s, d, name, windows, audit.stable)
 }
 

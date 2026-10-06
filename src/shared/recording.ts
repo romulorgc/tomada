@@ -397,6 +397,43 @@ function rectAt<T extends { t: number }>(timeline: T[], t: number, hint: { i: nu
  * Ordena por tempo. Para janela, a área é a que o quadro mostra (ver `chooseCaptureRect`)
  * e acompanha a janela quando ela se mexe.
  */
+/**
+ * As amostras de um estado que só se registra quando MUDA (o retângulo da janela, a página do navegador), cada uma com o tempo da
+ * gravação. Uma amostra que cai DENTRO de uma pausa (ou antes do t0) não tem onde cair no vídeo, mas o estado que ela mediu vale
+ * quando a gravação volta (a retomada, ou o instante 0): o rastreador não repete uma medida que não mudou, então, se a janela mudou
+ * durante a pausa (F11 → pausar → sair do F11 → retomar), não haverá outra amostra depois. Vale a ÚLTIMA amostra de cada trecho perdido.
+ * `entry.t` no relógio do processo principal; `-Infinity` é "desde o começo".
+ */
+export function placeSamples<T extends { t: number }>(entries: readonly T[], t0: number, mainToRenderer: number, pauses: Interval[]): { t: number; entry: T }[] {
+  const out: { t: number; entry: T }[] = []
+  let lost: { entry: T; at: number } | null = null
+  const flush = (): void => {
+    if (lost) out.push({ t: lost.at, entry: lost.entry })
+    lost = null
+  }
+  for (const entry of entries) {
+    if (!Number.isFinite(entry.t)) {
+      flush()
+      out.push({ t: 0, entry })
+      continue
+    }
+    const abs = entry.t + mainToRenderer
+    const rec = toRecordingTime(abs, t0, pauses)
+    if (rec === null) {
+      const pause = pauses.find((p) => abs >= p.start && abs < p.end)
+      const at = pause ? Math.max(0, pause.end - t0 - pausedBefore(pause.end, pauses)) : 0
+      // cada trecho perdido (o de antes do t0, cada pausa) tem o seu estado: só a ÚLTIMA amostra DE CADA UM vale
+      if (lost && lost.at !== at) flush()
+      lost = { entry, at }
+      continue
+    }
+    flush()
+    out.push({ t: rec, entry })
+  }
+  flush()
+  return out
+}
+
 export function buildEvents(input: BuildEventsInput): BuiltEvents {
   const { raw, kind, frame } = input
   const pauses = normalizeIntervals(input.pauses)
@@ -492,12 +529,9 @@ export function buildEvents(input: BuildEventsInput): BuiltEvents {
   // --- Retângulos da janela, em tempo de gravação (só os que caem fora de pausa)
   const windowRects: WindowRectSample[] = []
   if (kind === 'window') {
-    for (const entry of timeline) {
-      const t = Number.isFinite(entry.t) ? toT(entry.t) : 0
-      // O primeiro estado vale desde o início, mesmo que a marca caia antes do t0.
-      const tt = t ?? (windowRects.length === 0 ? 0 : null)
-      if (tt === null) continue
-      windowRects.push({ t: round1(tt), x: entry.rect.x, y: entry.rect.y, w: entry.rect.w, h: entry.rect.h })
+    // O estado que vale no começo (marca antes do t0) e na retomada (marca dentro de uma pausa): ver `placeSamples`.
+    for (const { t, entry } of placeSamples(timeline, input.t0, input.mainToRenderer, pauses)) {
+      windowRects.push({ t: round1(t), x: entry.rect.x, y: entry.rect.y, w: entry.rect.w, h: entry.rect.h })
     }
   }
 
@@ -514,25 +548,20 @@ export function buildEvents(input: BuildEventsInput): BuiltEvents {
   }
   if (kind === 'window' && raw.windowRects.some((r) => r.content)) {
     const chosenSource = rectSource === 'client' ? 'client' : 'frame'
-    raw.windowRects.forEach((r, i) => {
-      if (!r.content) return
+    const measured = raw.windowRects.filter((r) => r.content)
+    for (const { t, entry: r } of placeSamples(measured, input.t0, input.mainToRenderer, pauses)) {
       const src = chosenSource === 'client' ? r.client : r.frame
-      if (!(src.w > 0) || !(src.h > 0)) return
-      const t = Number.isFinite(r.t) ? toT(r.t) : 0
-      const tt = t ?? (contentRects.length === 0 && i === 0 ? 0 : null)
-      if (tt === null) return
-      pushContent(tt, { x: (r.content.x - src.x) / src.w, y: (r.content.y - src.y) / src.h, w: r.content.w / src.w, h: r.content.h / src.h })
-    })
+      if (!(src.w > 0) || !(src.h > 0)) continue
+      const c = r.content!
+      pushContent(t, { x: (c.x - src.x) / src.w, y: (c.y - src.y) / src.h, w: c.w / src.w, h: c.h / src.h })
+    }
   } else if (kind === 'screen' && raw.pages && raw.pages.some((p) => p.rect)) {
     const base = boundsPx
-    raw.pages.forEach((p, i) => {
-      const t = toT(p.t)
-      const tt = t ?? (contentRects.length === 0 && i === 0 ? 0 : null)
-      if (tt === null) return
+    for (const { t: tt, entry: p } of placeSamples(raw.pages, input.t0, input.mainToRenderer, pauses)) {
       if (p.exe && !contentExe) contentExe = p.exe
       if (!p.rect) {
         pushContent(tt, null)
-        return
+        continue
       }
       // só a parte que cai neste monitor (a janela pode estar em outro)
       const x0 = Math.max(base.x, p.rect.x)
@@ -541,7 +570,7 @@ export function buildEvents(input: BuildEventsInput): BuiltEvents {
       const y1 = Math.min(base.y + base.h, p.rect.y + p.rect.h)
       if (x1 - x0 < 16 || y1 - y0 < 16) pushContent(tt, null)
       else pushContent(tt, { x: (x0 - base.x) / base.w, y: (y0 - base.y) / base.h, w: (x1 - x0) / base.w, h: (y1 - y0) / base.h })
-    })
+    }
   }
 
   return {

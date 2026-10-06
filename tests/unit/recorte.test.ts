@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { browserOfExe, pickChromiumPage, type ChildWindow } from '@shared/browser'
 import {
+  CROP_GUARD_MS,
   CROP_TRANSITION_MS,
   STICKY_PX,
   buildCropTimeline,
@@ -115,17 +116,27 @@ describe('a linha do tempo do recorte', () => {
   const a = px(1, 108, 1358, 834)
   const b = px(1, 108, 700, 834) // o DevTools abriu: a página encolheu
 
-  it('antes da mudança vale o primeiro; depois dos 200 ms vale o novo; no meio, uma transição suave', () => {
+  it('antes da mudança vale o primeiro; depois da folga e dos 200 ms vale o novo', () => {
     const tl = buildCropTimeline(stabilizeContentRects([sample(0, a), sample(5000, b)], SRC), SRC)!
-    expect(tl.at(0).w).toBeCloseTo(tl.at(4999).w, 6)
+    expect(tl.at(0).w).toBeCloseTo(tl.at(4000).w, 6)
+    // a página ENCOLHEU: o recorte já está dentro da página nova (nunca passa pelo que virou interface)
     const mid = tl.at(5000 + CROP_TRANSITION_MS / 2).w * SRC.w
-    expect(mid).toBeGreaterThan(700)
-    expect(mid).toBeLessThan(1358)
+    expect(mid).toBeLessThanOrEqual(700 + 1e-6)
     // chegou (com a proporção da referência: ver o próximo teste)
-    const after = tl.at(5000 + CROP_TRANSITION_MS + 1)
+    const after = tl.at(5000 + CROP_GUARD_MS + CROP_TRANSITION_MS + 1)
     const afterAt = tl.at(9000)
     expect(after.w).toBeCloseTo(afterAt.w, 6)
     expect(afterAt.w * SRC.w).toBeLessThan(1358)
+  })
+
+  it('a página CRESCEU: a transição é suave (do retângulo de antes ao novo) e só começa depois da folga', () => {
+    const tl = buildCropTimeline(stabilizeContentRects([sample(0, b), sample(5000, a)], SRC), SRC, { durationMs: 60_000 })!
+    const before = tl.at(4000).w * SRC.w
+    expect(tl.at(5000 + CROP_GUARD_MS - 1).w * SRC.w).toBeCloseTo(before, 3) // ainda na página de antes
+    const mid = tl.at(5000 + CROP_GUARD_MS + CROP_TRANSITION_MS / 2).w * SRC.w
+    expect(mid).toBeGreaterThan(before + 1)
+    const end = tl.at(5000 + CROP_GUARD_MS + CROP_TRANSITION_MS + 1).w * SRC.w
+    expect(mid).toBeLessThan(end - 1)
   })
 
   it('a referência é o retângulo que vigora por mais tempo, e o recorte efetivo tem sempre a proporção dela', () => {
@@ -313,7 +324,7 @@ describe('a página medida vira content-rect.jsonl (normalizada no quadro captur
     expect(built.cursor[0]!.y).toBeCloseTo(0.5, 3)
   })
 
-  it('amostra dentro de uma pausa não existe; a primeira vale desde o começo', () => {
+  it('amostra dentro de uma pausa vale na retomada; a primeira vale desde o começo', () => {
     const built = buildEvents({
       ...base,
       pauses: [{ start: 1500, end: 2500 }],
@@ -326,7 +337,8 @@ describe('a página medida vira content-rect.jsonl (normalizada no quadro captur
         ]
       }
     })
-    expect(built.contentRects.map((r) => r.t)).toEqual([0, 1000])
+    // a de dentro da pausa (2000) vale na retomada (1500 − 1000 = 500 ms de gravação); a de depois, no seu tempo
+    expect(built.contentRects.map((r) => r.t)).toEqual([0, 500, 1000])
   })
 
   it('janela de outro programa (sem medida): nada é gravado', () => {
@@ -520,13 +532,13 @@ describe('a cena com o recorte', () => {
 
   it('recorte automático: a página muda no meio (DevTools) e a cena segue, com a mesma proporção', () => {
     const page = (x: number, y: number, ww: number, hh: number): Rect => ({ x: x / 1920, y: y / 1080, w: ww / 1920, h: hh / 1080 })
-    const rects: ContentRectSample[] = [{ t: 0, ...page(1, 108, 1358, 834) }, { t: 6000, ...page(1, 108, 664, 834) }]
+    const rects: ContentRectSample[] = [{ t: 0, ...page(1, 108, 1358, 834) }, { t: 15_000, ...page(1, 108, 664, 834) }]
     const raw = prepareEvents({ cursor: still(0.3, 0.5), clicks: [], keys: [], contentRects: rects }, DURATION)
     const p = mk({ mode: 'auto' })
     const d = deriveProject(p, raw, F)
     expect(d.crop).not.toBeNull()
     const before = evaluateScene(p, d, 3000, F).screen!.src
-    const after = evaluateScene(p, d, 9000, F).screen!.src
+    const after = evaluateScene(p, d, 18_000, F).screen!.src
     expect(after.w).toBeLessThan(before.w)
     // proporção de pixels igual nos dois instantes
     expect((before.w * 1920) / (before.h * 1080)).toBeCloseTo((after.w * 1920) / (after.h * 1080), 3)

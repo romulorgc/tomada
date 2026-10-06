@@ -4,6 +4,7 @@
  * Tudo NORMALIZADO 0..1 na tela gravada; as proporções travadas (16:9, 16:10, 4:3) valem em PIXELS da tela gravada (uma tela de
  * 1920×1080 com um retângulo de 0,5 × 0,5 de largura e altura não é quadrado: é 960×540).
  */
+import { cropMinPx } from './crop'
 import type { Rect, Size } from './types'
 
 export type CropHandle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
@@ -12,21 +13,20 @@ export type CropHandle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | '
 export const CROP_LOCKS = { '16:9': 16 / 9, '16:10': 16 / 10, '4:3': 4 / 3 } as const
 export type CropLockId = keyof typeof CROP_LOCKS
 
-/** Menor lado do recorte, em pixels da tela gravada (menor que isso não serve para nada). */
-export const MIN_CROP_PX = 64
-
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v)
 
 /**
  * Move ou redimensiona `start` pelo deslocamento (`dx`, `dy`, normalizados) do ponteiro. `aspect` (largura/altura em px) trava a
- * proporção: o canto oposto (ou a aresta oposta) fica no lugar e o retângulo nunca sai da tela nem fica menor que `MIN_CROP_PX`.
+ * proporção: o canto oposto (ou a aresta oposta) fica no lugar e o retângulo nunca sai da tela nem fica menor que `cropMinPx` (o
+ * MESMO mínimo que o documento exige: um retângulo menor virava "tela inteira" em silêncio). Se a conta não cabe, devolve `start`.
  */
 export function dragCrop(start: Rect, handle: CropHandle, dx: number, dy: number, sourcePx: Size, aspect: number | null = null): Rect {
   if (handle === 'move') {
     return { ...start, x: clamp(start.x + dx, 0, 1 - start.w), y: clamp(start.y + dy, 0, 1 - start.h) }
   }
-  const minW = MIN_CROP_PX / sourcePx.w
-  const minH = MIN_CROP_PX / sourcePx.h
+  const min = cropMinPx(sourcePx)
+  const minW = min.w / sourcePx.w
+  const minH = min.h / sourcePx.h
   let x0 = start.x
   let y0 = start.y
   let x1 = start.x + start.w
@@ -80,6 +80,7 @@ export function dragCrop(start: Rect, handle: CropHandle, dx: number, dy: number
   h = w / ratio
   const x = growsLeft ? anchorX - w : growsRight ? anchorX : anchorX - w / 2
   const y = growsUp ? anchorY - h : growsDown ? anchorY : anchorY - h / 2
+  if (w < minW - 1e-9 || h < minH - 1e-9) return start // a proporção travada não cabe aqui: fica como estava
   return { x: clamp(x, 0, 1 - w), y: clamp(y, 0, 1 - h), w, h }
 }
 
@@ -91,6 +92,19 @@ export function lockAspect(r: Rect, aspect: number, sourcePx: Size): Rect {
   if (h > r.h) {
     h = r.h
     w = h * ratio
+  }
+  // nunca menor que o mínimo que o documento aceita (mantendo a proporção): cresce a partir do centro, dentro da tela
+  const min = cropMinPx(sourcePx)
+  const minW = min.w / sourcePx.w
+  const minH = min.h / sourcePx.h
+  const grow = Math.max(1, minW / w, minH / h)
+  if (grow > 1) {
+    const cx = r.x + r.w / 2
+    const cy = r.y + r.h / 2
+    w *= grow
+    h *= grow
+    if (w > 1 || h > 1) return r // a proporção não cabe na tela com esse mínimo: não trava
+    return { x: clamp(cx - w / 2, 0, 1 - w), y: clamp(cy - h / 2, 0, 1 - h), w, h }
   }
   return { x: r.x + (r.w - w) / 2, y: r.y + (r.h - h) / 2, w, h }
 }

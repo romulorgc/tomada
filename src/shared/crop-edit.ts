@@ -3,6 +3,7 @@
  * dos cliques) são refeitos a partir do que o novo recorte enxerga (clique numa aba deixa de abrir zoom), com os manuais intactos.
  * Código puro: sem DOM, sem Node.
  */
+import { isValidCropRect } from './crop'
 import { regenerateZooms } from './edits'
 import { applyScreenCrop, type CursorData } from './scene'
 import type { Project, ScreenCrop } from './types'
@@ -20,6 +21,9 @@ export function sameScreenCrop(a: ScreenCrop | undefined, b: ScreenCrop | undefi
  */
 export function setScreenCrop(doc: Project, crop: ScreenCrop | undefined, raw: CursorData | null, durationMs: number): Project {
   if (sameScreenCrop(doc.screenCrop, crop)) return doc
+  // um retângulo manual que o documento não aceitaria (pequeno demais, fora da tela) NÃO troca o recorte: o anterior fica (e quem
+  // chama avisa, com `isValidCropRect`). Antes isto virava "tela inteira" em silêncio.
+  if (crop?.mode === 'manual' && !isValidCropRect(crop.manual)) return doc
   const next: Project = { ...doc }
   if (crop) next.screenCrop = crop
   else delete next.screenCrop

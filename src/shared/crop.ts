@@ -18,6 +18,8 @@ import type { ContentRectSample, Point, Rect, ScreenCrop, Size } from './types'
 export const STICKY_PX = 3
 /** Duração (ms) da transição quando o recorte muda de verdade (a janela foi movida, redimensionada, DevTools abriu…). */
 export const CROP_TRANSITION_MS = 200
+/** Folga (ms) em volta de cada troca de página: o vídeo e os eventos não têm o mesmo zero. Dentro dela o recorte só usa o que cabe na página de antes E na de depois. */
+export const CROP_GUARD_MS = 150
 /** Menor fração da tela que um recorte pode ter (um retângulo menor que isto é lixo da medida ou do arraste). */
 export const MIN_CROP_FRACTION = 0.08
 
@@ -38,8 +40,21 @@ export function sanitizeRect(r: Rect | null | undefined): Rect | null {
   const y0 = clamp(r.y, 0, 1)
   const x1 = clamp(r.x + r.w, 0, 1)
   const y1 = clamp(r.y + r.h, 0, 1)
-  if (x1 - x0 < MIN_CROP_FRACTION || y1 - y0 < MIN_CROP_FRACTION) return null
+  if (x1 - x0 < MIN_CROP_FRACTION - 1e-9 || y1 - y0 < MIN_CROP_FRACTION - 1e-9) return null
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+}
+
+/**
+ * O menor recorte que vale, em pixels da tela gravada: o MESMO limite para quem desenha o retângulo (arraste, proporção travada) e
+ * para quem lê o documento (`sanitizeRect`). Se o editor aceitasse menos, o recorte virava "tela inteira" em silêncio.
+ */
+export function cropMinPx(sourcePx: Size): Size {
+  return { w: Math.ceil(MIN_CROP_FRACTION * sourcePx.w - 1e-9), h: Math.ceil(MIN_CROP_FRACTION * sourcePx.h - 1e-9) }
+}
+
+/** Esse retângulo é um recorte manual válido (dentro da tela, com o tamanho mínimo)? */
+export function isValidCropRect(r: Rect | null | undefined): boolean {
+  return sanitizeRect(r) !== null
 }
 
 /** O retângulo é (quase) a tela toda? Então recortar não muda nada. */
@@ -110,27 +125,54 @@ export function fitAspectInside(r: Rect, aspect: number, sourcePx: Size): Rect {
   return { x: r.x + (r.w - nw) / 2, y: r.y + (r.h - nh) / 2, w: nw, h: nh }
 }
 
+export type CropTimelineOptions = {
+  /** Duração da gravação (ms): o último estado vale até ela (conta para a proporção de referência). Sem ela, conta 1 s. */
+  durationMs?: number
+  /** Duração da rampa de uma troca (padrão 200 ms). */
+  transitionMs?: number
+  /** Folga em volta de cada troca (padrão `CROP_GUARD_MS`). */
+  guardMs?: number
+}
+
+/** A interseção de dois retângulos, ou `null` se não se tocam. */
+function intersectRect(a: Rect, b: Rect): Rect | null {
+  const x0 = Math.max(a.x, b.x)
+  const y0 = Math.max(a.y, b.y)
+  const x1 = Math.min(a.x + a.w, b.x + b.w)
+  const y1 = Math.min(a.y + a.h, b.y + b.h)
+  return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null
+}
+
 /**
- * Passos → linha do tempo. Cada mudança aceita em `t_i` vira uma rampa de 200 ms (`easeInOutCubic`) do retângulo que valia
- * naquele instante até o novo; se outra mudança chega no meio da rampa, a nova rampa parte de onde a anterior estava.
+ * Passos → linha do tempo. Cada mudança aceita em `t_i` vira uma rampa de 200 ms (`easeInOutCubic`) que começa `CROP_GUARD_MS`
+ * depois dela, do retângulo que valia até o novo; se outra mudança chega no meio da rampa, a nova rampa parte de onde a anterior estava.
+ *
+ * O recorte NUNCA passa do que a página mostra: em `t` ele cabe na interseção de todas as páginas que podem estar no quadro entre
+ * `t − folga` e `t + folga` (o vídeo e os eventos não têm o mesmo zero). A interpolação só anda DENTRO desse limite: se a página
+ * encolhe (DevTools abriu, saiu da tela cheia) o recorte entra na página nova antes da troca, sem passar pelo que já é interface; se
+ * ela cresce, o recorte só começa a crescer depois da folga.
  */
-export function buildCropTimeline(steps: readonly CropStep[], sourcePx: Size, transitionMs = CROP_TRANSITION_MS): CropTimeline | null {
+export function buildCropTimeline(steps: readonly CropStep[], sourcePx: Size, opts: CropTimelineOptions = {}): CropTimeline | null {
   if (steps.length === 0) return null
+  const transitionMs = opts.transitionMs ?? CROP_TRANSITION_MS
+  const guardMs = steps.length > 1 ? Math.max(0, opts.guardMs ?? CROP_GUARD_MS) : 0
   // 1) rampas: cada passo aceito parte de onde o recorte estava naquele instante (a anterior, se ainda não terminou)
   type Ramp = { t: number; from: Rect; to: Rect }
   const ramps: Ramp[] = []
   for (let i = 1; i < steps.length; i++) {
     const s = steps[i]!
+    const rt = s.t + guardMs
     const prev = ramps[ramps.length - 1]
     let from: Rect
     if (!prev) from = steps[i - 1]!.rect
     else {
-      const u = clamp((s.t - prev.t) / transitionMs, 0, 1)
+      const u = clamp((rt - prev.t) / transitionMs, 0, 1)
       from = u >= 1 ? prev.to : lerpRect(prev.from, prev.to, easeInOutCubic(u))
     }
-    ramps.push({ t: s.t, from, to: s.rect })
+    ramps.push({ t: rt, from, to: s.rect })
   }
   const first = steps[0]!.rect
+  /** A página em rampa (sem o limite): do retângulo de antes ao de agora. */
   const measured = (t: number): Rect => {
     if (ramps.length === 0 || t < ramps[0]!.t) return first
     // última rampa com início <= t
@@ -146,11 +188,37 @@ export function buildCropTimeline(steps: readonly CropStep[], sourcePx: Size, tr
     return u >= 1 ? r.to : lerpRect(r.from, r.to, easeInOutCubic(u))
   }
 
-  // 2) a referência: o retângulo que vigora por mais tempo (o último passo vale até o fim: conta um pouco, 1 s, para desempatar)
+  // 2) o limite: a interseção das páginas que podem estar no quadro entre t − folga e t + folga
+  const times = steps.map((st) => st.t)
+  const lastAtOrBefore = (x: number): number => {
+    let lo = 0
+    let hi = times.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (times[mid]! <= x) lo = mid
+      else hi = mid - 1
+    }
+    return lo
+  }
+  const region = (t: number): Rect => {
+    const hi = lastAtOrBefore(t + guardMs)
+    const lo = lastAtOrBefore(t - guardMs)
+    let r = steps[lo]!.rect
+    for (let j = lo + 1; j <= hi; j++) {
+      const c = intersectRect(r, steps[j]!.rect)
+      if (!c) return steps[lastAtOrBefore(t)]!.rect // páginas que não se tocam: vale a de agora
+      r = c
+    }
+    return r
+  }
+
+  // 3) a referência: o retângulo que vigora por mais tempo (o último passo vale até o fim da gravação)
+  const lastStart = steps[steps.length - 1]!.t
+  const endOfRecording = Math.max(opts.durationMs ?? lastStart + 1000, lastStart)
   const holds = new Map<string, { rect: Rect; ms: number }>()
   for (let i = 0; i < steps.length; i++) {
     const start = i === 0 ? 0 : steps[i]!.t
-    const end = i + 1 < steps.length ? steps[i + 1]!.t : steps[i]!.t + 1000
+    const end = i + 1 < steps.length ? steps[i + 1]!.t : endOfRecording
     const key = steps[i]!.rect.x.toFixed(4) + steps[i]!.rect.y.toFixed(4) + steps[i]!.rect.w.toFixed(4) + steps[i]!.rect.h.toFixed(4)
     const hold = holds.get(key)
     const ms = Math.max(0, end - Math.max(start, 0))
@@ -175,7 +243,12 @@ export function buildCropTimeline(steps: readonly CropStep[], sourcePx: Size, tr
     sizePx,
     constant,
     steps,
-    at: constant ? () => refFit : (t) => fitAspectInside(measured(t), aspect, sourcePx)
+    at: constant
+      ? () => refFit
+      : (t) => {
+          const limit = region(t)
+          return fitAspectInside(intersectRect(measured(t), limit) ?? limit, aspect, sourcePx)
+        }
   }
 }
 
@@ -189,14 +262,14 @@ export function constantCrop(rect: Rect, sourcePx: Size): CropTimeline | null {
  * O recorte que o documento pede, ou `null` (tela inteira). `auto` usa as medidas da página; sem medida (ou medida que é a tela
  * toda) não há recorte. `manual` sem retângulo válido também não.
  */
-export function resolveScreenCrop(crop: ScreenCrop | undefined, samples: readonly ContentRectSample[] | undefined, sourcePx: Size | null): CropTimeline | null {
+export function resolveScreenCrop(crop: ScreenCrop | undefined, samples: readonly ContentRectSample[] | undefined, sourcePx: Size | null, durationMs?: number): CropTimeline | null {
   if (!crop || crop.mode === 'off' || !sourcePx || !(sourcePx.w > 0) || !(sourcePx.h > 0)) return null
   if (crop.mode === 'manual') {
     const tl = crop.manual ? constantCrop(crop.manual, sourcePx) : null
     return tl && !isFullRect(tl.ref, sourcePx) ? tl : null
   }
   const steps = stabilizeContentRects(samples ?? [], sourcePx)
-  const tl = buildCropTimeline(steps, sourcePx)
+  const tl = buildCropTimeline(steps, sourcePx, durationMs !== undefined ? { durationMs } : {})
   if (!tl) return null
   // a página ocupa a tela toda em todo o tempo (tela cheia): nada a recortar
   if (steps.every((s) => isFullRect(s.rect, sourcePx))) return null

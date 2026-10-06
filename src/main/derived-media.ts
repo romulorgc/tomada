@@ -10,8 +10,8 @@
  * Cada uma só é refeita quando a fonte mudou (data do arquivo). O arquivo novo é escrito ao lado e
  * renomeado por cima: quem lê nunca vê um meio-termo. Sem Electron: roda igual nos testes.
  */
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import type { Levels } from '@shared/clean'
 import { suggestPageRect, type CropSuggestion, type GrayFrame } from '@shared/crop-detect'
 import type { PeaksData, PreviewAudioData, ThumbsData } from '@shared/ipc'
@@ -316,10 +316,16 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     const srcPath = await resolveProjectFile(dir, src.path, 'sources.screen.path')
     const ff = deps.ffmpeg()
     if (!ff) throw new Error('não encontrei o ffmpeg')
-    const tmpDir = await resolveProjectFile(dir, `media/.tmp-crop-${process.pid}`)
-    await mkdir(tmpDir, { recursive: true })
+    // Pasta temporária EXCLUSIVA (nome sorteado, criada agora, vazia): nada plantado antes dela (um link físico ou simbólico com o
+    // nome do arquivo de saída, por exemplo) pode receber o que o ffmpeg escreve. A pasta e o arquivo de saída passam por
+    // resolveProjectFile (dentro do projeto, sem atalho nem junção), e o arquivo não pode existir ainda.
+    const mediaDir = await resolveProjectFile(dir, 'media')
+    await mkdir(mediaDir, { recursive: true })
+    const tmpDir = await mkdtemp(join(mediaDir, '.tmp-crop-'))
     try {
-      const out = join(tmpDir, 'quadros.gray')
+      await resolveProjectFile(dir, `media/${basename(tmpDir)}`)
+      const out = await resolveProjectFile(dir, `media/${basename(tmpDir)}/quadros.gray`)
+      if (await lstat(out).then(() => true, () => false)) throw new Error('o arquivo temporário da análise já existe')
       const w = SUGGEST_WIDTH
       const h = 2 * Math.round(((src.h / src.w) * SUGGEST_WIDTH) / 2)
       await ff.run(buildGrayFramesArgs({ input: srcPath, output: out, count: SUGGEST_FRAMES, durationMs: src.durationMs, width: w, height: h }), { signal: abort.signal, timeoutMs: 120_000 })

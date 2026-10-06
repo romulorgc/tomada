@@ -2,7 +2,7 @@
  * Recorte sugerido (C1, fallback) com o ffmpeg de verdade: uma "gravação de navegador" sintética (faixa de abas, barra de endereço,
  * filete e uma página colorida) e o serviço que a analisa. Sem Electron.
  */
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createDerivedMedia } from '../../src/main/derived-media'
@@ -53,6 +53,38 @@ describe('o recorte sugerido pela análise da gravação', () => {
     expect(found!.confidence).toBeGreaterThan(0.75)
     // sem temporário
     expect(readdirSync(join(dir, 'media')).filter((n) => n.startsWith('.tmp'))).toEqual([])
+  }, 60_000)
+
+  // Revisão da C1, item 1: a saída da análise nunca pode sobrescrever um arquivo de FORA do projeto
+  it('um quadros.gray plantado como link físico para um arquivo de fora NÃO é sobrescrito (pasta temporária exclusiva)', async () => {
+    const { derived, dir } = await seed(1280, 720, browserLike(1280, 720))
+    const outside = join(tmp(), 'fora-do-projeto.txt')
+    writeFileSync(outside, 'NAO MEXER')
+    // a pasta temporária de antes tinha nome previsível (media/.tmp-crop-<PID>): quem plantasse o arquivo lá escrevia por ele
+    const planted = join(dir, 'media', `.tmp-crop-${process.pid}`)
+    mkdirSync(planted, { recursive: true })
+    linkSync(outside, join(planted, 'quadros.gray'))
+    const found = await derived.cropSuggest(ID)
+    expect(readFileSync(outside, 'utf8'), 'o arquivo de fora foi reescrito pela saída do ffmpeg').toBe('NAO MEXER')
+    expect(found, 'a sugestão continua funcionando').not.toBeNull()
+  }, 60_000)
+
+  it('uma pasta temporária plantada como junção para fora também não recebe nada', async () => {
+    const { derived, dir } = await seed(1280, 720, browserLike(1280, 720))
+    const outside = join(tmp(), 'pasta-de-fora')
+    mkdirSync(outside)
+    symlinkSync(outside, join(dir, 'media', `.tmp-crop-${process.pid}`), 'junction')
+    const found = await derived.cropSuggest(ID)
+    expect(readdirSync(outside), 'a saída foi parar fora do projeto').toEqual([])
+    expect(found).not.toBeNull()
+  }, 60_000)
+
+  it('o arquivo temporário nasce numa pasta nova a cada pedido e some no fim (nada sobra em media/)', async () => {
+    const { derived, dir } = await seed(1280, 720, browserLike(1280, 720))
+    await derived.cropSuggest(ID)
+    await derived.cropSuggest(ID)
+    expect(readdirSync(join(dir, 'media')).filter((n) => n.startsWith('.tmp'))).toEqual([])
+    expect(existsSync(join(dir, 'media', 'quadros.gray'))).toBe(false)
   }, 60_000)
 
   it('uma gravação sem barra de navegador (tela lisa): nada a sugerir', async () => {

@@ -7,9 +7,11 @@
  */
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import { useStore } from 'zustand'
+import { cropMinPx } from '@shared/crop'
 import { setScreenCrop } from '@shared/crop-edit'
+import { isValidCropRect } from '@shared/crop'
 import { setZoomFocus } from '@shared/edits'
-import type { Scene } from '@shared/scene'
+import { focusToPreviewPoint, previewPointToFocus, type Scene } from '@shared/scene'
 import type { Corner } from '@shared/types'
 import { PLATFORM_ZONES, SAFE_BOX, VERTICAL_H, VERTICAL_W, safeBoxFor } from '@shared/vertical'
 import { AlertIcon, FolderIcon, TargetIcon } from '../components/Icons'
@@ -65,6 +67,8 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
   const screenCrop = useDoc((s) => s.doc.screenCrop)
   const cropEditing = useDoc((s) => s.cropUi.editing)
   const revealProject = useApp((s) => s.revealProject)
+  const notify = useApp((s) => s.notify)
+  const screenSource = useDoc((s) => s.doc.sources.screen)
   // a prévia de um corte: o quadro mostra o corte, não o vídeo inteiro
   const previewId = useStore(clips, (s) => s.previewId)
   const previewTitle = useDoc((s) => (previewId ? s.doc.clips.find((c) => c.id === previewId)?.title : undefined))
@@ -104,11 +108,10 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
       setCursor('grabbing')
       return
     }
-    if (selected && !previewId && scene.screen && inside(p, scene.screen.dest)) {
-      const { dest, src } = scene.screen
-      const x = src.x + ((p.x - dest.x) / dest.w) * src.w
-      const y = src.y + ((p.y - dest.y) / dest.h) * src.h
-      store.getState().change((doc) => setZoomFocus(doc, selected.id, { x, y }))
+    if (selected && !previewId && scene.screen) {
+      // o foco do zoom é lido no espaço do RECORTE e a barra da moldura não é página: a conversão está em `previewPointToFocus`
+      const focus = previewPointToFocus(scene.screen, p)
+      if (focus) store.getState().change((doc) => setZoomFocus(doc, selected.id, focus))
     }
   }
 
@@ -123,7 +126,7 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
       store.getState().change((doc) => (doc.style.camera.corner === corner ? doc : { ...doc, style: { ...doc.style, camera: { ...doc.style.camera, corner } } }))
       return
     }
-    setCursor(cameraHit(scene, p) ? 'grab' : selected && scene.screen && inside(p, scene.screen.dest) ? 'crosshair' : 'default')
+    setCursor(cameraHit(scene, p) ? 'grab' : selected && scene.screen && previewPointToFocus(scene.screen, p) !== null ? 'crosshair' : 'default')
   }
 
   const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>): void => {
@@ -139,10 +142,8 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
   const scene = engineRef.current?.scene ?? null
   const canvas = canvasRef.current
   if (focus && scene?.screen && canvas) {
-    const { dest, src } = scene.screen
-    const x = dest.x + ((focus.x - src.x) / src.w) * dest.w
-    const y = dest.y + ((focus.y - src.y) / src.h) * dest.h
-    if (inside({ x, y }, dest)) marker = { left: (x / canvas.width) * 100, top: (y / canvas.height) * 100 }
+    const at = focusToPreviewPoint(scene.screen, focus)
+    if (at) marker = { left: (at.x / canvas.width) * 100, top: (at.y / canvas.height) * 100 }
   }
 
   return (
@@ -150,7 +151,15 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
       {cropEditing && screenCrop?.mode === 'manual' && screenCrop.manual ? (
         <CropEditor
           rect={screenCrop.manual}
-          onCommit={(manual) => store.getState().changeDoc((doc) => setScreenCrop(doc, { ...(doc.screenCrop ?? { mode: 'manual' }), mode: 'manual', manual }, rawData, durationMs))}
+          onCommit={(manual) => {
+            // um retângulo que o documento não aceitaria NÃO vira recorte (nem "tela inteira" em silêncio): o anterior fica e a pessoa é avisada
+            if (!isValidCropRect(manual)) {
+              const min = cropMinPx({ w: screenSource?.w ?? 1920, h: screenSource?.h ?? 1080 })
+              notify({ kind: 'error', text: t.editor.crop.tooSmall(min.w, min.h) })
+              return
+            }
+            store.getState().changeDoc((doc) => setScreenCrop(doc, { ...(doc.screenCrop ?? { mode: 'manual' }), mode: 'manual', manual }, rawData, durationMs))
+          }}
         />
       ) : null}
       {previewTitle !== undefined ? (

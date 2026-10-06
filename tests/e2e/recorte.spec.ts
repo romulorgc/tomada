@@ -13,10 +13,10 @@ import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, evaluateScene, prepareEv
 import { projectForFormat } from '../../src/shared/vertical'
 import type { Project, Rect } from '../../src/shared/types'
 import { frameRgb, rgbDiff } from '../helpers/media'
-import { openEditor, readSaved, waitSaved } from './editor-helpers'
+import { openEditor, readSaved, seekTo, waitSaved } from './editor-helpers'
 import { editProject, exportProject } from './export-helpers'
 import { FIXTURES_DIR } from '../helpers/fs'
-import { EXAMPLE_FOLDER, SCREENS_DIR, launchTomada, type Session } from './helpers'
+import { EXAMPLE_FOLDER, SCREENS_DIR, launchTomada, shot, type Session } from './helpers'
 
 let s: Session | undefined
 test.afterEach(async () => {
@@ -268,4 +268,124 @@ test('moldura de navegador: uma barra limpa com o endereço no topo do recorte, 
   // Desligado: sem recorte não há moldura
   await page.getByTestId('crop-mode-off').click()
   await expect(page.getByTestId('crop-frame')).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Revisão da C1, item 5: clicar na prévia fixa o foco do zoom no espaço do RECORTE (e o marcador cai onde se clicou)
+test('foco do zoom pela prévia com o recorte ligado: o foco é a fração do RECORTE, a barra da moldura não conta e o marcador cai onde se clicou', async () => {
+  test.setTimeout(180_000)
+  s = await launchTomada()
+  editProject(s, (p) => {
+    p.zoomPreset = 'moderate'
+    p.zooms = [{ id: 'z1', start: 2240, end: 4140, scale: 1.7, focus: 'auto', origin: 'auto' }]
+    p.style.camera.hidden = true
+    p.screenCrop = { mode: 'manual', manual: { x: 0.1, y: 0.2, w: 0.6, h: 0.6 } }
+  })
+  await openEditor(s)
+  const { page } = s
+  await seekTo(page, 500) // fora do zoom: o cartão mostra o recorte inteiro
+  await page.getByTestId('seg-zoom-z1').click()
+  await expect(page.getByTestId('zoom-selected-card')).toBeVisible()
+
+  const eventsText = (rel: string): string | undefined => {
+    try {
+      return readFileSync(join(s!.projects, EXAMPLE_FOLDER, rel), 'utf8')
+    } catch {
+      return undefined
+    }
+  }
+  const data = prepareEvents(eventsFromText({ cursor: eventsText('events/cursor.jsonl'), clicks: eventsText('events/clicks.jsonl'), keys: eventsText('events/keys.jsonl') }), 23_000)
+  /** O ponto da TELA (px do navegador) na fração (fx, fy) da página do cartão, conforme a cena do documento de agora. */
+  const pointAt = async (fx: number, fy: number): Promise<{ x: number; y: number }> => {
+    const frame = (await page.getByTestId('preview-frame').boundingBox())!
+    const doc = readSaved(s!)
+    const screen = evaluateScene(doc, deriveProject(doc, data, HORIZONTAL_1080), 500, HORIZONTAL_1080).screen!
+    const barH = screen.bar?.h ?? 0
+    const cx = screen.dest.x + fx * screen.dest.w
+    const cy = screen.dest.y + barH + fy * (screen.dest.h - barH)
+    return { x: frame.x + (cx / HORIZONTAL_1080.w) * frame.width, y: frame.y + (cy / HORIZONTAL_1080.h) * frame.height }
+  }
+  const focusOf = (): { x: number; y: number } | 'auto' => readSaved(s!).zooms[0]!.focus
+
+  // 1) sem moldura: a fração (0,5; 0,75) do cartão é o foco (0,5; 0,75) no recorte (na tela gravada seria 0,4 e 0,65)
+  const click1 = await pointAt(0.5, 0.75)
+  await page.mouse.click(click1.x, click1.y)
+  await waitSaved(s)
+  const f1 = focusOf()
+  if (f1 === 'auto') throw new Error('o foco continuou automático')
+  expect(f1.x).toBeCloseTo(0.5, 1)
+  expect(f1.y).toBeCloseTo(0.75, 1)
+  expect(Math.abs(f1.x - 0.4) + Math.abs(f1.y - 0.65), 'o foco foi salvo no espaço da tela gravada').toBeGreaterThan(0.1)
+  // o marcador cai onde a pessoa clicou
+  const marker1 = (await page.getByTestId('focus-marker').boundingBox())!
+  expect(Math.abs(marker1.x + marker1.width / 2 - click1.x)).toBeLessThan(4)
+  expect(Math.abs(marker1.y + marker1.height / 2 - click1.y)).toBeLessThan(4)
+  await shot(page, 'recorte-09-foco-com-recorte')
+
+  // 2) com a moldura: clicar na barra não muda o foco; clicar na página desconta a barra
+  await page.getByTestId('tab-style').click()
+  await page.getByTestId('crop-frame-toggle').click()
+  await waitSaved(s)
+  await seekTo(page, 500)
+  // o zoom continua selecionado (a seleção sobrevive à troca de aba): só volta à aba Zoom; se a seleção se perdeu, seleciona de novo
+  await page.getByTestId('tab-zoom').click()
+  if (!(await page.getByTestId('zoom-selected-card').isVisible())) await page.getByTestId('seg-zoom-z1').click()
+  await expect(page.getByTestId('zoom-selected-card')).toBeVisible()
+  const before = focusOf()
+  const doc = readSaved(s)
+  const sc = evaluateScene(doc, deriveProject(doc, data, HORIZONTAL_1080), 500, HORIZONTAL_1080).screen!
+  expect(sc.bar!.h).toBeGreaterThan(10)
+  const frame = (await page.getByTestId('preview-frame').boundingBox())!
+  const onBar = { x: frame.x + ((sc.dest.x + sc.dest.w / 2) / HORIZONTAL_1080.w) * frame.width, y: frame.y + ((sc.dest.y + sc.bar!.h / 2) / HORIZONTAL_1080.h) * frame.height }
+  await page.mouse.click(onBar.x, onBar.y)
+  await page.waitForTimeout(400)
+  expect(focusOf(), 'clicar na barra da moldura não fixa foco').toEqual(before)
+  const click2 = await pointAt(0.25, 0.5)
+  await page.mouse.click(click2.x, click2.y)
+  await waitSaved(s)
+  const f2 = focusOf()
+  if (f2 === 'auto') throw new Error('o foco continuou automático')
+  expect(f2.x).toBeCloseTo(0.25, 1)
+  expect(f2.y).toBeCloseTo(0.5, 1)
+  const marker2 = (await page.getByTestId('focus-marker').boundingBox())!
+  expect(Math.abs(marker2.x + marker2.width / 2 - click2.x)).toBeLessThan(4)
+  expect(Math.abs(marker2.y + marker2.height / 2 - click2.y)).toBeLessThan(4)
+})
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Revisão da C1, item 3: um recorte manual que não vale nunca vira "tela inteira" em silêncio
+test('recorte manual inválido no documento: o editor AVISA (e o arraste só deixa o tamanho mínimo que o documento aceita)', async () => {
+  test.setTimeout(120_000)
+  s = await launchTomada()
+  editProject(s, (p) => {
+    p.zoomPreset = 'off'
+    p.zooms = []
+    p.style.camera.hidden = true
+    p.screenCrop = { mode: 'manual', manual: { x: 0.3, y: 0.3, w: 0.01, h: 0.01 } } // um documento antigo ou editado à mão
+  })
+  await openEditor(s)
+  const { page } = s
+  await page.getByTestId('tab-style').click()
+  await expect(page.getByTestId('crop-mode-manual')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('crop-manual-invalid'), 'o aviso de que o recorte salvo não vale').toBeVisible()
+  await shot(page, 'recorte-10-manual-invalido')
+
+  // trocar para um retângulo bom tira o aviso; o arraste nunca passa do mínimo
+  await page.getByTestId('crop-mode-off').click()
+  await page.getByTestId('crop-mode-manual').click()
+  await expect(page.getByTestId('crop-editor')).toBeVisible()
+  await waitSaved(s)
+  const start = readSaved(s).screenCrop!.manual!
+  // arrasta o canto de baixo à direita para o canto de cima à esquerda, muito além
+  const box = (await page.getByTestId('crop-handle-se').boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x - 2000, box.y - 2000, { steps: 8 })
+  await page.mouse.up()
+  await waitSaved(s)
+  const shrunk = readSaved(s).screenCrop!.manual!
+  expect(shrunk.w).toBeLessThan(start.w)
+  expect(shrunk.w * 1920, 'nunca menor que o mínimo do documento (8% da tela)').toBeGreaterThanOrEqual(0.08 * 1920 - 1)
+  expect(shrunk.h * 1080).toBeGreaterThanOrEqual(0.08 * 1080 - 1)
+  await expect(page.getByTestId('crop-manual-invalid')).toHaveCount(0)
 })

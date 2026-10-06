@@ -4,6 +4,7 @@
  * Mudar o recorte refaz os zooms automáticos sobre o que ele mostra; é UM passo de desfazer.
  */
 import { useState } from 'react'
+import { cropMinPx, isValidCropRect } from '@shared/crop'
 import { CROP_LOCKS, defaultManualCrop, lockAspect, type CropLockId } from '@shared/crop-drag'
 import { setBrowserFrame, setScreenCrop } from '@shared/crop-edit'
 import type { Rect, ScreenCrop } from '@shared/types'
@@ -34,6 +35,12 @@ export function CropSection() {
   const browser = capture.browser
 
   const apply = (next: ScreenCrop | undefined): void => {
+    // um retângulo manual que o documento não aceitaria não vira recorte: o anterior fica e a pessoa é avisada (nunca "tela inteira" em silêncio)
+    if (next?.mode === 'manual' && !isValidCropRect(next.manual)) {
+      const min = cropMinPx(sourcePx)
+      notify({ kind: 'error', text: T.tooSmall(min.w, min.h) })
+      return
+    }
     store.getState().changeDoc((doc) => setScreenCrop(doc, next, rawData, durationMs))
   }
   /** O retângulo de partida de um recorte manual: o que o automático mostra agora; senão, uma margem na tela. */
@@ -49,7 +56,8 @@ export function CropSection() {
     }
     const keep = crop?.browserFrame ? { browserFrame: crop.browserFrame } : {}
     if (m === 'manual') {
-      apply({ mode: 'manual', manual: crop?.manual ?? startRect(), ...keep })
+      // um retângulo salvo que não vale (pequeno demais) não é ponto de partida: começa do que o automático mostra ou de uma margem
+      apply({ mode: 'manual', manual: crop?.manual && isValidCropRect(crop.manual) ? crop.manual : startRect(), ...keep })
       store.getState().setCropUi({ editing: true })
       return
     }
@@ -107,6 +115,11 @@ export function CropSection() {
         ]}
       />
 
+      {mode === 'manual' && crop?.manual && !isValidCropRect(crop.manual) ? (
+        <Hint tone="warn">
+          <span data-testid="crop-manual-invalid">{T.manualInvalid}</span>
+        </Hint>
+      ) : null}
       {mode === 'auto' ? <Hint>{capture.kind === 'screen' ? T.autoScreenHelp : T.autoHelp}</Hint> : null}
       {mode === 'off' && measured ? (
         <Hint tone="warn">

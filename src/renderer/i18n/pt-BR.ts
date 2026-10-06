@@ -171,6 +171,8 @@ export const ptBR = {
       adjustByHand: 'Ajustar à mão…',
       done: 'Pronto',
       backToAuto: 'Voltar ao automático',
+      tooSmall: (w: number, h: number): string => `O retângulo ficou pequeno demais: o menor recorte é ${w}×${h} px. O recorte anterior foi mantido.`,
+      manualInvalid: 'O recorte manual salvo neste projeto não vale (pequeno demais ou fora da tela), então o vídeo mostra a tela inteira. Ajuste o retângulo para recortar.',
       lockLabel: 'Proporção',
       locks: { free: 'Livre' },
       size: (w: number, h: number): string => `${w}×${h} px`,

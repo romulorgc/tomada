@@ -1,6 +1,7 @@
 /** Arrastar e redimensionar o retângulo do recorte manual (C1): dentro da tela, com proporção travada em pixels. */
 import { describe, expect, it } from 'vitest'
-import { CROP_LOCKS, MIN_CROP_PX, defaultManualCrop, dragCrop, lockAspect, type CropHandle } from '@shared/crop-drag'
+import { cropMinPx } from '@shared/crop'
+import { CROP_LOCKS, defaultManualCrop, dragCrop, lockAspect, type CropHandle } from '@shared/crop-drag'
 import type { Rect } from '@shared/types'
 
 const SRC = { w: 1920, h: 1080 }
@@ -37,8 +38,8 @@ describe('redimensionar com proporção livre', () => {
       for (const [dx, dy] of [[9, 9], [-9, -9], [9, -9], [-9, 9]] as const) {
         const r = dragCrop(start, h, dx, dy, SRC)
         expect(within(r), `${h} ${dx},${dy}`).toBe(true)
-        expect(r.w * SRC.w).toBeGreaterThanOrEqual(MIN_CROP_PX - 1e-6)
-        expect(r.h * SRC.h).toBeGreaterThanOrEqual(MIN_CROP_PX - 1e-6)
+        expect(r.w * SRC.w).toBeGreaterThanOrEqual(cropMinPx(SRC).w - 1e-6)
+        expect(r.h * SRC.h).toBeGreaterThanOrEqual(cropMinPx(SRC).h - 1e-6)
       }
     }
   })

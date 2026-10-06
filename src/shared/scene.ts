@@ -21,7 +21,7 @@ import { cropSignature, pointToCrop, rectFromCrop, resolveScreenCrop, type CropT
 import { projectDurationMs } from './project'
 import { coverCrop, cameraBoxAspect, cameraRadius, cornerFractions, styleUnit } from './styles'
 import { keptRanges, outputDuration, sourceToOutput } from './timeline'
-import type { Background, ClickEvent, ContentRectSample, CursorSample, KeyEvent, LayoutKind, Project, Range, Rect, Size, Style, Word } from './types'
+import type { Background, ClickEvent, ContentRectSample, CursorSample, KeyEvent, LayoutKind, Point, Project, Range, Rect, Size, Style, Word } from './types'
 import { GRID_HZ } from './cursor'
 import { HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
 import { ZOOM_SCALE_SPRING } from './spring'
@@ -123,7 +123,7 @@ export function applyScreenCrop(data: CursorData, project: Pick<Project, 'screen
   }
   const hit = byOrigin.get(sig)
   if (hit) return hit
-  const crop = resolveScreenCrop(project.screenCrop, origin.contentRects, sourcePx)
+  const crop = resolveScreenCrop(project.screenCrop, origin.contentRects, sourcePx, origin.durationMs)
   let out: CursorData
   if (!crop) {
     out = origin
@@ -433,12 +433,50 @@ function bubble(style: Style, format: FormatSpec, ref: Rect, zoomProgress: numbe
 
 export type ShadowSpec = { blur: number; opacity: number; offsetY: number }
 
+/** A página do cartão da tela: o cartão menos a barra da moldura de navegador (se houver). */
+function pageOf(screen: SceneScreen): Rect {
+  const barH = screen.bar?.h ?? 0
+  return { x: screen.dest.x, y: screen.dest.y + barH, w: screen.dest.w, h: screen.dest.h - barH }
+}
+
+/**
+ * Clicar na prévia (px do canvas) para fixar o foco de um zoom: o ponto vira posição no ESPAÇO DO RECORTE (é nele que o zoom lê o
+ * foco), descontando a barra da moldura de navegador. `null` se o clique caiu fora do cartão ou na barra.
+ */
+export function previewPointToFocus(screen: SceneScreen, p: Point): Point | null {
+  const page = pageOf(screen)
+  if (!(page.w > 0) || !(page.h > 0)) return null
+  if (p.x < page.x || p.x > page.x + page.w || p.y < page.y || p.y > page.y + page.h) return null
+  // do cartão para a tela gravada (o que o desenho enxerga agora)...
+  const sx = screen.src.x + ((p.x - page.x) / page.w) * screen.src.w
+  const sy = screen.src.y + ((p.y - page.y) / page.h) * screen.src.h
+  // ...e da tela gravada para o recorte
+  const b = screen.base
+  const x = b ? (sx - b.x) / b.w : sx
+  const y = b ? (sy - b.y) / b.h : sy
+  return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) }
+}
+
+/** O inverso: onde o foco (no espaço do recorte) cai na prévia agora; `null` se está fora da janela visível do zoom. */
+export function focusToPreviewPoint(screen: SceneScreen, focus: Point): Point | null {
+  const page = pageOf(screen)
+  const b = screen.base
+  const sx = b ? b.x + focus.x * b.w : focus.x
+  const sy = b ? b.y + focus.y * b.h : focus.y
+  const x = page.x + ((sx - screen.src.x) / screen.src.w) * page.w
+  const y = page.y + ((sy - screen.src.y) / screen.src.h) * page.h
+  if (x < page.x || x > page.x + page.w || y < page.y || y > page.y + page.h) return null
+  return { x, y }
+}
+
 export type SceneScreen = {
   dest: Rect
   /** Recorte da fonte (normalizado 0..1 na TELA GRAVADA): o que o zoom enxerga dentro da área-base (o recorte da tela, se houver). */
   src: Rect
   /** Moldura de navegador (C1): a barra ocupa o topo do cartão (`h` px de `dest`); a página é desenhada abaixo dela. */
   bar?: { h: number; text: string }
+  /** A área-base agora (o recorte da tela, normalizado na TELA GRAVADA); ausente = a tela inteira. O foco do zoom é lido dentro dela. */
+  base?: Rect
   radius: number
   opacity: number
   shadow: ShadowSpec | null
@@ -605,6 +643,7 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
         dest: screenBox.rect,
         src: inSource(srcRect),
         ...(derived.bar ? { bar: barOf(screenBox.rect)! } : {}),
+        ...(cropAt ? { base: cropAt } : {}),
         radius: screenBox.radius,
         opacity: screenBox.opacity,
         shadow: shadowOn ? shadowOf(1, 1) : null
