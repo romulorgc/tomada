@@ -22,6 +22,7 @@ import type { RecordPrefs, RecordRequest } from './recording'
 import type { VideoScript, TeleprompterAction, TeleprompterConfig, TeleprompterState } from './script'
 import type { RetakeMark } from './retake-marker'
 import type { PreflightResult } from './preflight'
+import type { MicVolumeInfo } from './mic-level'
 import type { CameraJob, CameraKind, CameraView } from './camera-analysis'
 import type { LlmStatus, PrepareSnapshot, RetakesResult, TranscriptionJob, TranscriptionPrefs, TranscriptionView } from './transcription'
 import type { LayoutKind, Project, ProjectSummary, Size, Transcript, Word } from './types'
@@ -390,6 +391,10 @@ export type IpcContract = {
   'record:status': { args: []; result: RecordingStatusView }
   'record:mark-retake': { args: []; result: RetakeMark | null }
   'record:preflight': { args: []; result: PreflightResult }
+  /** Volume de entrada do Windows do microfone nomeado pelo rótulo do Chromium (`null`: fora do Windows ou aparelho não achado). */
+  'record:mic-volume': { args: [label: string]; result: MicVolumeInfo | null }
+  /** Muda o ganho (dB) desse aparelho; devolve o estado lido depois. */
+  'record:mic-volume-set': { args: [label: string, db: number]; result: MicVolumeInfo | null }
   'process:retry': { args: [sessionId: string]; result: void }
 
   // Exportação: a interface pede; o main orquestra áudio (ffmpeg), vídeo (janela escondida) e mux.
@@ -561,6 +566,8 @@ export type TomadaApi = {
     status(): Promise<RecordingStatusView>
     markRetake(): Promise<RetakeMark | null>
     preflight(): Promise<PreflightResult>
+    micVolume(label: string): Promise<MicVolumeInfo | null>
+    micVolumeSet(label: string, db: number): Promise<MicVolumeInfo | null>
     /** Só de ida: nível do microfone para a mini barra. */
     level(level: number): void
   }

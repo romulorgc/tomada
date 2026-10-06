@@ -31,6 +31,7 @@ import { createOutputDirs } from './path-guard'
 import { createProjectStore } from './projects'
 import { createRecordingService } from './recording-service'
 import { createAppState } from './state'
+import { createMicVolumeService, fakeMicVolumeFromEnv } from './mic-volume'
 import { createTracker } from './tracker'
 import { chooseEngine } from './transcription/engines'
 import { createTranscriptionService } from './transcription/service'
@@ -366,6 +367,8 @@ async function main(): Promise<void> {
       calibration,
       autopilot,
       outputDirs,
+      // Volume de entrada do Windows (WASAPI). Em teste, um aparelho em memória: nada toca o volume real.
+      micVolume: fakeMicVolumeFromEnv(process.env.TOMADA_TEST_MIC_VOLUME) ?? createMicVolumeService({ cacheDir: join(userData, 'cache'), logger }),
       diagnostics: {
         gpuInfo: async () => {
           const info = await app.getGPUInfo('complete') as { gpuDevice?: { deviceString?: string }[] }

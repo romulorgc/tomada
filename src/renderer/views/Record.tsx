@@ -17,6 +17,7 @@ import { useDeviceLists, useDevicePreview, useMicLevel } from '../recording/devi
 import { useRecorder } from '../recording/controller'
 import { useApp } from '../store'
 import { PreflightBanner } from '../recording/PreflightBanner'
+import { MicLevelCheck } from '../recording/MicLevelCheck'
 import { ScriptPanel } from '../recording/ScriptPanel'
 import { DiskSpaceNotice } from '../components/DiskSpaceNotice'
 import type { DiskEstimate } from '@shared/disk'
@@ -392,6 +393,7 @@ export function Record() {
         ) : null}
       </div>
 
+      <MicLevelCheck stream={preview.stream} label={prefs.micId ? (lists.mics.find((m) => m.deviceId === prefs.micId)?.label ?? '') : ''} idle={idle && pendingPrefs === 0 && !prefsError} />
       <PreflightBanner stream={preview.stream} hasMic={Boolean(prefs.micId)} hasCamera={showCamera && Boolean(prefs.cameraId)} idle={idle && pendingPrefs === 0 && !prefsError} onRecord={begin} />
       {idle ? <div className="mb-5"><DiskSpaceNotice estimate={disk} recording /></div> : null}
       <div className="grid items-start gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,24rem)]">

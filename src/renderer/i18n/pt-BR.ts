@@ -7,6 +7,33 @@ import { m5Settings } from './m5-settings'
 import { audioQualityPtBR } from '@shared/audio-quality-messages'
 export const ptBR = {
   audioQuality: audioQualityPtBR,
+  /** Antes de gravar: qual microfone está em uso e se a voz entra baixa demais (volume de entrada do Windows). */
+  micLevel: {
+    using: 'Microfone em uso',
+    windowsVolume: (percent: number): string => `Volume de entrada do Windows: ${percent}%`,
+    tooLowTitle: 'Seu microfone está baixo demais: a voz vai sair com chiado.',
+    mutedTitle: 'Seu microfone está mudo no Windows: a gravação sairia sem voz.',
+    mutedHelp: 'Abra Configurações > Sistema > Som > Entrada, escolha este microfone e tire o mudo.',
+    reasonWindowsMinimum: 'O volume de entrada do Windows deste aparelho está no mínimo (sem ganho nenhum).',
+    reasonSpeech: (peak: string): string => `Sua fala chega em ${peak} dBFS de pico; o ideal é perto de -12 dBFS.`,
+    why: 'Com a voz entrando baixa, a exportação precisa subir o volume depois, e o chiado sobe junto.',
+    cannotRead: 'Não consegui ler o volume do Windows deste aparelho. Abra Configurações > Sistema > Som > Entrada, escolha este microfone e suba o volume.',
+    cannotAdjustAtMax: 'O volume deste aparelho já está no máximo. Aproxime-se do microfone ou escolha outro.',
+    adjust: 'Ajustar sozinho',
+    cancel: 'Cancelar',
+    running: (step: number, total: number): string => `Fale normalmente, como vai gravar, até aparecer "Pronto". Passo ${step} de ${total}.`,
+    runningPeak: (peak: string): string => `Sua voz está chegando em ${peak} dBFS de pico.`,
+    done: (percent: number, peak: string): string => `Pronto. O volume de entrada do Windows foi para ${percent}% e sua voz chega em ${peak} dBFS de pico.`,
+    failed: {
+      unsupported: 'Não consegui ler o volume do Windows deste aparelho. Abra Configurações > Sistema > Som > Entrada, escolha este microfone e suba o volume.',
+      'no-speech': 'Não ouvi sua voz. Fale normalmente por alguns segundos e toque em "Ajustar sozinho" de novo.',
+      'at-max': 'O volume deste aparelho chegou ao máximo e a voz continua baixa. Aproxime-se do microfone ou escolha outro.',
+      'at-min': 'O volume deste aparelho já está no mínimo e a voz ainda chega alta: afaste-se do microfone.',
+      rejected: 'O Windows não aceitou a mudança de volume deste aparelho. Ajuste em Configurações > Sistema > Som > Entrada.',
+      'no-convergence': 'Não consegui acertar o volume em 6 passos. Ajuste em Configurações > Sistema > Som > Entrada e tente de novo.',
+      cancelled: 'Ajuste cancelado.'
+    } as Record<'unsupported' | 'no-speech' | 'at-max' | 'at-min' | 'rejected' | 'no-convergence' | 'cancelled', string>
+  },
   m5Settings,
   diskSpace: {
     title: 'Espaço no disco', low: 'Pouco espaço para concluir', unknown: 'Não consegui medir o disco',
