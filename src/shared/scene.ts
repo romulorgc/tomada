@@ -328,7 +328,7 @@ export function deriveProject(project: Project, rawData: CursorData, format: For
     paths,
     synthetic,
     view,
-    captions: buildCaptionTrack(words, project, durationMs),
+    captions: buildCaptionTrack(words, project, durationMs, format.kind === 'vertical' ? { text: project.vertical?.hook ?? '', untilMs: HOOK_MS } : undefined),
     face: cameraSize ? buildFaceFramer(face, project.sync.cameraOffsetMs, durationMs) : null,
     needsMatte: usesPresenter(project, format.kind),
     screenSize,
