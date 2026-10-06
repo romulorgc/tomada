@@ -65,8 +65,10 @@ function processTree() {
     } while (nextProcess(handle, entry))
   } finally { closeHandle(handle) }
   const runnerTree = descendants(rows, [workerData.rootPid])
-  for (const p of rows) if (runnerTree.has(p.pid) && p.exe.toLowerCase() === 'electron.exe') roots.add(p.pid)
-  targetPids = descendants(rows, roots)
+  const activeRoots = rows.filter(p => runnerTree.has(p.pid) && p.exe.toLowerCase() === 'electron.exe').map(p => p.pid)
+  for (const pid of activeRoots) roots.add(pid)
+  // PIDs são reutilizados pelo Windows: o histórico serve só ao relatório.
+  targetPids = descendants(rows, activeRoots)
   for (const pid of targetPids) processesSeen.add(pid)
 }
 
