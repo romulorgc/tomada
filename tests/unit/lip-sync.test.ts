@@ -19,6 +19,23 @@ describe('resultado local de sincronia labial', () => {
     await expect(detector.clap('C:/tools/calib.webm')).rejects.toThrow('tempo limite')
     expect(warn).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ reason: 'timeout' }))
   })
+  it('a palma leva o modelo de rosto, exige esse arquivo e mostra o motivo em português simples', async () => {
+    const warn = vi.fn()
+    const detector = createLipSyncDetector({ toolsDir: 'C:/tools', scriptPath: 'C:/tools/sync.py', ffmpeg: () => 'C:/tools/ffmpeg.exe', logger: { warn } as unknown as Logger })
+    vi.mocked(runProcess).mockResolvedValueOnce({ stdout: JSON.stringify({ offsetMs: -36.2, confidence: 4 }), stderr: '', exitCode: 0 })
+    await expect(detector.clap('C:/tools/calib.webm')).resolves.toEqual({ offsetMs: -36.2, confidence: 4 })
+    const sent = JSON.parse(vi.mocked(runProcess).mock.calls.at(-1)![2]!.stdin as string) as Record<string, unknown>
+    expect(sent).toMatchObject({ mode: 'clap' })
+    expect(String(sent.faceModel).replaceAll('\\', '/')).toBe('C:/tools/lip-sync/yunet.onnx')
+    expect(sent).not.toHaveProperty('model')
+    const reason = 'Não vi o seu rosto. Fique de frente para a câmera, com o rosto inteiro à mostra e boa luz.'
+    vi.mocked(runProcess).mockResolvedValueOnce({ stdout: JSON.stringify({ offsetMs: null, confidence: 0, reason }), stderr: '', exitCode: 0 })
+    await expect(detector.clap('C:/tools/calib.webm')).rejects.toThrow(reason)
+    // Sem o modelo de rosto, nada de medir às cegas numa zona fixa (deu −165 ms onde o certo era −21 ms).
+    vi.mocked(access).mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('C:/privado/yunet.onnx'))
+    await expect(detector.clap('C:/tools/calib.webm')).rejects.toThrow('não está preparado')
+    expect(warn).toHaveBeenLastCalledWith(expect.any(String), { category: 'unavailable-runtime', component: 'modelo-local' })
+  })
   it('o diagnóstico técnico registra saída e módulo sem conteúdo ou caminhos pessoais', () => {
     const error = new ProcessError('erro em C:/privado/rosto.mp4', 'exit', 1, 'fala pessoal', "ModuleNotFoundError: No module named 'onnxruntime'; C:/privado/rosto.mp4")
     const detail = lipSyncFailureDiagnostic(error)
