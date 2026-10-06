@@ -89,15 +89,19 @@ for (const [id, engine] of Object.entries(engines)) {
       expect(transcript.segments.length).toBeGreaterThan(0)
     })
 
-    it('o progresso sobe de 0 a 1 sem andar para trás, e os números de velocidade vêm do motor', () => {
+    it('o progresso sobe de 0 a 1 sem andar para trás, e os números de desempenho vêm do motor', () => {
       expect(progress.length).toBeGreaterThan(0)
       expect([...progress].sort((a, b) => a - b)).toEqual(progress)
       expect(Math.max(...progress)).toBeGreaterThan(0.9)
       const s = stats as RunStats | null
       expect(s?.engine).toBe(id)
+      // A ORIGEM dos números: duração e tempo medidos pelo motor, e a velocidade é a razão entre os dois. A EXIGÊNCIA de
+      // velocidade (mais rápido que o tempo real) mora na suíte de medição (`npm run medir:velocidade`, tests/medir/
+      // velocidade-transcricao.run.ts, pela fila): ela depende de a placa estar livre, e aqui uma bateria vizinha a derrubava.
+      expect(s?.audioMs).toBeGreaterThan(20_000)
+      expect(s?.wallMs).toBeGreaterThan(0)
+      expect(s?.speedX).toBeCloseTo((s?.audioMs ?? 0) / (s?.wallMs ?? 1), 1)
       console.log(`[desempenho] ${id} sintético: áudio ${s?.audioMs} ms, execução ${s?.wallMs} ms, speedX=${s?.speedX}`)
-      // Carga da máquina e arranque do CUDA variam; este piso acusa regressão grosseira, preservando os números reais.
-      expect(s?.speedX).toBeGreaterThan(0.4)
     })
   })
 
@@ -123,8 +127,10 @@ for (const [id, engine] of Object.entries(engines)) {
         expect(words[words.length - 1]!.end).toBeLessThanOrEqual(ms + 100)
         const measured = stats as RunStats | null
         console.log(`[desempenho] ${id} real: áudio ${measured?.audioMs} ms, execução ${measured?.wallMs} ms, speedX=${measured?.speedX}`)
-        // Carga da máquina e arranque do modelo variam; o piso detecta regressão grosseira sem prometer benchmark isolado.
-        expect(measured?.speedX ?? 0).toBeGreaterThan(0.4)
+        // Só a origem dos números (a velocidade em si é exigida em tests/medir/velocidade-transcricao.run.ts).
+        expect(measured?.engine).toBe(id)
+        expect(measured?.audioMs).toBeGreaterThan(0)
+        expect(measured?.wallMs).toBeGreaterThan(0)
       } finally {
         await rm(wav, { force: true, maxRetries: 10, retryDelay: 200 })
       }
