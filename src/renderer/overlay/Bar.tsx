@@ -17,6 +17,7 @@ export function Bar() {
   const [now, setNow] = useState(() => Date.now())
   const [level, setLevel] = useState(0)
   const [confirm, setConfirm] = useState<Confirm>(null)
+  const [markError, setMarkError] = useState<string | null>(null)
   const confirmTimer = useRef<number | null>(null)
 
   useEffect(() => {
@@ -48,6 +49,7 @@ export function Bar() {
   const running = state.status === 'recording'
   const elapsed = state.elapsedMs + (running ? Math.max(0, now - state.asOf) : 0)
   const stopping = state.status === 'stopping'
+  const recentlyMarked = Boolean(state.retakeAt && now - state.retakeAt < 1600)
 
   return (
     <div className="bar" role="toolbar" aria-label={t.bar.label} data-testid="bar" data-status={state.status} data-confirm={confirm ?? ''}>
@@ -93,6 +95,9 @@ export function Bar() {
             <StopIcon size={18} />
           </button>
           <span className="mx-1 h-6 w-px bg-line-strong" aria-hidden="true" />
+          <button type="button" className="bar-btn !w-auto px-2" disabled={!running} aria-label={t.preparation.retake} title={markError ?? `${t.preparation.retake} (${state.shortcutRetake ?? 'Ctrl+Alt+Z'})`} data-testid="bar-retake" data-count={state.retakeCount ?? 0} data-marked={recentlyMarked} onClick={() => { setMarkError(null); void window.tomada.record.markRetake().catch((err: unknown) => { setMarkError(String(err)); window.tomada.log({ level: 'error', message: t.record.errors.commandFailed, detail: String(err) }) }) }}>
+            <span className={markError ? 'text-danger' : recentlyMarked ? 'text-rec' : ''} aria-live="polite">{markError ? t.common.retry : recentlyMarked ? t.preparation.marked : t.preparation.retake}</span>
+          </button>
           <button type="button" className="bar-btn" onClick={() => ask('restart')} disabled={stopping} aria-label={t.bar.restart} title={t.bar.restart} data-testid="bar-restart">
             <RestartIcon size={17} />
           </button>

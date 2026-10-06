@@ -14,11 +14,13 @@
  * Sem Electron: a janela entra por interface, então roda em teste com uma janela falsa.
  */
 import { randomUUID } from 'node:crypto'
+import { reviewDocument } from '@shared/review'
+import { itemOf } from '@shared/review'
 import type { FileHandle } from 'node:fs/promises'
 import { constants, existsSync } from 'node:fs'
 import { copyFile, link, mkdir, open, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, resolve } from 'node:path'
-import { clipDocument, normalizeRanges } from '@shared/clips'
+import { normalizeRanges } from '@shared/clips'
 import {
   EXPORT_RESOLUTION_LABEL,
   etaMs,
@@ -90,7 +92,7 @@ export type ExportServiceDeps = {
 export interface ExportService {
   start(request: ExportRequest): Promise<{ exportId: string }>
   cancel(exportId: string): Promise<void>
-  status(): ExportProgress | null
+  status(exportId?: string): ExportProgress | null
   /** Canais da janela escondida. */
   job(exportId: string): ExportJob
   write(exportId: string, position: number, data: Uint8Array): Promise<void>
@@ -200,6 +202,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
   const { logger } = deps
   let current: Run | null = null
   let last: ExportProgress | null = null
+  const history = new Map<string,ExportProgress>()
   /** Saídas de exportações concluídas nesta sessão (chave de `outputKey`). */
   const outputs = new Set<string>()
 
@@ -223,6 +226,8 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     p.fraction = Math.min(1, run.videoFraction * 0.9 + run.audioFraction * 0.05 + mux)
     p.audioReady = run.audioFraction >= 1
     last = { ...p }
+    history.set(run.id,{...p})
+    if (history.size > 100) history.delete(history.keys().next().value!)
     deps.emit({ ...p })
   }
 
@@ -245,32 +250,33 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
   async function writeCompanionText(run: Run): Promise<Partial<ExportProgress>> {
     try {
       if (run.clip) {
-        const meta = run.stored.meta?.perClip?.[run.clip.id]
-        const text = buildClipText(run.clip, resolveClipMeta(meta, fallbackClipMeta(run.clip, run.words)))
+        const meta = run.project.meta?.perClip?.[run.clip.id]
+        const item = itemOf(run.stored,run.clip.id)
+        const text = item.text ?? buildClipText({ ...run.clip,title:item.title ?? run.clip.title,hook:item.hook ?? run.clip.hook }, resolveClipMeta(meta, fallbackClipMeta(run.clip, run.words)))
         const stem = basename(run.finalPath).replace(/\.mp4$/i, '')
         const path = await writeTextBeside(run.outDir, stem, text)
         outputs.add(await outputKey(path))
         return { textPath: path }
       }
       if (run.req.format === 'vertical') return {}
-      const youtube = run.stored.meta?.youtube
+      const youtube = run.project.meta?.youtube
       const durationMs = projectDurationMs(run.stored)
       let chapters = youtube?.chapters ?? []
       let note: string | undefined
       let why: string | undefined
       if (chapters.length === 0 && run.words && run.words.length > 0) {
-        const auto = heuristicChapters(run.words, durationMs, run.stored.cuts)
+        const auto = heuristicChapters(run.words, durationMs, run.project.cuts)
         chapters = auto.chapters
         if (chapters.length > 0) note = 'Capítulos gerados pelas pausas, sem IA: confira os títulos.'
         else if (auto.why) why = auto.why
       }
-      const text = buildYoutubeText({
-        title: run.stored.title,
-        titles: youtube?.titles ?? [],
+      const text = itemOf(run.stored,'youtube').text ?? buildYoutubeText({
+        title: run.project.title,
+        titles: itemOf(run.stored,'youtube').title ? [run.project.title,...(youtube?.titles ?? []).filter((t) => t !== run.project.title)].slice(0,3) : youtube?.titles ?? [],
         description: youtube?.description ?? '',
         tags: youtube?.tags ?? [],
         chapters,
-        kept: keptRanges(durationMs, run.stored.cuts),
+        kept: keptRanges(durationMs, run.project.cuts),
         ...(note ? { chaptersNote: note } : {}),
         ...(why ? { chaptersWhy: why } : {})
       })
@@ -288,7 +294,9 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     const { project } = run
     const durationMs = projectDurationMs(project)
     const kept = keptRanges(durationMs, project.cuts)
-    const outMs = outputDuration(durationMs, project.cuts)
+    // O loudnorm pode completar um bloco no fim. O áudio termina na duração dos quadros CFR,
+    // inclusive quando a soma dos cortes termina entre dois quadros.
+    const outMs = run.progress.totalFrames * 1000 / run.req.fps
     const signal = run.abort.signal
     const bitrate = run.req.format === 'vertical' ? VERTICAL_AUDIO_BITRATE : undefined
 
@@ -328,7 +336,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     const graph2 = buildAudioGraph({ kept, voice, system, mode: 'final', measured, ...(voiceMutes?.length ? { voiceMutes } : {}) })
     const graphFile2 = join(run.tmpDir, 'audio-final.txt')
     await writeFile(graphFile2, graph2.graph, 'utf8')
-    await ff.run(buildAudioArgs({ inputs, graphFile: graphFile2, output: run.audioPath, ...(bitrate ? { bitrate } : {}) }), {
+    await ff.run(buildAudioArgs({ inputs, graphFile: graphFile2, output: run.audioPath, durationMs: outMs, ...(bitrate ? { bitrate } : {}) }), {
       signal,
       onProgress: (p) => {
         run.audioFraction = Math.min(0.99, 0.5 + (p.timeMs / Math.max(1, outMs)) * 0.5)
@@ -548,10 +556,11 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         if (normalizeRanges(clip.ranges, projectDurationMs(stored)).length === 0) {
           throw new ExportError(`O corte «${clip.title}» não tem nenhum trecho dentro da gravação. Ajuste os trechos do corte e tente de novo.`)
         }
-        project = clipDocument(stored, clip)
+        project = reviewDocument(stored, clip.id)
         request = { ...asked, format: 'vertical' }
         delete request.fileName
       }
+      if (!clip && (request.format ?? 'horizontal') === 'horizontal') project = reviewDocument(stored, 'youtube')
       // O documento pode vir de terceiros: todo caminho dele é relativo e resolve para DENTRO da pasta do projeto.
       // Erro visível ANTES de começar qualquer coisa ("Este projeto aponta para um arquivo fora da pasta dele").
       await assertDocumentPaths(dir, project)
@@ -578,7 +587,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
 
       const id = randomUUID()
       const exportsDir = await chooseOutputDir(dir, request.dir, clip ? 'cortes' : undefined)
-      const stem = clip ? `${String(clipNumber).padStart(2, '0')} - ${sanitizeFileName(clip.title, 'Corte')}` : exportFileName(project.title, request).replace(/\.mp4$/, '')
+      const stem = clip ? `${String(clipNumber).padStart(2, '0')} - ${sanitizeFileName(project.title, 'Corte')}` : exportFileName(project.title, request).replace(/\.mp4$/, '')
       const unique = uniqueName(stem, (n) => existsSync(join(exportsDir, `${n}.mp4`)))
       const finalPath = join(exportsDir, `${unique}.mp4`)
       const tmpDir = join(exportsDir, `.tmp-${id.slice(0, 8)}`)
@@ -587,7 +596,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         projectId: request.projectId,
         project,
         format: format.kind,
-        ...(clip && clip.layoutV !== 'auto' ? { clipLayout: clip.layoutV } : {}),
+        // O layout do corte já foi aplicado por reviewDocument; não o reaplique na janela.
         width: format.w,
         height: format.h,
         fps: request.fps,
@@ -666,7 +675,8 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       await run.done
     },
 
-    status() {
+    status(exportId) {
+      if (exportId) { const found = current?.id === exportId ? current.progress : history.get(exportId); return found ? {...found} : null }
       return current ? { ...current.progress } : last ? { ...last } : null
     },
 

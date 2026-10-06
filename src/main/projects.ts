@@ -227,7 +227,7 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
       if (!clean) throw new Error('O título não pode ficar vazio.')
       if (clean.length > MAX_TITLE_LENGTH) throw new Error(`O título passa de ${MAX_TITLE_LENGTH} caracteres.`)
       const { project, dir } = await this.read(id)
-      const updated: Project = { ...project, title: clean }
+      const updated: Project = { ...project, title: clean,review:{...project.review,items:project.review?.items ?? {},titleOrigin:'manual'} }
       await writeFileAtomic(join(dir, PROJECT_FILE), serializeProject(updated))
       logger.info(`Projeto renomeado: ${id} → "${clean}"`)
       return summarize(id, dir, updated)

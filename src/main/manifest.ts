@@ -6,9 +6,11 @@
  */
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { StopReason } from '@shared/ipc'
+import type { ProcessStepId, StopReason } from '@shared/ipc'
 import type { FrameRate, Interval, RecordMode } from '@shared/recording'
-import type { CaptureInfo, Rect, Size } from '@shared/types'
+import type { CaptureInfo, Project, Rect, Size } from '@shared/types'
+import type { VideoScript } from '@shared/script'
+import type { RetakeMark } from '@shared/retake-marker'
 import { writeFileAtomic } from './fs-utils'
 
 export const MANIFEST_PATH = 'raw/recording.json'
@@ -80,6 +82,9 @@ export type RecordingManifest = {
   notes: string[]
   saved: ManifestSaved | null
   processedAt: string | null
+  script?: VideoScript
+  retakeMarks?: RetakeMark[]
+  processing?: { done: ProcessStepId[]; sources: Project['sources'] }
 }
 
 export async function writeManifest(dir: string, manifest: RecordingManifest): Promise<void> {

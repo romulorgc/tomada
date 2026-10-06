@@ -397,15 +397,16 @@ export function applyCleanup(doc: { cuts: readonly Cut[]; mutes?: readonly Mute[
   if (scope.filler) replaced.add('filler')
   if (scope.retake) replaced.add('retake')
 
-  const kept = doc.cuts.filter((c) => !replaced.has(c.reason))
+  const kept = doc.cuts.filter((c) => !replaced.has(c.reason) || c.origin === 'manual')
   const disabledBefore = doc.cuts.filter((c) => replaced.has(c.reason) && !c.enabled)
   const created: Cut[] = []
   const pool: Cut[] = [...kept]
   for (const it of items) {
     if (it.kind !== 'cut' || !replaced.has(it.reason)) continue
+    if (kept.some((c) => c.origin === 'manual' && c.reason === it.reason && overlapMs(c,it) > 0)) continue
     const len = it.end - it.start
     const wasOff = disabledBefore.some((c) => c.reason === it.reason && overlapMs(c, it) >= len * 0.5)
-    const cut: Cut = { id: nextSegId(pool, 'cut'), start: it.start, end: it.end, reason: it.reason, enabled: !wasOff }
+    const cut: Cut = { id: nextSegId(pool, 'cut'), start: it.start, end: it.end, reason: it.reason, enabled: !wasOff, origin: 'auto' }
     pool.push(cut)
     created.push(cut)
   }

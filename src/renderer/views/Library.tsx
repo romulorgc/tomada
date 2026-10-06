@@ -77,6 +77,7 @@ export function Library() {
       ) : (
         <div className="grid gap-x-6 gap-y-8" style={gridStyle} data-testid="library-grid">
           {projects.map((p) => (
+            <div key={p.id}>
             <ProjectCard
               key={p.id}
               project={p}
@@ -85,6 +86,8 @@ export function Library() {
               onReveal={(id) => void revealProject(id)}
               onAskDelete={setToDelete}
             />
+            <button className="btn btn-ghost mt-2" data-testid="card-review" onClick={() => go({name:'review',id:p.id})}>{t.autopilot.review}</button>
+            </div>
           ))}
         </div>
       )}

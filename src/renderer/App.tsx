@@ -10,6 +10,7 @@ import { Processing } from './views/Processing'
 import { ProjectView } from './views/ProjectView'
 import { Record } from './views/Record'
 import { Settings } from './views/Settings'
+import { Review } from './views/Review'
 
 /** Se uma tela quebrar, aparece o motivo e um botão - não uma janela em branco. */
 class Boundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -37,7 +38,9 @@ function CurrentView() {
     case 'library':
       return <Library />
     case 'project':
-      return <ProjectView key={view.id} id={view.id} />
+      return <ProjectView key={`${view.id}-${view.itemId ?? "base"}`} id={view.id} itemId={view.itemId} />
+    case 'review':
+      return <Review key={view.id} id={view.id} />
     case 'record':
       return <Record />
     case 'processing':
@@ -53,10 +56,15 @@ export function App() {
   useEffect(() => useRecorder.getState().attach(), [])
   // O estado da transcrição (preparação e fila) também chega por evento e vale em qualquer tela.
   useEffect(() => useTranscription.getState().attach(), [])
+  useEffect(() => {
+    const off = window.tomada.on('autopilot:progress',(state) => { const app = useApp.getState(); if (app.view.name === 'processing' || (app.view.name === 'review' && app.view.id === state.projectId)) app.go({ name: 'review', id: state.projectId }) })
+    const ready = window.tomada.on('autopilot:ready',({ projectId }) => useApp.getState().go({ name: 'review',id: projectId }))
+    return () => { off(); ready() }
+  },[])
   return (
     <div className="flex h-full">
       {/* O editor ocupa a janela inteira: a navegação do app só volta ao fechar o projeto. */}
-      {viewName === 'project' ? null : <Sidebar />}
+      {viewName === 'project' || viewName === 'review' ? null : <Sidebar />}
       <main className={['min-w-0 flex-1', viewName === 'project' ? 'overflow-hidden' : 'overflow-y-auto'].join(' ')} aria-label={t.app.name} data-view={viewName}>
         <Boundary>
           <CurrentView />

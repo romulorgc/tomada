@@ -294,6 +294,7 @@ export function buildPublishPrompt(input: PublishPromptInput): string {
   const kept = keptRanges(durationMs, project.cuts)
   const outputMs = kept.reduce((a, r) => a + (r.end - r.start), 0)
   const lines: string[] = [`Vídeo "${oneLine(project.title).slice(0, 120)}" com ${formatSpan(outputMs)} (depois dos cortes).`]
+  if (project.script) lines.push(`Roteiro de referência: ${JSON.stringify(project.script)}`)
   if (input.clips.length > 0) {
     lines.push('', 'Cortes verticais (escreva a legenda e as hashtags de cada um):')
     for (const c of input.clips) {
@@ -502,4 +503,3 @@ export function resolveClipMeta(meta: ClipMeta | undefined, fallback: ClipMeta):
     shorts: pick(meta?.shorts ?? meta?.hashtags, fallback.shorts)
   }
 }
-

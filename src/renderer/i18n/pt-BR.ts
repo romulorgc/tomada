@@ -4,7 +4,31 @@
  * (e a confirmação repete o mesmo verbo); erro explica o que houve e o que fazer.
  */
 export const ptBR = {
+  autopilot: {
+    hasErrors:'Há etapas com problema. Confira os motivos e tente novamente.',
+    decisionHelp: 'As escolhas seguem a atividade da tela e a fala. Desmarque uma decisão para restaurar o trecho ou o enquadramento.', enableAll: 'Ligar categoria', resetText: 'Restaurar texto sugerido', resetAllTexts: 'Restaurar todos os textos', discardAll: 'Descartar todos os cortes', styleSaved: 'Estilo salvo para as próximas gravações.',
+    title: 'Piloto automático', mode: 'Ao parar de gravar', everything: 'Fazer tudo e exportar', prepare: 'Só preparar (sem exportar)', nothing: 'Nada',
+    help: 'Grave, revise e poste. Cada decisão pode ser ajustada; o que você mudar à mão fica preservado.',
+    steps: { transcribe: 'Transcrever localmente', clean: 'Limpar silêncio, hesitações e recomeços', zooms: 'Zooms automáticos', layouts: 'Layouts automáticos (16:9 e 9:16)', captions: 'Aplicar padrão de legendas', youtube: 'Exportar YouTube 1080p', clips: 'Sugerir os melhores cortes', clipExports: 'Exportar cortes verticais', publish: 'Preparar títulos e textos', notify: 'Avisar quando estiver pronto' },
+    horizontalCaptions: 'Legenda no YouTube por padrão', verticalCaptions: 'Legenda nos cortes por padrão', maxClips: 'Quantidade máxima de cortes', score: 'Nota mínima', saveStyle: 'Usar este estilo nas próximas gravações', savedStyle: 'Estilo salvo para novas gravações',
+    review: 'Revisão', reviewing: 'Prepare para postar', running: 'Preparando sua gravação…', ready: 'Pronto para revisar', summary: 'O que o automático fez', approve: 'Aprovar', discard: 'Descartar', pending: 'A revisar', approved: 'Aprovado', discarded: 'Descartado',
+    quick: 'Ajustes rápidos', editor: 'Abrir no editor', copy: 'Copiar texto', copied: 'Texto copiado', post: 'Abrir pasta para postar', postHelp: 'A pasta recebe os vídeos aprovados e um texto por plataforma.',
+    start: 'Aparar começo', end: 'Aparar fim', layout: 'Layout', captions: 'Legenda', captionStyle: 'Estilo da legenda', titleLabel: 'Título', hook: 'Gancho', text: 'Texto para publicação (editável)', zoom: 'Zoom', softer: 'Mais suave', stronger: 'Mais forte', off: 'Desligado', auto: 'Automático',
+    clean: 'Restaurar uma categoria neste vídeo', reasons: { silence: 'Silêncio', filler: 'Muletas e hesitações', retake: 'Recomeços', manual: 'Manuais', ai: 'Pedidos de edição' }, keepNe: 'Não cortar “né”',
+    ask: 'Ajustar pedindo', askPlaceholder: 'Ex.: corta mais o começo ou troca o gancho', apply: 'Aplicar ajuste', confirm: 'Aplicar mesmo assim', confirmation: 'O ajuste remove mais de 20% do vídeo. Confira o resumo antes de aplicar.',
+    retry: 'Tentar de novo', exporting: 'Reexportando só este vídeo…', noExport: 'Este vídeo ainda não foi exportado.', export: 'Exportar este vídeo', error: 'Não consegui concluir esta ação',
+    note: (n: number) => `Nota ${n}/100`, duration: 'Duração', view: 'Ver e ajustar', restore: 'Restaurar', decide: 'Decisões de limpeza', restoreAll: 'Restaurar esta categoria',
+    cutsCount: (n: number, reason: string, time: string) => `${n} ${reason.toLowerCase() === 'silêncio' && n !== 1 ? 'silêncios' : reason.toLowerCase()} · ${time} removidos`, zoomCount: (n: number) => `${n} ${n === 1 ? 'zoom automático' : 'zooms automáticos'}`, layoutCount: (n: number) => `${n} ${n === 1 ? 'layout automático' : 'layouts automáticos'}`, clipCount: (n: number) => `${n} ${n === 1 ? 'corte vertical' : 'cortes verticais'}`, texts: 'Títulos e textos de publicação', regenerate: 'Refazer automáticos', noAi: 'Sem IA: confira as escolhas da heurística.', youtube: 'YouTube · 16:9', vertical: 'Corte · 9:16'
+  },
   app: { name: 'Tomada', tagline: 'Gravar e editar, tudo neste computador' },
+
+  preparation: {
+    faceChecks:{ok:'Rosto enquadrado', 'no-face':'Nenhum rosto visível: confira a câmera', 'off-center':'Rosto fora do enquadramento', dark:'Câmera escura: confira a iluminação', unknown:'Confira seu enquadramento na prévia'},
+    script: 'Roteiro', topic: 'Sobre o que é o vídeo?', topicHint: 'Ex.: mostrar como agendar um cliente no meu sistema', generate: 'Preparar roteiro', generating: 'Preparando roteiro…', title: 'Título provisório', hook: 'Gancho de uma frase', topics: 'Tópicos (um por linha, de 3 a 6)', closing: 'Fechamento com chamada', invalid: 'Preencha todos os campos e mantenha de 3 a 6 tópicos.', failed: 'Não consegui preparar o roteiro', remove: 'Gravar sem roteiro', prompt: 'Abrir teleprompter', mode: 'Modo do teleprompter', scroll: 'Rolagem', topicMode: 'Tópicos', speed: 'Velocidade da rolagem', speedValue: (n: number): string => `${n} px/s`,
+    promptHelp: 'Ctrl+Alt+Espaço pausa; Ctrl+Alt+→ avança; Ctrl+Alt+← volta. A janela fica fora da captura.',
+    pause: 'Pausar roteiro', resume: 'Continuar roteiro', previous: 'Tópico anterior', next: 'Próximo tópico', faster: 'Rolagem mais rápida', slower: 'Rolagem mais lenta', close: 'Fechar teleprompter', protected: 'Teleprompter · fora da captura', progress: (current: number, total: number): string => `${current} de ${total}`,
+    preflight: 'Antes de gravar', mic: { listening: 'Fale por 2 segundos para conferir o microfone.', low: 'Microfone baixo: aproxime-se ou aumente o ganho.', clipping: 'Microfone estourando: afaste-se ou reduza o ganho.', ok: 'Microfone com nível bom.' }, noMic: 'Sem microfone selecionado.', micValues: (rms: number, peak: number): string => `RMS ${rms.toFixed(0)} dBFS · pico ${peak.toFixed(0)} dBFS`, disk: (n: number): string => `${(n / 1e9).toFixed(1).replace('.', ',')} GB livres`, diskLow: 'Pouco espaço em disco.', diskUnknown: 'Não consegui medir o espaço em disco.', dnd: 'Lembrete: ligue o Não perturbe do Windows.', face: 'Confira o rosto e a iluminação na prévia da câmera.', anyway: 'Gravar mesmo assim', retake: 'Errei', marked: 'Errei marcado', marks: (n: number): string => `${n} marca${n === 1 ? '' : 's'}`, retakeShortcut: 'Atalho para marcar “errei”', shortcutHelp: 'Use Ctrl+Alt+letra, Ctrl+Shift+letra ou Alt+Shift+letra. Ctrl+Shift+R/P/Z ficam reservados.', shortcutInvalid: 'Atalho inválido ou reservado.'
+  },
 
   nav: {
     label: 'Navegação principal',

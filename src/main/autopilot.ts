@@ -1,0 +1,367 @@
+/** Conecta os serviços existentes numa fila persistente; nunca há duas exportações do piloto em paralelo. */
+import { mkdir, readFile, copyFile, rm } from 'node:fs/promises'
+import { relative } from 'node:path'
+import { newPipeline, runPipeline, type AutopilotPrefs, type PipelineState, type PipelineStepId } from '@shared/autopilot'
+import { computeClean, DEFAULT_CLEAN } from '@shared/clean'
+import { planClean } from '@shared/clean-plan'
+import { heuristicClips, mergeSuggestedClips, titleFromText, limitHook, type ClipDraft } from '@shared/clips'
+import { processCursor } from '@shared/cursor'
+import { eventsFromText, EVENT_FILES } from '@shared/events'
+import { sanitizeFileName } from '@shared/export'
+import { projectDurationMs } from '@shared/project'
+import { buildClipText, buildYoutubeText, fallbackClipMeta, heuristicChapters, keywordsOf } from '@shared/publish'
+import { itemOf, updateReviewItem, reviewDocument, type ReviewItem } from '@shared/review'
+import { keptRanges, outputDuration } from '@shared/timeline'
+import type { Project, ProjectSummary, Transcript } from '@shared/types'
+import { autoVerticalLayouts, defaultVerticalEdit, speechRanges } from '@shared/vertical'
+import { generateAutoZooms, zoomPresetFor } from '@shared/zoom'
+import { deriveRetakeCuts } from '@shared/retake-marker'
+import type { DerivedMedia } from './derived-media'
+import type { ExportService } from './export-service'
+import { pathExists, writeFileAtomic } from './fs-utils'
+import { readActivity } from './activity'
+import { mergeEditorProject } from '@shared/project-merge'
+import { suggestClips } from './llm/clips'
+import { generatePublish } from './llm/publish'
+import { detectRetakes } from './llm/retakes'
+import type { LlmManager } from './llm/manager'
+import type { Logger } from './logger'
+import { resolveProjectFile, assertDocumentPaths } from './project-files'
+import { ProjectNotFoundError, type ProjectStore } from './projects'
+import type { TranscriptionService } from './transcription/service'
+
+export interface AutopilotService {
+  start(id: string, startedAt?: number): Promise<void>
+  retry(id: string, step: PipelineStepId): Promise<void>
+  updateItem(id: string, itemId: string, patch: Partial<ReviewItem>, reexport?: boolean): Promise<Project>
+  reexport(id: string, itemId: string): Promise<void>
+  postingFolder(id: string): Promise<string>
+  resume(): Promise<void>
+  idle(): Promise<void>
+  shutdown(): void
+  saveProject(id:string,project:Project,base?:Project):Promise<Project>
+  renameProject(id:string,title:string):Promise<ProjectSummary>
+}
+export type AutopilotDeps = {
+  store: ProjectStore; transcription: TranscriptionService; derived: DerivedMedia; exporter: ExportService; llm: LlmManager; logger: Logger
+  prefs(): AutopilotPrefs; ownerStyle?(): Project['style'] | undefined
+  ownerBackground?(): Promise<string | undefined>
+  emit(state: PipelineState): void; ready(id: string, clips: number,youtube?:boolean): void
+}
+export function createAutopilot(deps: AutopilotDeps): AutopilotService {
+  let queue: Promise<unknown> = Promise.resolve()
+  let writes: Promise<unknown> = Promise.resolve()
+  let stopped = false
+  const active = new Set<string>()
+  const enqueue = <T>(job: () => Promise<T>): Promise<T> => {
+    const next = queue.then(job, job)
+    queue = next.catch((err) => deps.logger.error('Piloto automático: tarefa falhou.', err))
+    return next
+  }
+  const change = (id: string, fn: (p: Project) => Project, missingBase?:Project): Promise<Project> => {
+    const task = writes.then(async () => {
+      let detail: {project:Project;dir:string}
+      try { detail = await deps.store.read(id) }
+      catch(error) {
+        if(!missingBase || !(error instanceof ProjectNotFoundError)) throw error
+        const dir = deps.store.dirOf(id)
+        // Recupera só o documento ausente de uma pasta existente; não recria projeto apagado
+        // nem cobre um arquivo/pasta que esteja impedindo a escrita.
+        if(!await pathExists(dir) || await pathExists(await resolveProjectFile(dir,'project.json'))) throw error
+        detail = {project:missingBase,dir}
+      }
+      const {project,dir} = detail
+      const next = fn(project)
+      await assertDocumentPaths(dir, next)
+      await deps.store.write(id, next)
+      return next
+    })
+    writes = task.catch(() => undefined)
+    return task
+  }
+  const transcript = async (id: string): Promise<Transcript> => {
+    const t = await deps.transcription.getTranscript(id)
+    if (!t || t.words.length === 0) throw new Error('Sem transcrição com fala. Prepare a transcrição nos Ajustes e tente de novo.')
+    return t
+  }
+  const textOf = (project:Project,itemId:string,words:Transcript['words'] | null):string => {
+    const item = itemOf(project,itemId)
+    if(item.text !== undefined) return item.text
+    const p = reviewDocument(project,itemId)
+    const clip = project.clips.find((c) => c.id === itemId)
+    if(clip) return buildClipText({...clip,title:item.title ?? clip.title,hook:item.hook ?? clip.hook},p.meta?.perClip?.[itemId] ?? fallbackClipMeta(clip,words))
+    return buildYoutubeText({title:p.title,titles:item.title ? [item.title,...(p.meta?.youtube?.titles ?? []).filter((t) => t !== item.title)].slice(0,3) : p.meta?.youtube?.titles ?? [],description:p.meta?.youtube?.description ?? '',tags:p.meta?.youtube?.tags ?? [],chapters:p.meta?.youtube?.chapters ?? [],kept:keptRanges(projectDurationMs(p),p.cuts)})
+  }
+  const events = async (dir: string, durationMs: number) => {
+    const texts: Record<string, string> = {}
+    for (const [key, rel] of Object.entries(EVENT_FILES)) {
+      const file = await resolveProjectFile(dir, rel)
+      if (await pathExists(file)) texts[key] = await readFile(file, 'utf8')
+    }
+    const e = eventsFromText(texts)
+    return { ...e, grid: processCursor(e.cursor, e.clicks, { durationMs }) }
+  }
+  async function exportItem(id: string, itemId: string): Promise<void> {
+    await change(id, (p) => updateReviewItem(p, itemId, { phase: 'exporting', error: undefined }, false))
+    try {
+      // Transcrição e exportação compartilham GPU; também esperamos a exportação manual que já estiver em voo.
+      await deps.transcription.idle()
+      await deps.exporter.idle()
+      const { exportId } = await deps.exporter.start({ projectId: id, format: itemId === 'youtube' ? 'horizontal' : 'vertical', resolution: '1080p', fps: 30, ...(itemId === 'youtube' ? {} : { clipId: itemId }) })
+      await deps.exporter.idle()
+      const done = deps.exporter.status(exportId)
+      if (done?.exportId !== exportId || done.phase !== 'done' || !done.outputPath) throw new Error(done?.message ?? 'A exportação não terminou.')
+      const { dir } = await deps.store.read(id)
+      const path = relative(dir, done.outputPath).replaceAll('\\', '/')
+      await resolveProjectFile(dir, path)
+      const textPath = done.textPath ? relative(dir, done.textPath).replaceAll('\\', '/') : undefined
+      if (textPath) await resolveProjectFile(dir, textPath)
+      await change(id, (p) => updateReviewItem(p, itemId, { phase: 'ready', exportPath: path, textPath }, false))
+      if (done.message) throw new Error(done.message)
+    } catch (err) {
+      await change(id, (p) => updateReviewItem(p, itemId, { phase: 'error', error: err instanceof Error ? err.message : String(err) }, false))
+      throw err
+    }
+  }
+  async function runStep(id: string, step: PipelineStepId): Promise<string | void> {
+    const { project, dir } = await deps.store.read(id)
+    const duration = projectDurationMs(project)
+    const prefs = deps.prefs()
+    switch (step) {
+      case 'transcribe': {
+        if (await deps.transcription.getTranscript(id)) return 'Transcrição já disponível.'
+        await deps.exporter.idle()
+        await deps.transcription.start(id)
+        await deps.transcription.idle()
+        const t = await transcript(id)
+        return `${t.words.length} palavras transcritas localmente.`
+      }
+      case 'clean': {
+        const t = await transcript(id)
+        const levels = await deps.derived.levels(id)
+        const marker = deriveRetakeCuts({ words: t.words, marks: project.retakeMarks ?? [], durationMs: duration })
+        let retakes = [] as Awaited<ReturnType<typeof detectRetakes>>['retakes']
+        let notice = ''
+        const provider = deps.llm.provider()
+        if (provider) {
+          try { retakes = (await detectRetakes({ provider, words: t.words })).retakes }
+          catch (err) { notice = `Recomeços pela IA indisponíveis: ${err instanceof Error ? err.message : String(err)}. ` }
+        } else notice = 'Sem IA: recomeços automáticos ficaram de fora; apliquei a heurística e as marcas de errei. '
+        const options = { ...DEFAULT_CLEAN, retakes: true }
+        const result = computeClean({ words: t.words, durationMs: duration, vad: t.vad, levels, retakes }, options)
+        await change(id, (p) => {
+          const manual = p.cuts.filter((c) => c.origin === 'manual')
+          const plan = planClean({ ...p, cuts: p.cuts.filter((c) => c.origin !== 'manual') }, result, options, duration)
+          const markerCuts = marker.cuts.filter((c) => !p.cuts.some((old) => old.id === c.id && (old.origin === 'manual' || !old.enabled)))
+          return { ...p, cuts: [...manual, ...plan.cuts.filter((c) => !manual.some((m) => m.reason === c.reason && m.start < c.end && m.end > c.start)).map((c) => ({ ...c, origin: c.origin ?? 'auto' as const })), ...markerCuts], mutes: plan.mutes, autoCleaned: true }
+        })
+        const fallback = marker.decisions.filter((d) => d.fallback).length
+        return `${notice}${result.items.length} decisões de limpeza; ${marker.cuts.length} marca(s) de errei.${fallback ? ` ${fallback} marca(s) sem fronteira: últimos 6 s, confira na Revisão.` : ''}`
+      }
+      case 'zooms': {
+        const e = await events(dir, duration)
+        await change(id, (p) => {
+          const v = p.vertical ?? defaultVerticalEdit()
+          const make = (kind: 'horizontal' | 'vertical', current: Project['zooms'], off: boolean, excluded?:string[]) => [...current.filter((z) => z.origin === 'manual'), ...(off ? [] : generateAutoZooms({ clicks: e.clicks, keys: e.keys, cursor: e.grid, duration, preset: zoomPresetFor(kind, 'moderate') }).filter((z) => !excluded?.includes(z.id) && !current.some((m) => m.origin === 'manual' && m.start < z.end && m.end > z.start)))]
+          return { ...p, zoomPreset: p.zoomPreset === 'off' ? 'off' : 'moderate', zooms: make('horizontal', p.zooms, p.zoomPreset === 'off',p.autoExclusions?.zooms), vertical: { ...v, zoomPreset: v.zoomPreset === 'off' ? 'off' : 'moderate', zooms: make('vertical', v.zooms, v.zoomPreset === 'off',v.autoExclusions?.zooms) } }
+        })
+        return 'Zooms moderados; ajustes manuais preservados.'
+      }
+      case 'layouts': {
+        const t = await deps.transcription.getTranscript(id)
+        const e = await events(dir, duration)
+        const automatic = autoVerticalLayouts({ durationMs: duration, hasCamera: !!project.sources.camera && !project.style.camera.hidden, clicks: e.clicks, keys: e.keys, cursor: e.grid, speech: speechRanges(t?.words), kept: keptRanges(duration, project.cuts) })
+        await change(id, (p) => {
+          const v = p.vertical ?? defaultVerticalEdit()
+          const fit = (generated: typeof automatic, manual: typeof automatic) => [...manual, ...generated.filter((a) => !manual.some((m) => m.start < a.end && m.end > a.start)).map((s) => ({ ...s, origin: 'auto' as const }))].sort((a,b) => a.start-b.start)
+          const h = automatic.map((s) => ({ ...s, id: `h-${s.id}`, layout: s.layout === 'stack' && p.sources.camera ? 'side-by-side' as const : 'bubble' as const }))
+          return { ...p, layouts: fit(h.filter((s) => !p.autoExclusions?.layouts?.includes(s.id)), p.layouts.filter((s) => s.origin !== 'auto')), vertical: { ...v, layouts: fit(automatic.filter((s) => !v.autoExclusions?.layouts?.includes(s.id)), v.layouts.filter((s) => s.origin !== 'auto')) } }
+        })
+        return 'Layouts escolhidos pela atividade da tela nos dois formatos.'
+      }
+      case 'captions': {
+        await change(id, (p) => {
+          const v = p.vertical ?? defaultVerticalEdit()
+          return { ...p, captions: itemOf(p, 'youtube').origin === 'manual' ? p.captions : { ...p.captions, enabled: prefs.captionsHorizontal }, vertical: { ...v, captions: { ...v.captions, enabled: v.captions?.enabled ?? prefs.captionsVertical } } }
+        })
+        return `Legenda: YouTube ${prefs.captionsHorizontal ? 'ligada' : 'desligada'}; vertical ${prefs.captionsVertical ? 'ligada' : 'desligada'}. Você pode mudar em cada item.`
+      }
+      case 'youtube': return exportItem(id, 'youtube')
+      case 'clips': {
+        const t = await transcript(id)
+        const activity = await readActivity(dir)
+        const manual = project.clips.filter((c) => c.source === 'manual' || itemOf(project, c.id).origin === 'manual')
+        const input = { words: t.words, durationMs: duration, cuts: project.cuts, clicks: activity.clicks, keys: activity.keys, existing: manual }
+        let drafts: ClipDraft[] = []
+        let notice = ''
+        const provider = deps.llm.provider()
+        if (provider) {
+          try { drafts = (await suggestClips({ provider, ...input, script: project.script })).clips }
+          catch (err) { notice = `Sugestão pela IA falhou: ${err instanceof Error ? err.message : String(err)}. ` }
+        } else notice = 'Sem IA: sugestões pela heurística. '
+        if (drafts.length === 0) drafts = heuristicClips(input).clips
+        // Gravações menores que a faixa de 25-65 s também têm uma versão vertical completa para revisar.
+        if (drafts.length === 0 && duration < 25000 && t.words.length > 0 && outputDuration(duration, project.cuts) > 1000) {
+          const text = t.words.filter((w) => !project.cuts.some((c) => c.enabled && w.start >= c.start && w.end <= c.end)).map((w) => w.text).join(' ')
+          drafts = [{ title: titleFromText(text), hook: limitHook(text), ranges: [{ start: 0, end: duration }], score: 70, notes: { hook: 70, flow: 70, value: 70 }, reason: 'Versão vertical completa da gravação curta; nota heurística, confira o conteúdo.', source: 'heuristic' }]
+          notice += 'Gravação curta: versão vertical completa, abaixo da faixa habitual de cortes. '
+        }
+        const chosen = drafts.filter((c) => c.score >= prefs.minScore).sort((a,b) => b.score-a.score).slice(0, prefs.maxClips)
+        await change(id, (p) => {
+          const kept = p.clips.filter((c) => c.source === 'manual' || itemOf(p,c.id).origin === 'manual')
+          const merged = mergeSuggestedClips(kept, chosen)
+          return { ...p, clips: merged.clips, review:{...p.review,items:Object.fromEntries(Object.entries(p.review?.items ?? {}).filter(([id]) => id === 'youtube' || merged.clips.some((c) => c.id === id)))} }
+        })
+        return `${notice}${chosen.length} ${chosen.length === 1 ? 'corte' : 'cortes'} com nota ≥ ${prefs.minScore}; máximo ${prefs.maxClips}.`
+      }
+      case 'clipExports': {
+        const errors: string[] = []
+        for (const c of project.clips) {
+          if (stopped) return
+          if (itemOf(project,c.id).decision === 'discarded' || itemOf(project,c.id).phase === 'ready') continue
+          try { await exportItem(id, c.id) } catch (err) { errors.push(`${c.title}: ${err instanceof Error ? err.message : String(err)}`) }
+        }
+        if (errors.length) throw new Error(errors.join('\n'))
+        return `${project.clips.length} ${project.clips.length === 1 ? 'corte exportado' : 'cortes exportados'} em fila.`
+      }
+      case 'publish': {
+        const t = await transcript(id)
+        const provider = deps.llm.provider()
+        let meta: Project['meta']
+        let notice = ''
+        if (provider) {
+          try { const result = await generatePublish({ provider, project, words: t.words, durationMs: duration, clips: project.clips }); meta = { youtube: { titles: result.titles, description: result.description, chapters: result.chapters, tags: result.tags }, perClip: result.clips } }
+          catch (err) { notice = `Textos pela IA falharam: ${err instanceof Error ? err.message : String(err)}. ` }
+        } else notice = 'Sem IA: textos e capítulos gerados pela transcrição; confira antes de postar. '
+        const body = t.words.filter((w) => !project.cuts.some((c) => c.enabled && c.start <= w.start && c.end >= w.end)).map((w) => w.text).join(' ')
+        if (!meta) meta = { youtube: { titles: [project.script?.title || titleFromText(body) || project.title], description: body.slice(0, 1200), tags: keywordsOf(body, 12), chapters: heuristicChapters(t.words, duration, project.cuts).chapters }, perClip: Object.fromEntries(project.clips.map((c) => [c.id, fallbackClipMeta(c,t.words)])) }
+        const updated = await change(id, (p) => p.review?.metaOrigin === 'manual' ? p : { ...p, title: p.review?.titleOrigin === 'manual' ? p.title : p.script?.title || meta?.youtube?.titles?.[0] || p.title, meta: { ...p.meta, ...meta, perClip: { ...p.meta?.perClip, ...meta?.perClip } }, review: { ...p.review, items: p.review?.items ?? {}, metaOrigin: 'auto' } })
+        for (const [itemId,item] of Object.entries(updated.review?.items ?? {})) {
+          if (!item.textPath) continue
+          const file = await resolveProjectFile(dir,item.textPath)
+          const text = textOf(updated,itemId,t.words)
+          await writeFileAtomic(file,text)
+        }
+        return `${notice}Título, descrição e textos por plataforma prontos.`
+      }
+      case 'notify': {
+        deps.ready(id, Object.entries(project.review?.items ?? {}).filter(([key,value]) => key !== 'youtube' && value.phase === 'ready').length,itemOf(project,'youtube').phase === 'ready')
+        return 'Pronto para revisar e postar.'
+      }
+    }
+  }
+  async function run(id: string): Promise<void> {
+    const { project } = await deps.store.read(id)
+    const state = project.autopilot ?? newPipeline(id)
+    const prefs = deps.prefs()
+    await runPipeline(state, { stopped: () => stopped, enabled: (s) => prefs.steps[s] !== false && (prefs.mode !== 'prepare' || !['youtube','clipExports'].includes(s)), run: (s) => runStep(id,s), save: async (s) => { await change(id, (p) => ({ ...p, autopilot: structuredClone(s) })); deps.emit(structuredClone(s)) } })
+  }
+  const service: AutopilotService = {
+    renameProject: (id,title) => {
+      // A renomeação da Biblioteca participa da mesma fila de escrita das etapas e dos ajustes.
+      const task = writes.then(() => deps.store.rename(id,title))
+      writes = task.catch(() => undefined)
+      return task
+    },
+    saveProject: (id,doc,base) => change(id,(current) => {
+      const merged = base ? mergeEditorProject(base,doc,current) : doc
+      const items = Object.fromEntries(Object.entries({...current.review?.items,...merged.review?.items}).map(([itemId,item]) => {
+        const fresh = current.review?.items[itemId]
+        return [itemId,{...item,...(fresh ? {phase:fresh.phase,exportPath:fresh.exportPath,textPath:fresh.textPath,error:fresh.error} : {})}]
+      }))
+      return {...merged,autopilot:current.autopilot,review:{...current.review,...merged.review,items}}
+    },base ?? doc),
+    async start(id, startedAt) {
+      if (active.has(id)) return
+      active.add(id)
+      try {
+        const prefs = deps.prefs()
+        const before = (await deps.store.read(id)).project
+        let style = deps.ownerStyle?.()
+        if (!before.autopilot && style?.background.type === 'image') {
+          const source = await deps.ownerBackground?.()
+          if (source) style = {...style,background:{type:'image',path:await deps.store.importBackground(id,source)}}
+          else style = {...style,background:before.style.background}
+        }
+        await change(id, (p) => p.autopilot ? p : ({ ...p, ...(prefs.mode === 'nothing' ? {} : {autopilot:newPipeline(id,startedAt)}), style: { ...(style ?? p.style),cursor:{...(style?.cursor ?? p.style.cursor),mode:p.style.cursor.mode} }, captions:{...p.captions,enabled:prefs.steps.captions === false ? false : prefs.captionsHorizontal}, vertical:{...(p.vertical ?? defaultVerticalEdit()),captions:{...p.vertical?.captions,enabled:prefs.steps.captions === false ? false : prefs.captionsVertical},...(prefs.steps.zooms === false ? {zoomPreset:'off'} : {})},...(prefs.steps.zooms === false ? {zoomPreset:'off'} : {}) }))
+        if (prefs.mode === 'nothing') return
+        await enqueue(() => run(id))
+      } finally { active.delete(id) }
+    },
+    async retry(id,step) {
+      await enqueue(async () => {
+        await change(id,(p) => ({ ...p, autopilot: { ...(p.autopilot ?? newPipeline(id)), status: 'running', steps: (p.autopilot ?? newPipeline(id)).steps.map((s) => s.id === step ? { id: s.id, status: 'pending' } : s) } }))
+        await run(id)
+        if (deps.prefs().mode === 'everything' && ['clean','zooms','layouts','captions','clips'].includes(step)) {
+          const latest = (await deps.store.read(id)).project
+          for (const itemId of ['youtube',...latest.clips.map((c) => c.id)]) {
+            if (itemOf(latest,itemId).decision === 'discarded') continue
+            if (itemId === 'youtube' && step === 'clips') continue
+            if (deps.prefs().steps[itemId === 'youtube' ? 'youtube' : 'clipExports'] === false) continue
+            try { await exportItem(id,itemId) } catch { /* exportItem registra o motivo na revisão. */ }
+          }
+        }
+      })
+    },
+    async updateItem(id,itemId,patch,reexport = true) {
+      const { project } = await deps.store.read(id)
+      if (itemId !== 'youtube' && !project.clips.some((c) => c.id === itemId)) throw new Error('Esse corte não existe.')
+      // O editor e o pedido devolvem uma fotografia já com os ajustes rápidos aplicados.
+      // Consome os modificadores para que o próximo render não aplique zoom/aparo duas vezes.
+      if (patch.edits) patch = {zoom:undefined,layout:undefined,trim:undefined,captionsEnabled:undefined,captionStyle:undefined,enabledReasons:undefined,enabledCutIds:undefined,disabledReasons:undefined,disabledCutIds:undefined,disabledZoomIds:undefined,disabledLayoutIds:undefined,keepFillers:undefined,keptFillerCutIds:undefined,restoreAutoZooms:undefined,restoreAutoLayouts:undefined,...patch}
+      // A lista de muletas é uma preferência reversível, aplicada ao documento de exportação.
+      if (patch.keepFillers !== undefined) {
+        const t = await deps.transcription.getTranscript(id)
+        const words = t?.words.filter((w) => patch.keepFillers?.includes(w.text.toLowerCase().replace(/[^\p{L}]/gu,''))) ?? []
+        patch.keptFillerCutIds = (itemOf(project,itemId).edits?.cuts ?? project.cuts).filter((c) => c.reason === 'filler' && c.origin !== 'manual' && words.some((w) => w.start < c.end && w.end > c.start)).map((c) => c.id)
+      }
+      const result = await change(id,(p) => updateReviewItem(p,itemId,{ ...patch, ...(reexport ? { phase: 'queued' } : {}) }))
+      if (Object.hasOwn(patch,'text')) { const {dir} = await deps.store.read(id); const path = itemOf(result,itemId).textPath; if(path) await writeFileAtomic(await resolveProjectFile(dir,path),textOf(result,itemId,(await deps.transcription.getTranscript(id))?.words ?? null)) }
+      if (reexport) void enqueue(() => exportItem(id,itemId))
+      return result
+    },
+    async reexport(id,itemId) { await enqueue(() => exportItem(id,itemId)) },
+    async postingFolder(id) {
+      await queue
+      const { project, dir } = await deps.store.read(id)
+      const folder = await resolveProjectFile(dir,'exports/postar')
+      await mkdir(folder,{ recursive: true })
+      const manifest = await resolveProjectFile(dir,'exports/postar/arquivos.json')
+      if (await pathExists(manifest)) {
+        const old = JSON.parse(await readFile(manifest,'utf8')) as unknown
+        if (Array.isArray(old)) for (const rel of old) if (typeof rel === 'string' && rel.startsWith('exports/postar/')) await rm(await resolveProjectFile(dir,rel),{ force: true })
+      }
+      const created: string[] = []
+      const texts: Record<string,string[]> = { YouTube: [], TikTok: [], Reels: [], Shorts: [] }
+      for (const [itemId,item] of Object.entries(project.review?.items ?? {})) {
+        if (item.decision !== 'approved' || item.phase !== 'ready' || !item.exportPath) continue
+        const c = project.clips.find((c) => c.id === itemId)
+        const stem = `${sanitizeFileName(itemId)} - ${sanitizeFileName(item.title ?? c?.title ?? project.title)}`
+        const rel = `exports/postar/${stem}.mp4`
+        await copyFile(await resolveProjectFile(dir,item.exportPath),await resolveProjectFile(dir,rel))
+        created.push(rel)
+        if (itemId === 'youtube') {
+          const t = await transcript(id)
+          texts.YouTube!.push(textOf(project,itemId,t.words))
+        } else if (c) {
+          const meta = reviewDocument(project,itemId).meta?.perClip?.[itemId] ?? fallbackClipMeta(c,null)
+          for (const [platform,key] of [['TikTok','tiktok'],['Reels','reels'],['Shorts','shorts']] as const) texts[platform]!.push(item.text ?? `${item.title ?? c.title}\n${meta.caption ?? c.hook}\n${meta[key]?.join(' ') ?? ''}`)
+        }
+      }
+      for (const [platform,blocks] of Object.entries(texts)) if (blocks.length) { const rel = `exports/postar/${platform}.txt`; await writeFileAtomic(await resolveProjectFile(dir,rel),blocks.join('\n\n')); created.push(rel) }
+      await writeFileAtomic(manifest,JSON.stringify(created))
+      return folder
+    },
+    async resume() {
+      for (const entry of await deps.store.list()) {
+        const { project } = await deps.store.read(entry.id)
+        if (project.autopilot?.status === 'running') await service.start(entry.id).catch(() => undefined)
+        const latest = (await deps.store.read(entry.id)).project
+        for (const [itemId,item] of Object.entries(latest.review?.items ?? {})) if (item.phase === 'queued' || item.phase === 'exporting') void enqueue(() => exportItem(entry.id,itemId))
+      }
+    },
+    async idle() { await queue },
+    shutdown() { stopped = true }
+  }
+  return service
+}

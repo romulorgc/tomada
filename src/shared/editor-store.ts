@@ -23,6 +23,7 @@
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import type { Project } from './types'
 import { mergeFormatView, projectForFormat } from './vertical'
+import { preserveManualDecisions } from './review'
 
 export type FormatKind = 'horizontal' | 'vertical'
 
@@ -41,7 +42,7 @@ export type TimeRange = { start: number; end: number }
 export type EditorDeps = {
   project: Project
   /** Grava o documento (a interface injeta `window.tomada.projects.save`). */
-  save(project: Project): Promise<unknown>
+  save(project: Project, lastSubmitted: Project): Promise<unknown>
   debounceMs?: number
   historyLimit?: number
   /** Chamado a cada falha de salvamento, com o motivo. */
@@ -122,6 +123,7 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
   let timer: ReturnType<typeof setTimeout> | undefined
   let inflight: Promise<void> = Promise.resolve()
   let dirty = false
+  let lastSubmitted = deps.project
 
   let viewCache: { doc: Project; format: FormatKind; view: Project } | null = null
   /** A visão do formato (a mesma de antes enquanto o documento é o mesmo objeto: a identidade importa para quem compara). */
@@ -157,6 +159,7 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
 
     const apply = (next: Project, prev: Project, options: ChangeOptions): boolean => {
       if (next === prev) return false
+      if (options.history !== false) next = preserveManualDecisions(prev, next)
       if (group) {
         group.changed = true
         set(docPatch(next))
@@ -261,7 +264,8 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
         set({ saveStatus: 'saving' })
         inflight = inflight.then(async () => {
           try {
-            await deps.save(doc)
+            await deps.save(doc, lastSubmitted)
+            lastSubmitted = doc
             if (!dirty) set({ saveStatus: 'saved', saveError: null })
           } catch (err) {
             dirty = true // a próxima mudança (ou um novo flush) tenta de novo

@@ -23,17 +23,20 @@ async function invoke<K extends IpcChannel>(channel: K, ...args: IpcContract[K][
 
 const api: TomadaApi = {
   cameraSync: { calibrate: (capture) => invoke('camera:calibrate', capture) },
+  autopilot: { start: (id) => invoke('autopilot:start', id), retry: (id,step) => invoke('autopilot:retry', id,step) },
+  review: { update: (id,itemId,patch,reexport = true) => invoke('review:update', id,itemId,patch,reexport), export: (id,itemId) => invoke('review:export', id,itemId), post: (id) => invoke('review:post', id), ask: (id,itemId,instruction) => invoke('review:ask',id,itemId,instruction) },
   app: { info: () => invoke('app:info') },
   projects: {
     list: () => invoke('projects:list'),
     get: (id) => invoke('projects:get', id),
     rename: (id, title) => invoke('projects:rename', id, title),
-    save: (id, project) => invoke('projects:save', id, project),
+    save: (id, project,base) => invoke('projects:save', id, project,base),
     trash: (id) => invoke('projects:trash', id),
     reveal: (id) => invoke('projects:reveal', id),
     pickBackground: (id) => invoke('projects:pick-background', id)
   },
   settings: {
+    saveStyle: (id,itemId) => invoke('settings:save-style',id,itemId),
     get: () => invoke('settings:get'),
     update: (patch) => invoke('settings:update', patch),
     pickProjectsDir: () => invoke('settings:pick-projects-dir'),
@@ -58,6 +61,8 @@ const api: TomadaApi = {
     stop: (info) => invoke('record:stop', info),
     abort: (reason) => invoke('record:abort', reason),
     status: () => invoke('record:status'),
+    markRetake: () => invoke('record:mark-retake'),
+    preflight: () => invoke('record:preflight'),
     level: (level) => ipcRenderer.send(LEVEL_CHANNEL, level)
   },
   processing: { retry: (sessionId) => invoke('process:retry', sessionId) },
@@ -96,7 +101,8 @@ const api: TomadaApi = {
     retakes: (projectId) => invoke('ai:retakes', projectId),
     clips: (projectId, mode) => invoke('ai:clips', projectId, mode),
     edit: (projectId, instruction, format) => invoke('ai:edit', projectId, instruction, format),
-    publish: (projectId) => invoke('ai:publish', projectId)
+    publish: (projectId) => invoke('ai:publish', projectId),
+    script: (topic) => invoke('ai:script', topic)
   },
   exportWorker: {
     job: (exportId) => invoke('exporter:job', exportId),
@@ -107,6 +113,7 @@ const api: TomadaApi = {
   bar: { state: () => invoke('bar:state'), action: (action) => invoke('bar:action', action) },
   countdown: { begin: () => invoke('countdown:begin'), finish: (completed) => invoke('countdown:finish', completed) },
   bubble: { config: () => invoke('bubble:config') },
+  teleprompter: { show: (config) => invoke('teleprompter:show', config), hide: () => invoke('teleprompter:hide'), state: () => invoke('teleprompter:state'), action: (action) => invoke('teleprompter:action', action) },
   on: <K extends keyof IpcEvents>(channel: K, listener: (payload: IpcEvents[K]) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: IpcEvents[K]): void => listener(payload)
     ipcRenderer.on(channel, wrapped)

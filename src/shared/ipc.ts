@@ -6,11 +6,16 @@
  */
 import type { AiEditResult, EditFormat } from './ai-edit'
 import type { CameraCalibration } from './camera-sync'
+import type { AutopilotPrefs, PipelineState, PipelineStepId } from './autopilot'
+import type { ReviewItem } from './review'
 import type { Levels } from './clean'
 import type { ClipsResult } from './clips'
 import type { ExportOptions } from './export'
 import type { PublishResult } from './publish'
 import type { RecordPrefs, RecordRequest } from './recording'
+import type { VideoScript, TeleprompterAction, TeleprompterConfig, TeleprompterState } from './script'
+import type { RetakeMark } from './retake-marker'
+import type { PreflightResult } from './preflight'
 import type { LlmStatus, PrepareSnapshot, RetakesResult, TranscriptionJob, TranscriptionPrefs, TranscriptionView } from './transcription'
 import type { Project, ProjectSummary, Size, Transcript, VerticalLayout, Word } from './types'
 
@@ -28,6 +33,9 @@ export type AppInfo = {
 /** Ajustes gravados em disco (todos opcionais; ausente = padrão). */
 export type Settings = {
   cameraCalibrations?: CameraCalibration[]
+  autopilot?: AutopilotPrefs
+  ownerStyle?: Project['style']
+  ownerStyleAsset?: string
   projectsDir?: string
   /** Pasta com ffmpeg/ffprobe, ou o caminho do próprio ffmpeg. */
   ffmpegPath?: string
@@ -204,6 +212,9 @@ export type BarState = {
   hasCamera: boolean
   shortcutStop: string
   shortcutPause: string
+  shortcutRetake?: string
+  retakeCount?: number
+  retakeAt?: number
 }
 
 export type CountdownConfig = { seconds: number; silent: boolean }
@@ -301,19 +312,26 @@ export type ThumbsData = { intervalMs: number; count: number; height: number; ur
 
 
 export type IpcContract = {
+  'autopilot:start': { args: [id: string]; result: void }
+  'autopilot:retry': { args: [id: string, step: PipelineStepId]; result: void }
+  'review:update': { args: [id: string, itemId: string, patch: Partial<ReviewItem>, reexport: boolean]; result: Project }
+  'review:export': { args: [id: string, itemId: string]; result: void }
+  'review:post': { args: [id: string]; result: string }
+  'review:ask': { args: [id: string, itemId: string, instruction: string]; result: AiEditResult }
   'app:info': { args: []; result: AppInfo }
 
   'projects:list': { args: []; result: ProjectSummary[] }
   'projects:get': { args: [id: string]; result: ProjectDetail }
   'projects:rename': { args: [id: string, title: string]; result: ProjectSummary }
   /** Valida e grava o documento (atômico). Devolve o documento como foi gravado. */
-  'projects:save': { args: [id: string, project: Project]; result: Project }
+  'projects:save': { args: [id: string, project: Project, base?:Project]; result: Project }
   'projects:trash': { args: [id: string]; result: void }
   'projects:reveal': { args: [id: string]; result: void }
   /** Escolhe uma imagem, copia para `media/` do projeto e devolve o caminho RELATIVO (null = cancelou). */
   'projects:pick-background': { args: [id: string]; result: string | null }
 
   'settings:get': { args: []; result: SettingsView }
+  'settings:save-style': { args: [id: string, itemId?: string]; result: SettingsView }
   'settings:update': { args: [patch: Partial<Settings>]; result: SettingsView }
   'settings:pick-projects-dir': { args: []; result: string | null }
   'settings:pick-ffmpeg': { args: []; result: string | null }
@@ -338,6 +356,8 @@ export type IpcContract = {
   'record:stop': { args: [info: StopInfo]; result: { sessionId: string } }
   'record:abort': { args: [reason?: string]; result: void }
   'record:status': { args: []; result: RecordingStatusView }
+  'record:mark-retake': { args: []; result: RetakeMark | null }
+  'record:preflight': { args: []; result: PreflightResult }
   'process:retry': { args: [sessionId: string]; result: void }
 
   // Exportação: a interface pede; o main orquestra áudio (ffmpeg), vídeo (janela escondida) e mux.
@@ -384,6 +404,7 @@ export type IpcContract = {
   'ai:edit': { args: [projectId: string, instruction: string, format: EditFormat]; result: AiEditResult }
   /** Títulos, descrição, tags, capítulos e o texto de cada corte (nada é publicado). */
   'ai:publish': { args: [projectId: string]; result: PublishResult }
+  'ai:script': { args: [topic: string]; result: VideoScript }
 
   // Canais da janela escondida de exportação (identificada pelo `exportId` que vai no hash da URL).
   'exporter:job': { args: [exportId: string]; result: ExportJob }
@@ -397,10 +418,16 @@ export type IpcContract = {
   'countdown:begin': { args: []; result: CountdownConfig }
   'countdown:finish': { args: [completed: boolean]; result: void }
   'bubble:config': { args: []; result: BubbleConfig | null }
+  'teleprompter:show': { args: [config: TeleprompterConfig]; result: void }
+  'teleprompter:hide': { args: []; result: void }
+  'teleprompter:state': { args: []; result: TeleprompterState | null }
+  'teleprompter:action': { args: [action: TeleprompterAction]; result: void }
 }
 
 /** Eventos que o main empurra para as janelas (canal → carga). */
 export type IpcEvents = {
+  'autopilot:progress': PipelineState
+  'autopilot:ready': { projectId: string }
   /** Comando vindo da barra ou do atalho global, para a janela que grava. */
   'record:command': { cmd: BarAction; source: 'bar' | 'hotkey' | 'window' }
   /** Aviso para mostrar na interface (ex.: a janela gravada fechou). */
@@ -409,6 +436,8 @@ export type IpcEvents = {
   'process:progress': ProcessSnapshot
   'bar:state': BarState
   'bar:level': { level: number }
+  'teleprompter:state': TeleprompterState
+  'teleprompter:command': TeleprompterAction
   'export:progress': ExportProgress
   /** Preparação da transcrição: cada mudança de passo ou de progresso. */
   'transcription:prepare': PrepareSnapshot
@@ -437,17 +466,20 @@ export const LEVEL_CHANNEL = 'record:level' as const
 
 export type TomadaApi = {
   cameraSync: { calibrate(capture: { cameraId: string; micId: string; data: ArrayBuffer | Uint8Array }): Promise<CameraCalibration> }
+  autopilot: { start(id: string): Promise<void>; retry(id: string, step: PipelineStepId): Promise<void> }
+  review: { update(id: string, itemId: string, patch: Partial<ReviewItem>, reexport?: boolean): Promise<Project>; export(id: string, itemId: string): Promise<void>; post(id: string): Promise<string>; ask(id: string, itemId: string, instruction: string): Promise<AiEditResult> }
   app: { info(): Promise<AppInfo> }
   projects: {
     list(): Promise<ProjectSummary[]>
     get(id: string): Promise<ProjectDetail>
     rename(id: string, title: string): Promise<ProjectSummary>
-    save(id: string, project: Project): Promise<Project>
+    save(id: string, project: Project, base?:Project): Promise<Project>
     trash(id: string): Promise<void>
     reveal(id: string): Promise<void>
     pickBackground(id: string): Promise<string | null>
   }
   settings: {
+    saveStyle(id: string, itemId?: string): Promise<SettingsView>
     get(): Promise<SettingsView>
     update(patch: Partial<Settings>): Promise<SettingsView>
     pickProjectsDir(): Promise<string | null>
@@ -475,6 +507,8 @@ export type TomadaApi = {
     stop(info: StopInfo): Promise<{ sessionId: string }>
     abort(reason?: string): Promise<void>
     status(): Promise<RecordingStatusView>
+    markRetake(): Promise<RetakeMark | null>
+    preflight(): Promise<PreflightResult>
     /** Só de ida: nível do microfone para a mini barra. */
     level(level: number): void
   }
@@ -520,6 +554,7 @@ export type TomadaApi = {
     clips(projectId: string, mode: 'auto' | 'heuristic'): Promise<ClipsResult>
     edit(projectId: string, instruction: string, format: EditFormat): Promise<AiEditResult>
     publish(projectId: string): Promise<PublishResult>
+    script(topic: string): Promise<VideoScript>
   }
   /** Só para a janela escondida de exportação. */
   exportWorker: {
@@ -531,6 +566,7 @@ export type TomadaApi = {
   bar: { state(): Promise<BarState | null>; action(action: BarAction): Promise<void> }
   countdown: { begin(): Promise<CountdownConfig>; finish(completed: boolean): Promise<void> }
   bubble: { config(): Promise<BubbleConfig | null> }
+  teleprompter: { show(config: TeleprompterConfig): Promise<void>; hide(): Promise<void>; state(): Promise<TeleprompterState | null>; action(action: TeleprompterAction): Promise<void> }
   /** Assina um evento empurrado pelo main. Devolve a função que cancela a assinatura. */
   on<K extends keyof IpcEvents>(channel: K, listener: (payload: IpcEvents[K]) => void): () => void
   /** URL `tomada-media://` de um arquivo do projeto (síncrono, sem IPC). */

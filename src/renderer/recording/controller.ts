@@ -177,7 +177,11 @@ export const useRecorder = create<RecorderStore>()((set, get) => ({
           if (get().phase === 'idle' || get().phase === 'processing') set({ phase: snapshot.status === 'running' ? 'processing' : 'idle' })
         } else if (snapshot.status === 'done' && !wasDone) {
           void app.loadProjects()
-          if (app.view.name === 'processing') app.go({ name: 'project', id: snapshot.folder })
+          if (app.view.name === 'processing') {
+            void window.tomada.settings.get().then((settings) => {
+              if (useApp.getState().view.name === 'processing') app.go({ name: settings.settings.autopilot?.mode === 'nothing' ? 'project' : 'review', id: snapshot.folder })
+            })
+          }
           app.notify({ kind: 'info', text: t.processing.saved })
           if (get().phase === 'processing') set({ phase: 'idle' })
         }

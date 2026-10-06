@@ -1,7 +1,7 @@
 /**
  * Os motores de transcrição DE VERDADE (faster-whisper e whisper.cpp, na placa de vídeo), com o código do app:
  *  - `voz.wav`, a voz sintética de gabarito exato: texto (WER < 15%) e marcas de tempo (erro máximo por motor);
- *  - uma gravação REAL do usuário (`gravacoes/`, só nesta máquina; nada dela é copiado para `tests/`): só se prova que
+ *  - uma gravação local com vídeo e áudio (do usuário nesta cópia, ou a saída sintética do e2e): só se prova que
  *    devolve palavras em português com tempos coerentes, sem imprimir o conteúdo;
  *  - o cancelamento, o progresso e o dicionário.
  * Exigem o motor preparado (`npm run preparar:transcricao`): sem ele o teste FALHA dizendo isso (nada de pular).
@@ -34,7 +34,9 @@ async function mustBeReady(engine: Transcriber): Promise<void> {
   expect(c.state, `${engine.id} não está preparado (${c.detail ?? 'sem detalhe'}). Rode: npm run preparar:transcricao`).toBe('ready')
 }
 
-const REAL = join(ROOT, 'gravacoes', '2026-07-26-13-57-59', 'camera.mp4')
+const OWNER_RECORDING = join(ROOT, 'gravacoes', '2026-07-26-13-57-59', 'camera.mp4')
+const CAPTURED = join(ROOT,'test-results','m4d-gravacao','youtube.mp4')
+const REAL = existsSync(OWNER_RECORDING) ? OWNER_RECORDING : existsSync(CAPTURED) ? CAPTURED : FIX.camera
 /** Palavras muito comuns do português: se aparecer alguma, o idioma é o certo (nada do conteúdo é impresso). */
 const PT_COMMON = new Set(['de', 'a', 'o', 'que', 'e', 'do', 'da', 'em', 'um', 'uma', 'para', 'com', 'nao', 'eu', 'voce', 'os', 'as', 'se', 'na', 'no', 'por', 'mais', 'foi', 'ou', 'como', 'mas', 'ja', 'esse', 'essa', 'isso', 'ai', 'ne', 'ta', 'vou', 'tem', 'aqui', 'entao', 'tipo', 'ele', 'ela', 'ser', 'era', 'meu', 'sua', 'me', 'te', 'la'])
 
@@ -100,9 +102,9 @@ for (const [id, engine] of Object.entries(engines)) {
   })
 
   describe(`motor ${id}: outras garantias`, () => {
-    it('gravação real do usuário: devolve palavras em português com tempos coerentes (o texto não é impresso)', async () => {
+    it('gravação local com áudio e vídeo: devolve palavras em português com tempos coerentes (o texto não é impresso)', async () => {
       await mustBeReady(engine)
-      expect(existsSync(REAL), 'a gravação real do usuário fica em gravacoes/ (só nesta máquina, fora do git)').toBe(true)
+      expect(existsSync(REAL), 'Sem gravação local: rode pela fila o e2e piloto-automatico.spec.ts para capturar uma gravação sintética pelo app').toBe(true)
       const ff = createFfmpeg(locateFfmpeg()!)
       mkdirSync(tools.tmp, { recursive: true })
       const wav = join(tools.tmp, `teste-real-${id}.wav`)

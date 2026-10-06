@@ -16,7 +16,7 @@ import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
 import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, prepareEvents, type CursorData } from '@shared/scene'
 import type { Transcript } from '@shared/types'
-import { ensureVertical } from '@shared/vertical'
+import { projectForFormat, ensureVertical } from '@shared/vertical'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
@@ -147,7 +147,7 @@ function EditorInner({ onBack, layoutRef }: { onBack: () => void; layoutRef: Rea
   )
 }
 
-export function Editor({ detail }: { detail: ProjectDetail }) {
+export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: string }) {
   const notify = useApp((s) => s.notify)
   const go = useApp((s) => s.go)
 
@@ -156,7 +156,11 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     () =>
       createEditorStore({
         project: detail.project,
-        save: (p) => window.tomada.projects.save(detail.id, p),
+        save: (p,lastSubmitted) => {
+          if (!itemId) return window.tomada.projects.save(detail.id,p,lastSubmitted)
+          const view = projectForFormat(p,itemId === 'youtube' ? 'horizontal' : 'vertical')
+          return window.tomada.review.update(detail.id,itemId,{title:p.title,hook:view.vertical?.hook,edits:{cuts:view.cuts,zooms:view.zooms,layouts:view.layouts,captions:view.captions,style:view.style,wordFixes:view.wordFixes ?? {},mutes:view.mutes ?? [],meta:view.meta ?? {},zoomPreset:view.zoomPreset,autoExclusions:view.autoExclusions}})
+        },
         onSaveError: (message) => {
           window.tomada.log({ level: 'error', message: 'Falha ao salvar o project.json', detail: message })
           notify({ kind: 'error', text: t.editor.saveFailed, detail: message })
@@ -166,6 +170,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [detail.id]
   )
+  useEffect(() => { if(itemId && itemId !== 'youtube') store.getState().setFormat('vertical') },[store,itemId])
   const playback = useMemo(() => createPlaybackStore(), [detail.id])
   const text = useMemo(() => createTextStore(), [detail.id])
   const clips = useMemo(() => createClipsUiStore(), [detail.id])
@@ -503,7 +508,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
 
   // --- exportação ---------------------------------------------------------------------------------------------
   const flush = useCallback(() => store.getState().flush(), [store])
-  const exporter = useExportController(detail.id, flush)
+  const exporter = useExportController(detail.id, flush,itemId)
 
   // Ao fechar o projeto, o que ainda não foi gravado vai para o disco.
   useEffect(
@@ -518,8 +523,8 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     void store
       .getState()
       .flush()
-      .then(() => go({ name: 'library' }))
-  }, [store, go])
+      .then(() => go(itemId ? { name:'review',id:detail.id } : { name: 'library' }))
+  }, [store, go, itemId, detail.id])
 
   const value = useMemo<EditorCtx>(
     () => ({

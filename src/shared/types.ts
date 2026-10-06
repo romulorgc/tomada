@@ -9,6 +9,11 @@
  * Toda edição vive em TEMPO DE ORIGEM (o da gravação); o tempo de saída é derivado.
  */
 
+import type { PipelineState } from './autopilot'
+import type { ReviewState } from './review'
+import type { VideoScript } from './script'
+import type { RetakeMark } from './retake-marker'
+
 export type Rect = { x: number; y: number; w: number; h: number }
 export type Size = { w: number; h: number }
 export type Point = { x: number; y: number }
@@ -33,6 +38,7 @@ export type Cut = {
   end: number
   reason: CutReason
   enabled: boolean
+  origin?: 'auto' | 'manual'
 }
 
 export type ZoomFocus = 'auto' | { x: number; y: number }
@@ -61,6 +67,7 @@ export type LayoutSeg = {
   start: number
   end: number
   layout: LayoutKind
+  origin?: 'auto' | 'manual'
 }
 
 /** Posição da câmera numa grade 3×3 (relativa à tela, no layout de bolha). */
@@ -165,6 +172,7 @@ export type VerticalLayout = 'auto' | 'stack' | 'screen-focus' | 'screen-wide' |
  * Ausente = o vertical ainda não foi editado (os padrões valem e o editor gera zooms e layouts ao entrar no 9:16).
  */
 export type VerticalEdit = {
+  autoExclusions?: { zooms?:string[]; layouts?:string[] }
   /** Layout padrão do vertical (V-A `screen-focus`). */
   layout: LayoutKind
   /** Trechos de layout próprios (a escolha automática por atividade os gera). */
@@ -201,6 +209,7 @@ export type Clip = {
   layoutV: VerticalLayout
   /** Estilo de legenda só deste corte; ausente = o do vertical do projeto. */
   captionStyle?: CaptionStyleId
+  captionsEnabled?: boolean
   /** Quem escolheu: a IA, a heurística (sem IA) ou a pessoa (editou os trechos à mão ou pediu pelo texto). */
   source?: 'ai' | 'heuristic' | 'manual'
 }
@@ -239,6 +248,7 @@ export type ProjectMeta = {
 }
 
 export type Project = {
+  autoExclusions?: { zooms?:string[]; layouts?:string[] }
   /**
    * Versão do formato. Este código escreve 2; aceita ≥ 2 (documentos de versões
    * futuras são lidos preservando os campos que não conhece).
@@ -286,7 +296,11 @@ export type Project = {
   wordFixes?: Record<string, string>
   /** A limpeza automática já foi aplicada a este projeto (acontece uma vez, depois da primeira transcrição). */
   autoCleaned?: boolean
+  autopilot?: PipelineState
+  review?: ReviewState
   meta?: ProjectMeta
+  script?: VideoScript
+  retakeMarks?: RetakeMark[]
 }
 
 /**

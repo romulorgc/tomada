@@ -113,7 +113,7 @@ describe('zooms: gerar de novo', () => {
 describe('layout: trechos', () => {
   it('criar arrastando, com o layout pedido', () => {
     const out = createLayoutSeg(doc(), 2000, 6000, D, 'screen')!
-    expect(out.project.layouts).toEqual([{ id: 'layout-1', start: 2000, end: 6000, layout: 'screen' }])
+    expect(out.project.layouts).toEqual([{ id: 'layout-1', start: 2000, end: 6000, layout: 'screen', origin:'manual' }])
     expect(createLayoutSeg(out.project, 3000, 5000, D, 'camera')).toBeNull() // em cima de outro trecho
     expect(createLayoutSeg(doc(), 100, 100 + LAYOUT_MIN_MS - 1, D, 'screen')).toBeNull()
   })
@@ -156,4 +156,11 @@ describe('layout: dividir (tecla S)', () => {
     expect(splitLayoutAt(p, 2100, D)).toBeNull()
     expect(splitLayoutAt(doc(), 100, D)).toBeNull()
   })
+})
+
+it('excluir um zoom automático registra a decisão e regenerar não o faz voltar',() => {
+  const automatic = zoom('zoom-auto-1',1000,2000)
+  const edited = deleteZoom(doc([automatic]),automatic.id)
+  expect(edited.zooms).toEqual([])
+  expect(regenerateZooms(edited,'moderate',[automatic]).zooms).toEqual([])
 })

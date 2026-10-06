@@ -4,7 +4,11 @@
  */
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, protocol, safeStorage, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, safeStorage, session, shell } from 'electron'
+import { createAutopilot, type AutopilotService } from './autopilot'
+import { resolveProjectFile } from './project-files'
+import { createGpuQueue } from './gpu-queue'
+import { DEFAULT_AUTOPILOT } from '@shared/autopilot'
 import { LEVEL_CHANNEL, type AppInfo, type IpcEvents, type ProcessSnapshot } from '@shared/ipc'
 import { createSourceProvider } from './capture-sources'
 import { createDerivedMedia } from './derived-media'
@@ -150,13 +154,19 @@ async function main(): Promise<void> {
   const lipSync = createLipSyncDetector({ toolsDir: syncToolsDir, scriptPath: join(resourcesDir, 'lip_sync.py'), ffmpeg: () => locateFfmpeg(state.ffmpegLocateOptions())?.ffmpeg ?? null, logger })
   const calibration = createCameraCalibration({ scratchDir: join(syncToolsDir, 'lip-sync', 'calibration'), detector: lipSync, save: (value) => state.saveCameraCalibration(value) })
   const { engine } = chooseEngine({ env: process.env, settingsEngine: state.transcriptionEngine(), scriptPath: join(resourcesDir, 'transcribe.py'), logger })
-  const transcription = createTranscriptionService({
+  const gpu = createGpuQueue()
+  const rawTranscription = createTranscriptionService({
     logger,
     engine,
     read: (id) => store.read(id),
     vocabulary: () => state.dictionary(),
     emit
   })
+  let transcriptionWork: Promise<void> = Promise.resolve()
+  const transcription = {...rawTranscription,
+    start: (id:string) => { const task = gpu.start(() => rawTranscription.start(id),() => rawTranscription.idle()); transcriptionWork = task.done.catch(() => undefined); return task.started },
+    idle: async () => {await transcriptionWork;await rawTranscription.idle()}
+  }
   const vault: KeyVault = {
     available: () => safeStorage.isEncryptionAvailable(),
     encrypt: (plain) => safeStorage.encryptString(plain).toString('base64'),
@@ -173,27 +183,16 @@ async function main(): Promise<void> {
 
   /** Depois de cada gravação processada, a transcrição começa sozinha (se estiver ligada e o motor, pronto). */
   const autoStarted = new Set<string>()
-  const autoTranscribe = async (folder: string): Promise<void> => {
-    if (!state.transcriptionPrefs().auto) return
-    try {
-      const check = await engine.check()
-      if (check.state !== 'ready') {
-        emit('record:notice', { kind: 'info', text: 'Gravação salva. A transcrição ainda não foi preparada: prepare nos Ajustes para editar pelo texto.' })
-        return
-      }
-      await transcription.start(folder)
-    } catch (err) {
-      logger.error(`Não consegui começar a transcrição automática de ${folder}.`, err)
-      emit('record:notice', { kind: 'error', text: 'Não consegui começar a transcrição desta gravação', detail: err instanceof Error ? err.message : String(err) })
-    }
-  }
+  let autopilot: AutopilotService | null = null
+  const processingStarted = new Map<string,number>()
   const emitRecording = <K extends keyof IpcEvents>(channel: K, payload: IpcEvents[K]): void => {
     emit(channel, payload)
     if (channel === 'process:progress') {
       const snap = payload as ProcessSnapshot
+      if (!processingStarted.has(snap.sessionId)) processingStarted.set(snap.sessionId,Date.now())
       if (snap.status === 'done' && !autoStarted.has(snap.sessionId)) {
         autoStarted.add(snap.sessionId)
-        void autoTranscribe(snap.folder)
+        void autopilot?.start(snap.folder,processingStarted.get(snap.sessionId))
       }
     }
   }
@@ -228,7 +227,7 @@ async function main(): Promise<void> {
   // --- Exportação: áudio no ffmpeg, vídeo numa janela escondida, mux e conferência ------------------
   /** Pastas de destino que o usuário escolheu NESTA sessão (diálogo nativo): fora delas e de `exports/`, ninguém grava. */
   const outputDirs = createOutputDirs()
-  const exporter = createExportService({
+  const rawExporter = createExportService({
     logger,
     outputDirs,
     read: (id) => store.read(id),
@@ -247,6 +246,11 @@ async function main(): Promise<void> {
     now: () => performance.now()
   })
 
+  let exportWork: Promise<void> = Promise.resolve()
+  const exporter = {...rawExporter,
+    start: (request: Parameters<typeof rawExporter.start>[0]) => { const task = gpu.start(() => rawExporter.start(request),() => rawExporter.idle()); exportWork = task.done.catch(() => undefined); return task.started },
+    idle: async () => {await exportWork;await rawExporter.idle()}
+  }
   // Mídias derivadas do editor (forma de onda, áudio da prévia, miniaturas): ffmpeg, uma vez, em segundo plano.
   const derived = createDerivedMedia({
     logger,
@@ -254,6 +258,22 @@ async function main(): Promise<void> {
     ffmpeg: () => {
       const paths = locateFfmpeg(state.ffmpegLocateOptions())
       return paths ? createFfmpeg(paths) : null
+    }
+  })
+
+  autopilot = createAutopilot({
+    store, transcription, derived, exporter, llm, logger,
+    prefs: () => {const settings = state.settings();return { ...DEFAULT_AUTOPILOT,...settings.autopilot,steps:{...(settings.transcription?.auto === undefined ? {} : {transcribe:settings.transcription.auto}),...(settings.transcription?.autoClean === undefined ? {} : {clean:settings.transcription.autoClean}),...settings.autopilot?.steps}}},
+    ownerStyle: () => state.settings().ownerStyle,
+    ownerBackground: async () => { const asset = state.settings().ownerStyleAsset; return asset ? resolveProjectFile(userData,asset) : undefined },
+    emit: (snapshot) => emit('autopilot:progress',snapshot),
+    ready: (id,clips,youtube) => {
+      emit('autopilot:ready',{ projectId: id })
+      if (Notification.isSupported()) {
+        const notification = new Notification({ title: 'Tomada', body: youtube ? `Pronto: 1 vídeo + ${clips} cortes` : `Preparação concluída: ${clips} cortes prontos. Confira a Revisão.` })
+        notification.on('click',() => { mainWindow?.show(); mainWindow?.focus(); emit('autopilot:ready',{ projectId: id }) })
+        if (!testMode) notification.show()
+      }
     }
   })
 
@@ -271,6 +291,7 @@ async function main(): Promise<void> {
   let quitting = false
   app.on('before-quit', () => {
     quitting = true
+    autopilot?.shutdown()
     void recording.shutdown()
     void exporter.shutdown()
     transcription.shutdown()
@@ -290,6 +311,7 @@ async function main(): Promise<void> {
       transcription,
       llm,
       calibration,
+      autopilot,
       outputDirs,
       pickExportDir: async (defaultPath) => {
         // TOMADA_TEST_PICK_DIR: nos testes o diálogo do Windows não aparece; vazio = "cancelou"
@@ -398,6 +420,10 @@ async function main(): Promise<void> {
   }
 
   mainWindow = createWindow()
+  mainWindow.webContents.once('did-finish-load',() => {
+    void (async () => { await recording.recover(); await autopilot?.resume() })()
+      .catch((err) => logger.error('Não consegui retomar o processamento e o piloto automático.',err))
+  })
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()
   })

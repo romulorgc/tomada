@@ -138,8 +138,10 @@ describe('exportar um corte vertical', () => {
     })
     const done = await run(request({ clipId: 'clip-1' }))
     expect(done.phase).toBe('done')
-    expect(jobs[0]!.clipLayout).toBe('screen-wide')
-    expect(jobs[0]!.project.vertical!.captions).toMatchObject({ enabled: true, style: 'clean' })
+    expect(jobs[0]!.clipLayout).toBeUndefined() // documento já tem o layout; renderer não sobrescreve a revisão
+    expect(jobs[0]!.project.vertical!.layout).toBe('screen-wide')
+    expect(jobs[0]!.project.vertical!.captions).toMatchObject({ style: 'clean' })
+    expect(jobs[0]!.project.vertical!.captions?.enabled).toBeUndefined()
   })
 
   it('o número é a posição do corte na lista e o nome nunca sobrescreve: " (2)"', async () => {

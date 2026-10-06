@@ -519,8 +519,9 @@ test('a altura da linha do tempo se ajusta arrastando a alça (ou com ↑/↓) e
   await page.mouse.move(from.x, from.y - 40, { steps: 4 })
   await page.mouse.move(from.x, from.y - 90, { steps: 4 })
   await page.mouse.up()
+  // O React aplica a altura no quadro seguinte: sob carga (outros cópias de trabalho na máquina) ler logo depois do mouse.up pegava a altura antiga.
+  await expect.poll(heightOf).toBeGreaterThan(h0 + 60)
   const h1 = await heightOf()
-  expect(h1).toBeGreaterThan(h0 + 60)
   expect((await page.getByTestId('preview-frame').boundingBox())!.height).toBeLessThan(preview0)
 
   // teclado

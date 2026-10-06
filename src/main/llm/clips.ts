@@ -8,9 +8,11 @@ import { buildSentences } from '@shared/sentences'
 import { keptRanges, rangesLength } from '@shared/timeline'
 import type { Clip, Cut, Word } from '@shared/types'
 import type { LlmProvider } from './provider'
+import type { VideoScript } from '@shared/script'
 
 export type SuggestClipsArgs = {
   provider: LlmProvider
+  script?: VideoScript
   words: readonly Word[]
   durationMs: number
   cuts: readonly Cut[]
@@ -29,7 +31,8 @@ export async function suggestClips(args: SuggestClipsArgs): Promise<ClipValidati
   const raw: unknown[] = []
   let done = 0
   for (const p of prompts) {
-    const r = await args.provider.complete({ task: 'clips', system: CLIPS_SYSTEM, prompt: p.prompt, schema: clipsSchema, ...(args.signal ? { signal: args.signal } : {}) })
+    const script = args.script ? `Roteiro planejado (use só o que foi realmente dito): ${JSON.stringify(args.script)}\n\n` : ''
+    const r = await args.provider.complete({ task: 'clips', system: CLIPS_SYSTEM, prompt: script + p.prompt, schema: clipsSchema, ...(args.signal ? { signal: args.signal } : {}) })
     raw.push(...r.clips)
     args.onProgress?.(++done, prompts.length)
   }
