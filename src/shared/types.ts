@@ -489,6 +489,9 @@ export type ProjectSummary = {
   thumbVersion: number
   hasScreen: boolean
   hasCamera: boolean
+  /** Há uma transcrição salva e cortes sugeridos para abrir no editor. */
+  hasTranscript?: boolean
+  clipCount?: number
   /** O piloto automático não pôde retomar (ex.: o manifesto da gravação não lê): o aviso que o usuário vê na Biblioteca. */
   autopilotNotice?: string
 }

@@ -96,6 +96,7 @@ describe('a legenda dentro da cena (a mesma evaluateScene da prévia e da export
     const h = sceneAt(both, 1000, HORIZONTAL_1080).captions!
     const v = sceneAt(both, 1000, VERTICAL_1080).captions!
     expect(h.style.style).toBe('natural')
+    expect(h.style.fontWeight).toBe(800) // nota 5: Natural legível, mantendo as medidas do §11
     expect(v.style.style).toBe('highlight')
     expect(v.style.safeY).not.toBeNull() // só o vertical tem a caixa segura
     expect(h.style.safeY).toBeNull()

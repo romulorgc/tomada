@@ -56,15 +56,26 @@ export const ptBR = {
 
   library: {
     title: 'Biblioteca',
+    search: 'Buscar gravação',
+    searchPlaceholder: 'Digite parte do título',
+    order: 'Ordenar por',
+    orders: { newest: 'Mais recentes', oldest: 'Mais antigas', title: 'Título · A a Z', duration: 'Maior duração' },
+    results: (n: number): string => n === 1 ? '1 gravação encontrada' : `${n} gravações encontradas`,
+    noResults: 'Nenhuma gravação encontrada',
+    noResultsHelp: 'Tente outro título ou limpe a busca.',
+    clearSearch: 'Limpar busca',
     count: (n: number): string => (n === 1 ? '1 gravação' : `${n} gravações`),
     newRecording: 'Nova gravação',
     loadError: 'Não consegui abrir a biblioteca',
     empty: {
       title: 'Nenhuma gravação ainda',
-      body: 'Grave a tela e a câmera de uma vez. Tudo fica neste computador, sem enviar nada para lugar nenhum.',
+      body: 'Grave sua tela e câmera. As gravações ficam neste computador.',
       cta: 'Gravar agora'
     },
     card: {
+      progress: 'Preparação da gravação',
+      transcribed: 'Transcrito',
+      clipsReady: (n: number): string => n === 1 ? '1 corte pronto' : `${n} cortes prontos`,
       open: (title: string): string => `Abrir ${title}`,
       rename: 'Renomear',
       reveal: 'Mostrar na pasta',
@@ -858,7 +869,7 @@ export const ptBR = {
       noScreens: 'Nenhuma tela encontrada.',
       loadFailed: 'Não consegui listar as telas e janelas',
       selected: 'Selecionada',
-      browserHint: 'Para mostrar um sistema, escolha a JANELA do navegador: o Tomada corta as abas e a barra de endereço sozinho.',
+      browserHint: 'Escolha a janela do navegador para mostrar seu sistema. As abas e a barra de endereço são recortadas automaticamente.',
       browserBadge: 'Navegador · só a página',
       browserBadgeOther: 'Navegador',
       missing: 'A fonte escolhida da última vez não está mais aberta. Escolha outra.',
@@ -879,8 +890,8 @@ export const ptBR = {
       'side-by-side': 'Quadro ao lado',
       presenter: 'Apresentador recortado',
       help: {
-        'side-by-side': 'Seu rosto num quadro ao lado da tela, com o fundo da webcam.',
-        presenter: 'Você sem o fundo, na frente da tela. Mostre o tronco e as mãos, com a luz de frente.'
+        'side-by-side': 'Sua câmera em um quadro ao lado da tela, com o fundo original.',
+        presenter: 'Você na frente da tela, sem o fundo. Mostre o tronco e as mãos com luz de frente.'
       }
     },
     mic: {
@@ -891,7 +902,7 @@ export const ptBR = {
       default: 'Microfone padrão'
     },
     system: { title: 'Som do computador', help: 'Grava o que toca nos alto-falantes (vídeos, música, avisos).', on: 'Ligado', off: 'Desligado' },
-    quality: { title: 'Quadros por segundo', fps30: '30', fps60: '60', help: '30 serve para quase tudo; 60 deixa o cursor e a rolagem mais suaves e pesa mais.' },
+    quality: { title: 'Quadros por segundo', fps30: '30', fps60: '60', help: '30 é suficiente para a maioria dos vídeos. 60 suaviza o movimento e usa mais espaço.' },
     advanced: {
       title: 'Ajustes do som e da bolha',
       noiseSuppression: 'Reduzir ruído do microfone',

@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useStore } from 'zustand'
-import { CaptionsIcon, ClipsIcon, LayoutGridIcon, PaletteIcon, CameraIcon, PublishIcon, SparkleIcon, TextIcon, ZoomInIcon } from '../../components/Icons'
+import { BlurIcon, CaptionsIcon, ClipsIcon, LayoutGridIcon, PaletteIcon, CameraIcon, PublishIcon, SparkleIcon, TextIcon, ZoomInIcon } from '../../components/Icons'
 import { t } from '../../i18n/pt-BR'
 import { useDoc, useEditor } from '../context'
 import { TextPanel } from '../text/TextPanel'
@@ -22,7 +22,7 @@ import { BlurPanel } from './BlurPanel'
 export type TabId = 'style' | 'camera' | 'zoom' | 'layout' | 'text' | 'captions' | 'clips' | 'publish' | 'ai' | 'blur'
 
 const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
-  { id: 'blur', label: t.editor.tabs.blur, icon: <LayoutGridIcon size={18} /> },
+  { id: 'blur', label: t.editor.tabs.blur, icon: <BlurIcon size={18} /> },
   { id: 'style', label: t.editor.tabs.style, icon: <PaletteIcon size={18} /> },
   { id: 'camera', label: t.editor.tabs.camera, icon: <CameraIcon size={18} /> },
   { id: 'zoom', label: t.editor.tabs.zoom, icon: <ZoomInIcon size={18} /> },

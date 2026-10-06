@@ -9,6 +9,7 @@
 import antonRegular from './assets/fonts/Anton-Regular.woff2?url'
 import interBold from './assets/fonts/Inter-Bold.woff2?url'
 import interSemiBold from './assets/fonts/Inter-SemiBold.woff2?url'
+import interVariable from '@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url'
 import montserratBold from './assets/fonts/Montserrat-Bold.woff2?url'
 import montserratExtraBold from './assets/fonts/Montserrat-ExtraBold.woff2?url'
 import { CAPTION_FONT_FILES } from '@shared/caption-style'
@@ -17,6 +18,7 @@ const URLS: Record<string, string> = {
   'Anton-Regular.woff2': antonRegular,
   'Inter-Bold.woff2': interBold,
   'Inter-SemiBold.woff2': interSemiBold,
+  'inter-latin-wght-normal.woff2': interVariable,
   'Montserrat-Bold.woff2': montserratBold,
   'Montserrat-ExtraBold.woff2': montserratExtraBold
 }

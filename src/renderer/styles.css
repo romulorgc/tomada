@@ -3,7 +3,7 @@
 
 /*
  * Tokens. Grafite QUENTE (não o preto azulado de sempre) e um único acento quente,
- * reservado para o que grava. Cada papel de cor tem nome; nada de hex solto nos
+ * para gravar e indicar a seleção. Cada papel de cor tem nome; nada de hex solto nos
  * componentes. Os tokens viram utilitários do Tailwind (bg-surface, text-muted…).
  */
 @theme {
@@ -15,10 +15,11 @@
   --color-raised: #2a2825;
   --color-line: rgb(255 240 220 / 0.09);
   --color-line-strong: rgb(255 240 220 / 0.17);
+  --color-control: #847b6e;
 
   --color-ink: #ece8e1;
-  --color-muted: #a39d92;
-  --color-faint: #716c64;
+  --color-muted: #bcb5aa;
+  --color-faint: #aaa397;
 
   --color-rec: #ff6a3c;
   --color-rec-hover: #ff875f;
@@ -70,7 +71,7 @@ body {
 }
 
 /* Foco visível, sempre, em tudo que se aciona pelo teclado. */
-:where(button, a, input, select, textarea, video, [tabindex]):focus-visible {
+:where(button, a, input, select, textarea, summary, video, [tabindex]):focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
@@ -427,7 +428,7 @@ button:disabled {
   min-height: 2.25rem;
   padding: 0 2rem 0 0.75rem;
   border-radius: var(--radius-control);
-  border: 1px solid var(--color-line-strong);
+  border: 1px solid var(--color-control);
   background: var(--color-raised)
     url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23a39d92' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='m1.5 1.5 4.5 4.5 4.5-4.5'/></svg>")
     no-repeat right 0.75rem center;
@@ -441,6 +442,39 @@ button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+input.field, textarea.field {
+  background-image: none;
+  padding: 0.55rem 0.75rem;
+  cursor: text;
+}
+::placeholder { color: var(--color-faint); opacity: 1; }
+input[type='checkbox'], input[type='range'] { accent-color: var(--color-rec); }
+input[type='checkbox'] { width: 1rem; height: 1rem; flex: none; }
+
+/* Busca e ordenação continuam acessíveis mesmo com a biblioteca vazia. */
+.library-tools { display: flex; flex-wrap: wrap; align-items: end; gap: 1.25rem; margin-bottom: 1.75rem; }
+.library-tools label { display: grid; gap: 0.45rem; font-size: 0.875rem; color: var(--color-muted); }
+.library-search { flex: 1; min-width: min(18rem, 100%); max-width: 34rem; }
+.library-sort { min-width: 15rem; }
+.library-no-results { margin: auto; padding: 4rem 1rem; text-align: center; }
+.library-no-results h2 { font-size: 1.25rem; font-weight: 650; }
+.library-no-results p { margin-top: 0.5rem; color: var(--color-muted); }
+.project-badges { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.65rem; }
+.project-badges > span { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.45rem; border-radius: var(--radius-chip); background: var(--color-panel); color: var(--color-ok); font-size: 0.75rem; font-weight: 600; }
+.card-actions { opacity: 1; transform: none; }
+[data-testid='card-open']:focus-visible { outline-offset: -4px; outline-width: 3px; box-shadow: inset 0 0 0 7px var(--color-bg); }
+
+/* O grupo da câmera cabe sem confundir as duas opções. */
+[data-testid='record-view'] aside > .record-field { padding-bottom: 1.1rem; border-bottom: 1px solid var(--color-line); }
+[data-testid='record-view'] aside .seg { width: 100%; }
+[data-testid='record-view'] aside .seg > button { flex: 1; min-width: 0; justify-content: center; padding: 0.6rem; line-height: 1.25; }
+[data-testid='processing-steps'] [data-status='running'] { background: var(--color-surface); box-shadow: inset 3px 0 var(--color-rec); }
+[data-testid='bar-pause'][aria-pressed='true'] { background: var(--color-rec); color: var(--color-rec-ink); }
+[data-testid='onboarding-view'] section { padding: 1.25rem; }
+[data-testid='onboarding-view'] section[data-status='ok'] { border-left: 3px solid var(--color-ok); }
+[data-testid='onboarding-view'] section:not([data-status='ok']) { border-left: 3px solid var(--color-warn); }
+[data-testid='settings-view'] :is(input:not([type='range']):not([type='checkbox']):not([type='color']), select) { border-color: var(--color-control); }
+[data-testid='settings-view'] fieldset { gap: 1rem; }
 
 .seg {
   display: inline-flex;
@@ -471,10 +505,12 @@ button:disabled {
   color: var(--color-ink);
 }
 .seg > button[aria-pressed='true'] {
-  background: var(--color-raised);
-  color: var(--color-ink);
-  box-shadow: 0 0 0 1px var(--color-line-strong);
+  background: var(--color-rec);
+  color: var(--color-rec-ink);
+  font-weight: 650;
 }
+.seg > button[aria-pressed='true'] :is(span, small) { color: inherit; }
+.seg > button[aria-pressed='true']:hover { color: var(--color-rec-ink); }
 .seg > button:disabled {
   opacity: 0.55;
 }
@@ -493,7 +529,7 @@ button:disabled {
     background-color 120ms ease,
     border-color 120ms ease;
 }
-.source-card:hover:not(:disabled) {
+.source-card:hover:not(:disabled):not([aria-pressed='true']) {
   background: var(--color-surface);
 }
 .source-card[aria-pressed='true'] {
@@ -524,7 +560,7 @@ button:disabled {
   border: 0;
   border-radius: 999px;
   background: var(--color-raised);
-  box-shadow: inset 0 0 0 1px var(--color-line-strong);
+  box-shadow: inset 0 0 0 1px var(--color-control);
   cursor: pointer;
   transition: background-color 140ms ease;
 }
@@ -611,9 +647,10 @@ html[data-aux] #root {
   cursor: pointer;
   transition: background-color 120ms ease;
 }
-.bar-btn:hover:not(:disabled) {
+.bar-btn:hover:not(:disabled):not([aria-pressed='true']) {
   background: var(--color-raised);
 }
+.bar-btn[aria-pressed] { transition: none; }
 .bar-btn:disabled {
   opacity: 0.45;
 }
@@ -657,8 +694,13 @@ html[data-aux] #root {
 .countdown-hint {
   position: fixed;
   bottom: 3rem;
-  left: 0;
-  right: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 2rem);
+  padding: 0.7rem 1.1rem;
+  border-radius: var(--radius-control);
+  background: var(--color-panel);
   text-align: center;
   color: var(--color-ink);
   font-size: 1rem;
@@ -843,3 +885,4 @@ html[data-aux] #root {
   height: 0.7rem;
   border-width: 2px;
 }
+.seg button { transition-property: border-color, box-shadow, transform; }

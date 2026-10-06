@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { drawCaptions } from '@shared/caption-render'
 import { CAPTION_SIZE_MAX, CAPTION_SIZE_MIN, CAPTION_STYLE_IDS, captionStyleDefaults, defaultCaptionY, maxWordsPerLine, resolveCaptionStyle } from '@shared/caption-style'
-import { buildCaptionTrack } from '@shared/captions'
+import { buildCaptionTrack, shownText } from '@shared/captions'
 import { createRenderCache, type CanvasFactory, type CanvasLike, type Ctx2D, type RenderCache } from '@shared/render'
 import type { SceneCaptions } from '@shared/scene'
 import type { CaptionStyle, CaptionStyleId } from '@shared/types'
@@ -43,7 +43,10 @@ function drawSample(canvas: HTMLCanvasElement, cache: RenderCache, cap: CaptionS
   delete sample.uppercase
   const rs = resolveCaptionStyle(sample, virtual)
   const scene: SceneCaptions = { key: `sample-${style}`, style: { ...rs, safeY: null }, words: [...T.sample], active: 1, pop: 1, alpha: 1, dy: 0 }
-  const k = (canvas.width * 0.9) / rs.maxWidth
+  // A amostra mostra a letra de perto para comparar estilos; a prévia do vídeo conserva a escala real.
+  ctx.font = `${rs.fontWeight} ${rs.fontPx}px ${rs.fontFamily}`
+  const sampleWidth = ctx.measureText(scene.words.map((word) => shownText(word, style)).join(' ')).width + rs.outlinePx * 4
+  const k = Math.min((canvas.width * 0.88) / sampleWidth, (canvas.height * 0.55) / (rs.fontPx * rs.lineHeight * 2))
   ctx.save()
   ctx.translate(canvas.width / 2 - (virtual.w / 2) * k, canvas.height / 2 - rs.centerY * k)
   ctx.scale(k, k)

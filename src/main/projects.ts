@@ -135,6 +135,13 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
     } catch {
       // sem miniatura: o cartão mostra um espaço reservado
     }
+    let hasTranscript = false
+    try {
+      const info = await stat(await resolveProjectFile(dir, 'transcript.json', 'transcrição'))
+      hasTranscript = info.isFile() && info.size > 0
+    } catch {
+      // Uma gravação nova ainda não tem transcrição.
+    }
     return {
       id,
       title: project.title,
@@ -144,6 +151,8 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
       thumbVersion,
       hasScreen: Boolean(project.sources.screen),
       hasCamera: Boolean(project.sources.camera),
+      hasTranscript,
+      clipCount: project.clips.length,
       ...(project.autopilot?.notice ? { autopilotNotice: project.autopilot.notice } : {})
     }
   }
