@@ -484,7 +484,10 @@ export function sampleCameraPath(path: CameraPath, tMs: number): { scale: number
 
 /** Retângulo visível (normalizado, na fonte) para uma amostra da câmera. */
 export function visibleRect(sample: { scale: number; cx: number; cy: number }, view = { w: 1, h: 1 }): Rect {
-  const w = view.w / sample.scale
-  const h = view.h / sample.scale
-  return { x: sample.cx - w / 2, y: sample.cy - h / 2, w, h }
+  const scale = Math.max(1, sample.scale)
+  const w = Math.min(1, view.w / scale)
+  const h = Math.min(1, view.h / scale)
+  // O desenho recebe amostras interpoladas entre os limites de 60 Hz. Limitar o retângulo final também elimina resíduos
+  // negativos de ponto flutuante nas bordas; no espaço C1, [0,1] é sempre a página, nunca a interface do navegador.
+  return { x: clamp(sample.cx - w / 2, 0, 1 - w), y: clamp(sample.cy - h / 2, 0, 1 - h), w, h }
 }
