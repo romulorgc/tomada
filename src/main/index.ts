@@ -40,7 +40,8 @@ import { e2eWindowOptions, isE2eHidden, keepE2ePainting, revealWindow } from './
 // O compositor OSR acelerado deste Electron devolve canvas pretos no screenshot
 // do Chromium. O modo software preserva a pintura oculta para os testes.
 if (isE2eHidden()) {
-  app.disableHardwareAcceleration()
+  // TOMADA_E2E_GPU=1 (só a medição de velocidade da exportação) deixa a GPU ligada: as capturas de tela dos specs não valem nesse modo.
+  if (process.env.TOMADA_E2E_GPU !== '1') app.disableHardwareAcceleration()
   // As janelas sintéticas dos specs usam o mesmo relógio central do app.
   const globals = globalThis as { __tomadaE2eKeepPainting?: typeof keepE2ePainting }
   globals.__tomadaE2eKeepPainting = keepE2ePainting
