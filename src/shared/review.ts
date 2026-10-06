@@ -9,6 +9,8 @@ import { defaultVerticalEdit, mergeFormatView, projectForFormat } from './vertic
 export type ReviewItem = {
   decision: 'pending' | 'approved' | 'discarded'; origin: 'auto' | 'manual'
   phase?: 'queued' | 'exporting' | 'ready' | 'error'; exportPath?: string; textPath?: string; error?: string
+  /** Corte entregue abaixo da nota configurada: revisão explícita antes de publicar. */
+  lowScore?: boolean
   captionsEnabled?: boolean; captionStyle?: CaptionStyle['style']; layout?: LayoutKind
   zoom?: 'softer' | 'stronger' | 'off' | 'auto'; trim?: Range; disabledReasons?: CutReason[]; keepFillers?: string[]
   disabledCutIds?: string[]; disabledZoomIds?: string[]; disabledLayoutIds?: string[]; keptFillerCutIds?: string[]

@@ -244,7 +244,17 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         let notice = ''
         const provider = deps.llm.provider()
         if (provider) {
-          try { drafts = (await suggestClips({ provider, ...input, script: project.script })).clips }
+          // O mesmo pedido usado por “Tentar de novo” roda uma única vez a mais se a primeira resposta não basta.
+          const suggest = () => suggestClips({ provider, ...input, script: project.script, count: prefs.maxClips })
+          try {
+            drafts = (await suggest()).clips
+            if (drafts.filter((c) => c.score >= prefs.minScore).length < prefs.maxClips) {
+              notice = 'Repeti a sugestão uma vez para buscar a quantidade pedida. '
+              // mergeSuggestedClips preserva os melhores e elimina a repetição entre as duas respostas.
+              try { drafts = mergeSuggestedClips([], [...drafts, ...(await suggest()).clips].sort((a,b) => b.score-a.score)).clips as ClipDraft[] }
+              catch (err) { notice += `A segunda sugestão falhou: ${err instanceof Error ? err.message : String(err)}. ` }
+            }
+          }
           catch (err) { notice = `Sugestão pela IA falhou: ${err instanceof Error ? err.message : String(err)}. ` }
         } else notice = 'Sem IA: sugestões pela heurística. '
         if (drafts.length === 0) drafts = heuristicClips(input).clips
@@ -254,13 +264,18 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           drafts = [{ ...heuristicClipLabels(text), ranges: [{ start: 0, end: duration }], score: 70, notes: { hook: 70, flow: 70, value: 70 }, reason: 'Versão vertical completa da gravação curta; nota heurística, confira o conteúdo.', source: 'heuristic' }]
           notice += 'Gravação curta: versão vertical completa, abaixo da faixa habitual de cortes. '
         }
-        const chosen = drafts.filter((c) => c.score >= prefs.minScore).sort((a,b) => b.score-a.score).slice(0, prefs.maxClips)
+        const ordered = [...drafts].sort((a,b) => b.score-a.score)
+        const qualified = ordered.filter((c) => c.score >= prefs.minScore)
+        const chosen = qualified.length >= 2 ? qualified.slice(0, prefs.maxClips) : ordered.filter((c) => c.score >= Math.min(50, prefs.minScore)).slice(0, 2)
+        const lowScore = chosen.some((c) => c.score < prefs.minScore)
         await regenerate(id, (p) => {
           const kept = p.clips.filter((c) => c.source === 'manual' || itemOf(p,c.id).origin === 'manual')
           const merged = mergeSuggestedClips(kept, chosen)
-          return { ...p, clips: merged.clips, review:{...p.review,items:Object.fromEntries(Object.entries(p.review?.items ?? {}).filter(([id]) => id === 'youtube' || merged.clips.some((c) => c.id === id)))} }
+          const items = Object.fromEntries(Object.entries(p.review?.items ?? {}).filter(([id]) => id === 'youtube' || merged.clips.some((c) => c.id === id)))
+          for (const clip of merged.added) items[clip.id] = { decision: 'pending', origin: 'auto', lowScore: clip.score < prefs.minScore }
+          return { ...p, clips: merged.clips, review:{...p.review,items} }
         })
-        return `${notice}${chosen.length} ${chosen.length === 1 ? 'corte' : 'cortes'} com nota ≥ ${prefs.minScore}; máximo ${prefs.maxClips}.`
+        return `${notice}${chosen.length} ${chosen.length === 1 ? 'corte' : 'cortes'} ${lowScore ? 'entre os melhores com nota ≥ 50. Nota baixa: revise antes de postar' : `com nota ≥ ${prefs.minScore}`}; máximo ${lowScore ? 2 : prefs.maxClips}.`
       }
       case 'clipExports': {
         const errors: string[] = []

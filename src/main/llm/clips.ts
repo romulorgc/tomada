@@ -13,6 +13,8 @@ import type { VideoScript } from '@shared/script'
 export type SuggestClipsArgs = {
   provider: LlmProvider
   script?: VideoScript
+  /** Quantidade configurada no piloto; no editor vale a faixa proporcional à duração. */
+  count?: number
   words: readonly Word[]
   durationMs: number
   cuts: readonly Cut[]
@@ -27,7 +29,7 @@ export type SuggestClipsArgs = {
 export async function suggestClips(args: SuggestClipsArgs): Promise<ClipValidation> {
   const sentences = buildSentences(args.words, { clicks: args.clicks, keys: args.keys })
   const outputMs = rangesLength(keptRanges(args.durationMs, args.cuts))
-  const prompts = buildClipPrompts(sentences, { durationMs: args.durationMs, outputMs })
+  const prompts = buildClipPrompts(sentences, { durationMs: args.durationMs, outputMs, count: args.count })
   const raw: unknown[] = []
   let done = 0
   for (const p of prompts) {
@@ -41,7 +43,7 @@ export async function suggestClips(args: SuggestClipsArgs): Promise<ClipValidati
     sentences,
     durationMs: args.durationMs,
     cuts: args.cuts,
-    max: clipCountRange(outputMs).max,
+    max: args.count ?? clipCountRange(outputMs).max,
     source: 'ai',
     ...(args.existing ? { existing: args.existing } : {})
   })

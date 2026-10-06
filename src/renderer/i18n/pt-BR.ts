@@ -13,6 +13,7 @@ export const ptBR = {
     recordingPeriod: 'A estimativa antes de gravar considera uma hora; o uso real varia com a duração e a atividade da tela.'
   },
   autopilot: {
+    lowScore: 'Nota baixa: revise antes de postar',
     hasErrors:'Há etapas com problema. Confira os motivos e tente novamente.',
     decisionHelp: 'As escolhas seguem a atividade da tela e a fala. Desmarque uma decisão para restaurar o trecho ou o enquadramento.', enableAll: 'Ligar categoria', resetText: 'Restaurar texto sugerido', resetAllTexts: 'Restaurar todos os textos', discardAll: 'Descartar todos os cortes', styleSaved: 'Estilo salvo para as próximas gravações.',
     title: 'Piloto automático', mode: 'Ao parar de gravar', everything: 'Fazer tudo e exportar', prepare: 'Só preparar (sem exportar)', nothing: 'Nada',

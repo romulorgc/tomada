@@ -11,5 +11,6 @@ export const reviewItemSchema = z.looseObject({
   enabledCutIds:z.array(z.string()).max(10000).optional(), enabledReasons:z.array(z.enum(['silence','filler','retake','manual','ai'])).optional(),
   restoreAutoZooms:z.boolean().optional(),restoreAutoLayouts:z.boolean().optional(),
   revision: z.number().int().nonnegative().optional(),
+  lowScore: z.boolean().optional(),
   title: z.string().max(200).optional(), hook: z.string().max(200).optional(), text: z.string().max(10000).optional()
 })
