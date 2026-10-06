@@ -87,6 +87,7 @@ export function Library() {
               onAskDelete={setToDelete}
             />
             <button className="btn btn-ghost mt-2" data-testid="card-review" onClick={() => go({name:'review',id:p.id})}>{t.autopilot.review}</button>
+            {p.autopilotNotice ? <p className="mt-1 text-sm text-muted" role="alert" data-testid="card-autopilot-notice">{p.autopilotNotice}</p> : null}
             </div>
           ))}
         </div>

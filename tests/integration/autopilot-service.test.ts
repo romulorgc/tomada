@@ -67,6 +67,8 @@ async function world(initial: Project, options: { gate?: Promise<void>; transcri
   const transcription = { getTranscript: vi.fn(async () => structuredClone(options.transcript ?? transcript)), idle: vi.fn(async () => undefined), start: vi.fn(async () => undefined) } satisfies Pick<TranscriptionService, 'getTranscript' | 'idle' | 'start'>
   const prefs = structuredClone(DEFAULT_AUTOPILOT)
   const ready = vi.fn()
+  const logger = createMemoryLogger()
+  const emit = vi.fn()
   const service = createAutopilot({
     store: store as unknown as ProjectStore,
     exporter: exporter as unknown as ExportService,
@@ -74,9 +76,9 @@ async function world(initial: Project, options: { gate?: Promise<void>; transcri
     derived: { levels: async () => null, peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, cropSuggest: async () => null, idle: async () => undefined, shutdown: () => undefined },
     llm: { provider: () => options.provider ?? null } as unknown as LlmManager,
     ...(options.camera ? { camera: options.camera as unknown as NonNullable<Parameters<typeof createAutopilot>[0]['camera']> } : {}),
-    logger: createMemoryLogger(), prefs: () => prefs, emit: vi.fn(), ready
+    logger, prefs: () => prefs, emit, ready
   })
-  return { service, dir, start, rendered, ready, prefs, read, write, camera: options.camera, project: () => structuredClone(stored) }
+  return { service, dir, start, rendered, ready, prefs, read, write, logger, emit, camera: options.camera, project: () => structuredClone(stored) }
 }
 
 describe('integração dos ajustes e da retomada do piloto automático', () => {
@@ -541,6 +543,100 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     release()
     await exporting
     expect(w.start).toHaveBeenCalledOnce()
+  })
+})
+
+describe('readIntent: o manifesto que não lê avisa, e o piloto não some em silêncio (M4d)', () => {
+  const writeRaw = async (dir: string, text: string): Promise<void> => {
+    await mkdir(join(dir, 'raw'), { recursive: true })
+    await writeFile(join(dir, MANIFEST_PATH), text)
+  }
+  const validManifest = { version: 1, sessionId: id, folder: 'raw', title: 'Gravação', createdAt: '2026-10-05T11:00:00Z', pauses: [], notes: [] }
+  const warns = (w: { logger: ReturnType<typeof createMemoryLogger> }) => w.logger.entries.filter((e) => e.level === 'warn' && e.message.includes('manifesto da gravação'))
+
+  it.each([
+    ['JSON quebrado', '{ isto não é json', /JSON|Unexpected|Expected/i],
+    ['campo inválido na leitura estrita', JSON.stringify({ ...validManifest, autopilotPending: 'sim' }), /Intenção do piloto inválida/],
+    ['versão que o app não conhece', JSON.stringify({ ...validManifest, version: 9 }), /Versão do manifesto/]
+  ])('%s: loga, grava o aviso e a etapa com erro no projeto e não roda o piloto', async (_name, text, reason) => {
+    const w = await world(baseProject())
+    await writeRaw(w.dir, text)
+    await w.service.resume()
+    await w.service.idle()
+    expect(warns(w)).toHaveLength(1)
+    const autopilot = w.project().autopilot!
+    expect(autopilot.notice).toMatch(/não pôde retomar/)
+    expect(autopilot.notice).toMatch(reason)
+    // o motivo e a saída ficam na própria etapa: a Revisão mostra o erro com o botão de tentar de novo
+    const transcribe = autopilot.steps.find((step) => step.id === 'transcribe')!
+    expect(transcribe).toMatchObject({ status: 'error' })
+    expect(transcribe.detail).toBe(autopilot.notice)
+    expect(autopilot.steps.filter((step) => step.status !== 'pending' && step.id !== 'transcribe')).toEqual([])
+    expect(autopilot.status).toBe('done')
+    expect(w.ready).not.toHaveBeenCalled()
+    expect(w.start).not.toHaveBeenCalled()
+    expect(w.emit).toHaveBeenCalledOnce()
+  })
+
+  it('reabrir de novo não repete o aviso nem refaz o estado (o projeto já tem piloto)', async () => {
+    const w = await world(baseProject())
+    await writeRaw(w.dir, '{ quebrado')
+    await w.service.resume()
+    const first = w.project().autopilot
+    await w.service.resume()
+    await w.service.idle()
+    expect(w.project().autopilot).toEqual(first)
+    expect(w.emit).toHaveBeenCalledOnce()
+  })
+
+  it('"Tentar de novo" na etapa roda o piloto e o aviso some', async () => {
+    const w = await world(baseProject())
+    await writeRaw(w.dir, '{ quebrado')
+    await w.service.resume()
+    expect(w.project().autopilot?.notice).toBeTruthy()
+    await w.service.retry(id, 'transcribe')
+    await w.service.idle()
+    expect(w.project().autopilot).toMatchObject({ status: 'done' })
+    expect(w.project().autopilot?.notice).toBeUndefined()
+    expect(w.project().autopilot?.steps.every((step) => step.status !== 'error')).toBe(true)
+    expect(w.ready).toHaveBeenCalledOnce()
+  })
+
+  it('sem manifesto (projeto antigo ou importado) não há aviso nem log', async () => {
+    const w = await world(baseProject())
+    await w.service.resume()
+    await w.service.idle()
+    expect(w.project().autopilot).toBeUndefined()
+    expect(warns(w)).toHaveLength(0)
+  })
+
+  it('manifesto que lê e não tem pendência não avisa nada', async () => {
+    const w = await world(baseProject())
+    await writeRaw(w.dir, JSON.stringify(validManifest))
+    await w.service.resume()
+    await w.service.idle()
+    expect(w.project().autopilot).toBeUndefined()
+    expect(warns(w)).toHaveLength(0)
+  })
+
+  it('projeto que já tem piloto concluído e manifesto ilegível: só o log (o usuário já tem o que ver na Revisão)', async () => {
+    const doc = baseProject()
+    finishedPipeline(doc)
+    const w = await world(doc)
+    await writeRaw(w.dir, '{ quebrado')
+    await w.service.resume()
+    await w.service.idle()
+    expect(warns(w)).toHaveLength(1)
+    expect(w.project().autopilot?.notice).toBeUndefined()
+    expect(w.emit).not.toHaveBeenCalled()
+  })
+
+  it('no start, assentar a intenção com o manifesto ilegível também vai para o log', async () => {
+    const w = await world(baseProject())
+    await writeRaw(w.dir, '{ quebrado')
+    await w.service.start(id)
+    expect(warns(w).length).toBeGreaterThan(0)
+    expect(w.project().autopilot).toMatchObject({ status: 'done' })
   })
 })
 

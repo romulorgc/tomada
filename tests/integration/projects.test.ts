@@ -55,6 +55,16 @@ describe('ProjectStore.list', () => {
     expect(list[0]?.thumbVersion).toBeGreaterThan(0)
   })
 
+  it('o aviso do piloto automático (que não pôde retomar) aparece no cartão da Biblioteca; sem aviso, o campo nem existe', async () => {
+    const { root, store } = seed()
+    expect((await store.list())[0]).not.toHaveProperty('autopilotNotice')
+    const file = join(root, EXAMPLE_ID, 'project.json')
+    const doc = JSON.parse(readFileSync(file, 'utf8'))
+    doc.autopilot = { projectId: EXAMPLE_ID, status: 'done', startedAt: 1, elapsedMs: 0, notice: 'O piloto automático não pôde retomar: teste.', steps: [{ id: 'transcribe', status: 'error', detail: 'teste' }] }
+    writeFileSync(file, JSON.stringify(doc))
+    expect((await store.list())[0]?.autopilotNotice).toBe('O piloto automático não pôde retomar: teste.')
+  })
+
   it('ignora pasta inválida sem quebrar e REGISTRA no log (uma vez só)', async () => {
     const { root, store, log } = seed()
     mkdirSync(join(root, 'quebrada'))

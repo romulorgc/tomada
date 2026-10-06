@@ -489,4 +489,6 @@ export type ProjectSummary = {
   thumbVersion: number
   hasScreen: boolean
   hasCamera: boolean
+  /** O piloto automático não pôde retomar (ex.: o manifesto da gravação não lê): o aviso que o usuário vê na Biblioteca. */
+  autopilotNotice?: string
 }

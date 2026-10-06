@@ -4,7 +4,11 @@ import { z } from 'zod'
 export const PIPELINE_STEPS = ['transcribe', 'clean', 'zooms', 'layouts', 'captions', 'youtube', 'clips', 'clipExports', 'publish', 'notify'] as const
 export type PipelineStepId = typeof PIPELINE_STEPS[number]
 export type PipelineStep = { id: PipelineStepId; status: 'pending' | 'running' | 'done' | 'error' | 'skipped'; detail?: string; elapsedMs?: number }
-export type PipelineState = { projectId: string; status: 'running' | 'done'; startedAt: number; elapsedMs: number; steps: PipelineStep[] }
+export type PipelineState = {
+  projectId: string; status: 'running' | 'done'; startedAt: number; elapsedMs: number; steps: PipelineStep[]
+  /** Aviso que o usuário precisa ver (ex.: o piloto não pôde retomar). Some quando o piloto roda de novo. */
+  notice?: string
+}
 export const autopilotPrefsSchema = z.object({
   mode: z.enum(['everything', 'prepare', 'nothing']).default('everything'),
   steps: z.partialRecord(z.enum(PIPELINE_STEPS), z.boolean()).default({}),
@@ -16,7 +20,7 @@ export const autopilotPrefsSchema = z.object({
 export type AutopilotPrefs = Omit<z.infer<typeof autopilotPrefsSchema>, 'steps'> & { steps: Partial<Record<PipelineStepId, boolean>> }
 export const DEFAULT_AUTOPILOT: AutopilotPrefs = { mode: 'everything', steps: {}, captionsHorizontal: false, captionsVertical: true, maxClips: 3, minScore: 70 }
 export const pipelineSchema = z.looseObject({
-  projectId: z.string(), status: z.enum(['running', 'done']), startedAt: z.number(), elapsedMs: z.number(),
+  projectId: z.string(), status: z.enum(['running', 'done']), startedAt: z.number(), elapsedMs: z.number(), notice: z.string().optional(),
   steps: z.array(z.looseObject({ id: z.enum(PIPELINE_STEPS), status: z.enum(['pending', 'running', 'done', 'error', 'skipped']), detail: z.string().optional(), elapsedMs: z.number().optional() }))
 })
 export function newPipeline(projectId: string, startedAt = Date.now()): PipelineState {

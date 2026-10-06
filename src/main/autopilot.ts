@@ -299,18 +299,39 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     }
   }
   /** O manifesto da gravação guarda "o piloto ainda precisa começar" desde antes de o processamento terminar. */
-  const readIntent = async (id: string): Promise<{ dir: string; manifest: Awaited<ReturnType<typeof readManifest>> } | null> => {
+  type Intent = { dir: string; manifest: Awaited<ReturnType<typeof readManifest>> }
+  /**
+   * `null` = a pasta não tem manifesto (projeto antigo ou importado: nada a retomar). Manifesto que existe e não lê (JSON quebrado,
+   * campo inválido, caminho fora da pasta) NUNCA some em silêncio: vai para o log e volta como `unreadable`, para quem chamou mostrar
+   * ao usuário que o piloto não pôde retomar e por quê.
+   */
+  const readIntent = async (id: string): Promise<Intent | { unreadable: string } | null> => {
     try {
       const dir = deps.store.dirOf(id)
       if (!(await pathExists(await resolveProjectFile(dir, MANIFEST_PATH)))) return null
       return { dir, manifest: await readManifest(dir) }
-    } catch { return null }
+    } catch (err) {
+      deps.logger.warn(`Piloto automático: não consegui ler o manifesto da gravação ${id}; não sei se o piloto ainda precisava começar.`, err)
+      return { unreadable: err instanceof Error ? err.message : String(err) }
+    }
   }
-  const intentPending = async (id: string): Promise<boolean> => (await readIntent(id))?.manifest.autopilotPending === true
+  const readable = (found: Intent | { unreadable: string } | null): found is Intent => found !== null && 'manifest' in found
+  /** O manifesto não lê e o projeto não tem piloto: o usuário vê na Biblioteca e na Revisão, com o motivo e o "Tentar de novo" que roda o piloto. */
+  const reportUnreadable = async (id: string, reason: string): Promise<void> => {
+    const notice = `O piloto automático não pôde retomar: não consegui ler o manifesto da gravação (${reason}). Não sei se ele ainda precisava rodar. Use "Tentar de novo" para rodar o piloto agora.`
+    try {
+      const saved = await change(id, (p) => {
+        if (p.autopilot) return p
+        const pipeline = newPipeline(id)
+        return { ...p, autopilot: { ...pipeline, status: 'done', notice, steps: pipeline.steps.map((s) => (s.id === 'transcribe' ? { ...s, status: 'error' as const, detail: notice } : s)) } }
+      })
+      if (saved.autopilot?.notice === notice) deps.emit(structuredClone(saved.autopilot))
+    } catch (err) { deps.logger.warn(`Piloto automático: não consegui registrar no projeto ${id} que o manifesto não lê.`, err) }
+  }
   /** Assenta a intenção depois que o estado do piloto foi gravado no projeto (ou o modo "Nada" decidiu não rodar). */
   const settleIntent = async (id: string): Promise<void> => {
     const found = await readIntent(id)
-    if (!found?.manifest.autopilotPending) return
+    if (!readable(found) || !found.manifest.autopilotPending) return
     try {
       delete found.manifest.autopilotPending
       await writeManifest(found.dir, found.manifest)
@@ -383,7 +404,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     },
     async retry(id,step) {
       await enqueue(async () => {
-        await change(id,(p) => ({ ...p, autopilot: { ...(p.autopilot ?? newPipeline(id)), status: 'running', steps: (p.autopilot ?? newPipeline(id)).steps.map((s) => s.id === step ? { id: s.id, status: 'pending' } : s) } }))
+        // tentar de novo resolve o aviso do piloto (o `notice` sai do estado)
+        await change(id,(p) => { const { notice: _resolved, ...pipeline } = p.autopilot ?? newPipeline(id); return { ...p, autopilot: { ...pipeline, status: 'running', steps: pipeline.steps.map((s) => s.id === step ? { id: s.id, status: 'pending' } : s) } } })
         await run(id)
         if (deps.prefs().mode === 'everything' && ['clean','zooms','layouts','captions','clips'].includes(step)) {
           const latest = (await deps.store.read(id)).project
@@ -498,7 +520,11 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         const { project } = await deps.store.read(entry.id)
         // Fechar o app entre o fim do processamento e o primeiro estado do piloto deixava a gravação sem piloto e sem aviso:
         // o processamento deixa a intenção no manifesto e a inicialização reconcilia aqui.
-        const pending = await intentPending(entry.id)
+        const found = await readIntent(entry.id)
+        if (found && !readable(found)) {
+          if (!project.autopilot) await reportUnreadable(entry.id, found.unreadable)
+        }
+        const pending = readable(found) && found.manifest.autopilotPending === true
         if (project.autopilot?.status === 'running' || (pending && !project.autopilot)) await service.start(entry.id).catch(() => undefined)
         else if (pending) await settleIntent(entry.id)
         const latest = (await deps.store.read(entry.id)).project

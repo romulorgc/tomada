@@ -143,7 +143,8 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
       thumbPath,
       thumbVersion,
       hasScreen: Boolean(project.sources.screen),
-      hasCamera: Boolean(project.sources.camera)
+      hasCamera: Boolean(project.sources.camera),
+      ...(project.autopilot?.notice ? { autopilotNotice: project.autopilot.notice } : {})
     }
   }
 
