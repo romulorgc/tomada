@@ -15,7 +15,7 @@ import { CONTENT_RECT_FILE } from '@shared/events'
 import { buildEvents, toJsonLines, type BuiltEvents, type RawEvents } from '@shared/recording'
 import type { CaptureInfo, Project, Src } from '@shared/types'
 import { calibrationForPair, type CameraCalibration } from '@shared/camera-sync'
-import { cameraCaptureReport } from '@shared/camera-quality'
+import { cameraCaptureReport, cameraFallbackNote } from '@shared/camera-quality'
 import { measureVideoFps } from './camera-fps'
 import type { LipSyncDetector } from './lip-sync'
 import { writeFileAtomic } from './fs-utils'
@@ -183,6 +183,10 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
         cam.measured = { fps: gravado.fps, width: gravado.width, height: gravado.height }
         const aviso = cameraCaptureReport(gravado, cam.capture ?? null).warning
         if (aviso) note(aviso)
+      } else if (cam.capture) {
+        // Sem medida no arquivo, a decisão da abertura ainda explica por que a câmera não saiu no 4K pedido.
+        const queda = cameraFallbackNote(cam.capture)
+        if (queda) note(queda)
       }
       const result = await produce('media/camera.mp4', (out) =>
         normalizeVideo(deps.ff, {

@@ -43,7 +43,7 @@ const ffprobe = process.env.FFPROBE || 'ffprobe'
 // Cenários
 
 const base = { seconds, camera: cameraName, mic: micName }
-const direct = (id) => ({ id, scenario: 'ffmpeg', seconds, size: '1920x1080', framerate: 30 })
+const direct = (id, extra = {}) => ({ id, scenario: 'ffmpeg', seconds, size: '1920x1080', framerate: 30, ...extra })
 const engine = (id, withScreen, extra = {}) => ({ id, scenario: 'engine', withScreen, fps: 30, ...base, ...extra })
 const raw = (id, withScreen, extra = {}) => ({ id, scenario: 'raw', withScreen, fps: 30, ...base, ...extra })
 const probe = (id, extra = {}) => ({ id, scenario: 'probe', withScreen: false, ...base, seconds: 5, ...extra })
@@ -53,6 +53,23 @@ for (const [width, height] of [[1920, 1080], [1280, 720]]) for (const frameRate 
 sweepItems.push({ width: 1920, height: 1080, frameRate: 30, max: true }, { width: 1920, height: 1080, frameRate: 30, exact: true }, { width: 1920, height: 1080, frameRate: 60, exact: true })
 
 const PRESETS = {
+  // Câmera lenta de verdade (exposição manual de 1/16 s força ~15 qps, como a pouca luz): o caminho do aviso, de ponta a ponta
+  lenta: [
+    engine('app-lenta-max', false, { quality: 'max', slowExposure: 625 }),
+    engine('app-lenta-alta', false, { quality: 'high', slowExposure: 625 })
+  ],
+  // Nitidez no MESMO modo da câmera: ffmpeg 4K30 × app 4K, ffmpeg 1080p60 × app 1080p (modo de 60), intercalados
+  mesmomodo: [
+    direct('ffmpeg-4k', { size: '3840x2160' }),
+    engine('app-max', false, { quality: 'max' }),
+    engine('app-max-e-tela', true, { quality: 'max' }),
+    engine('app-max-previas-fecham', true, { quality: 'max', withPreviews: 'fecha-antes' }),
+    direct('ffmpeg-4k-b', { size: '3840x2160' }),
+    direct('ffmpeg-1080p60', { framerate: 60 }),
+    engine('app-alta', false, { quality: 'high' }),
+    engine('app-alta-e-tela', true, { quality: 'high' }),
+    direct('ffmpeg-1080p60-b', { framerate: 60 })
+  ],
   // O caminho do app (CaptureEngine) em cada qualidade, com e sem a tela, entre capturas diretas do ffmpeg
   final: [
     direct('ffmpeg-1'),
@@ -141,6 +158,14 @@ const code = await new Promise((resolve) => {
   child.stdout.on('data', (d) => process.stdout.write(d))
   child.on('close', resolve)
 })
+// A exposição manual da câmera FICA no driver: se algum cenário a mexeu, devolve ao automático de qualquer jeito (mesmo se o Electron caiu).
+if (scenarios.some((s) => s.slowExposure || s.apply)) {
+  const restoreConfig = path.join(out, 'configuracao-restaurar.json')
+  fs.writeFileSync(restoreConfig, JSON.stringify({ out: path.join(out, '_restaurar'), page: html, scenarios: [{ id: 'restaurar', scenario: 'restore', ...base, seconds: 1, cooldownMs: 500 }], ffmpeg, cameraDshow, switches }, null, 2))
+  fs.mkdirSync(path.join(out, '_restaurar'), { recursive: true })
+  const r = spawnSync(electronExe, [path.join(root, 'scripts', 'medir-camera', 'principal.cjs'), restoreConfig], { cwd: root, env, encoding: 'utf8', windowsHide: true })
+  console.log(`exposição da câmera devolvida ao automático (${r.status === 0 ? 'ok' : `código ${r.status}`})`)
+}
 if (code !== 0) {
   console.error(`o Electron saiu com código ${code}`)
   process.exit(code ?? 1)

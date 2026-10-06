@@ -115,7 +115,7 @@ function ffmpegDirect(s) {
     '-f', 'dshow', '-video_size', s.size || '1920x1080', '-framerate', String(s.framerate || 30), '-vcodec', 'mjpeg',
     '-i', `video=${config.cameraDshow}`,
     '-t', String(s.seconds),
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '14', '-pix_fmt', 'yuv420p',
+    '-c:v', 'libx264', '-preset', (s.size || '').startsWith('3840') ? 'ultrafast' : 'veryfast', '-crf', '14', '-pix_fmt', 'yuv420p',
     file
   ]
   return new Promise((resolve) => {

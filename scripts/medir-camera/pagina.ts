@@ -31,7 +31,9 @@ type Cfg = {
   timeslice?: number
   // engine
   /** Abre antes a prévia da tela Gravar (640x360) e a bolha (640x640) na mesma câmera, como no app. */
-  withPreviews?: boolean
+  withPreviews?: boolean | 'fecha-antes'
+  /** Simula câmera lenta (pouca luz): exposição manual longa ANTES de abrir o engine (o driver guarda). Sempre desfeita no fim. */
+  slowExposure?: number
   quality?: 'max' | 'high'
   engineOptions?: Record<string, unknown>
   /** `applyConstraints` na trilha da câmera logo depois de abrir (experimentos de exposição). */
@@ -207,6 +209,67 @@ async function stamps(cfg: Cfg): Promise<Record<string, unknown>> {
   return { callPerf, startEvent, timeOrigin: performance.timeOrigin, vLog, aLog }
 }
 
+/**
+ * Fidelidade do codificador: grava pelo MediaRecorder do app e, DA MESMA TRILHA, guarda o plano de luma (Y) de alguns quadros
+ * exatamente como o codificador os recebe. O script compara depois o arquivo gravado com esses quadros (PSNR, SSIM, nitidez):
+ * a perda é só do codificador, sem câmera, luz ou conversão de cor de outro programa no meio.
+ */
+async function fidelity(cfg: Cfg): Promise<Record<string, unknown>> {
+  const dev = await findDevices(cfg.camera, cfg.mic)
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { deviceId: { exact: dev.cameraId }, width: { ideal: cfg.width ?? 1920 }, height: { ideal: cfg.height ?? 1080 }, frameRate: { ideal: cfg.frameRate ?? 30, max: cfg.frameRate ?? 30 } }
+  })
+  const track = stream.getVideoTracks()[0]!
+  let screen: MediaStream | null = null
+  if (cfg.withScreen) screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 30 } } as MediaTrackConstraints, audio: false })
+  const reader = new MediaStreamTrackProcessor({ track: track.clone() }).readable.getReader()
+  const mk = (kind: string, s: MediaStream, bps: number): { rec: MediaRecorder; done: () => Promise<void> } => {
+    const rec = new MediaRecorder(s, { mimeType: 'video/webm;codecs=h264', videoBitsPerSecond: bps })
+    let chain: Promise<void> = Promise.resolve()
+    rec.ondataavailable = (e) => { if (e.data.size) chain = chain.then(async () => api().record.chunk(kind, await e.data.arrayBuffer())) }
+    return { rec, done: () => chain }
+  }
+  const cam = mk('camera', stream, cfg.videoBps ?? 45_000_000)
+  const scr = screen ? mk('screen', screen, 16_000_000) : null
+  const grabAt = [2, 3, 4, 5, 6, 7].map((s) => s * 1000).filter((ms) => ms < cfg.seconds * 1000 - 500)
+  const grabs: { index: number; width: number; height: number; format: string; at: number }[] = []
+  const startedAt = performance.now()
+  cam.rec.start(1000)
+  scr?.rec.start(1000)
+  let running = true
+  let next = 0
+  const loop = (async () => {
+    while (running) {
+      const { value, done } = await reader.read()
+      if (done || !value) break
+      const elapsed = performance.now() - startedAt
+      if (next < grabAt.length && elapsed >= grabAt[next]!) {
+        const w = value.visibleRect?.width ?? value.codedWidth
+        const h = value.visibleRect?.height ?? value.codedHeight
+        const buf = new Uint8Array(value.allocationSize())
+        const layout = await value.copyTo(buf)
+        const y = layout[0]!
+        const plane = new Uint8Array(w * h)
+        for (let row = 0; row < h; row++) plane.set(buf.subarray(y.offset + row * y.stride, y.offset + row * y.stride + w), row * w)
+        await api().record.chunk('yplane' + next, plane.buffer)
+        grabs.push({ index: next, width: w, height: h, format: String(value.format), at: Math.round(elapsed) })
+        next++
+      }
+      value.close()
+    }
+  })()
+  await sleep(cfg.seconds * 1000)
+  running = false
+  await reader.cancel().catch(() => undefined)
+  await loop.catch(() => undefined)
+  await Promise.all([cam, scr].filter(Boolean).map((r) => new Promise<void>((resolve) => { r!.rec.onstop = () => resolve(); r!.rec.stop() })))
+  await Promise.all([cam.done(), scr?.done()])
+  const out = { settings: settingsOf(track), grabs }
+  stream.getTracks().forEach((t) => t.stop())
+  screen?.getTracks().forEach((t) => t.stop())
+  return out
+}
+
 async function codecs(): Promise<Record<string, unknown>> {
   const rows: Record<string, unknown>[] = []
   const list: { codec: string; name: string }[] = [
@@ -277,13 +340,39 @@ async function raw(cfg: Cfg): Promise<Record<string, unknown>> {
   return out
 }
 
+/** Põe (ou tira) a exposição manual da câmera e fecha: o driver guarda o que se aplica. */
+async function setExposure(cameraId: string, exposureTime: number | null): Promise<void> {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: cameraId }, width: { ideal: 1280 }, height: { ideal: 720 } } })
+  try {
+    const track = stream.getVideoTracks()[0]!
+    await track.applyConstraints({ advanced: [exposureTime === null ? { exposureMode: 'continuous' } : { exposureMode: 'manual', exposureTime }] } as MediaTrackConstraints)
+    await sleep(800)
+  } finally {
+    stream.getTracks().forEach((t) => t.stop())
+  }
+  await sleep(800)
+}
+
 async function engine(cfg: Cfg): Promise<Record<string, unknown>> {
   const dev = await findDevices(cfg.camera, cfg.mic)
+  if (cfg.slowExposure) {
+    await setExposure(dev.cameraId, cfg.slowExposure)
+    try { return await engineRun(cfg, dev) } finally { await setExposure(dev.cameraId, null) }
+  }
+  return engineRun(cfg, dev)
+}
+
+async function engineRun(cfg: Cfg, dev: { cameraId: string; micId: string }): Promise<Record<string, unknown>> {
   const previews: MediaStream[] = []
   if (cfg.withPreviews) {
     previews.push(await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: dev.cameraId }, width: { ideal: 640 }, height: { ideal: 360 } } }))
     previews.push(await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: dev.cameraId }, width: { ideal: 640 }, height: { ideal: 640 } } }))
     await sleep(500)
+    // Como o app faz: a tela Gravar para as prévias quando a gravação começa, e a abertura vem logo depois.
+    if (cfg.withPreviews === 'fecha-antes') {
+      previews.splice(0).forEach((p) => p.getTracks().forEach((t) => t.stop()))
+      await sleep(30)
+    }
   }
   const request: RecordRequest = {
     mode: cfg.withScreen ? 'screen-camera' : 'camera',
@@ -324,6 +413,8 @@ async function engine(cfg: Cfg): Promise<Record<string, unknown>> {
   async run(cfg: Cfg): Promise<Record<string, unknown>> {
     try {
       if (cfg.scenario === 'probe') return await probe(cfg)
+      if (cfg.scenario === 'restore') { const dev = await findDevices(cfg.camera, cfg.mic); await setExposure(dev.cameraId, null); return { restored: true } }
+      if (cfg.scenario === 'fidelity') return await fidelity(cfg)
       if (cfg.scenario === 'stamps') return await stamps(cfg)
       if (cfg.scenario === 'codecs') return await codecs()
       if (cfg.scenario === 'sweep') return await sweep(cfg)

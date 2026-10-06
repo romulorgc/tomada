@@ -572,6 +572,24 @@ describe('câmera: o que a abertura decidiu e quantos quadros por segundo saíra
     expect(project.cameraCapture!.warning).toBe(aviso)
   }, 120_000)
 
+  it('4K recusado na abertura (15 qps em pouca luz): a nota diz que gravou em 1080p, por quê e o que fazer, no processamento e no projeto', async () => {
+    const { world, root } = newWorld()
+    const fallback: NonNullable<StartedInfo['cameraCapture']> = {
+      quality: 'max', profile: 'fhd', width: 640, height: 360, probeFps: 30,
+      attempts: [{ profile: 'uhd', width: 3840, height: 2160, fps: 15, accepted: false }, { profile: 'fhd', width: 640, height: 360, fps: 30, accepted: true }]
+    }
+    const { prepared } = await record(world, baseRequest, { info: { cameraCapture: fallback } })
+    const snap = await waitDone(world)
+    expect(snap.status, snap.error?.message).toBe('done')
+    const aviso = snap.notes.find((n) => n.includes('1080p em vez de 4K'))
+    expect(aviso, `avisos: ${snap.notes.join(' | ')}`).toBeTruthy()
+    expect(aviso).toContain('15 qps')
+    expect(aviso).toContain('luz')
+    const project = parseProject(readFileSync(join(root, prepared.folder, 'project.json'), 'utf8'))
+    expect(project.cameraCapture).toMatchObject({ quality: 'max', profile: 'fhd', probeFps: 30 })
+    expect(project.cameraCapture!.warning).toContain('1080p em vez de 4K')
+  }, 120_000)
+
   it('gravação antiga, sem a decisão da abertura, também é medida (sem inventar o que não sabe)', async () => {
     const { world, root } = newWorld()
     const { prepared } = await record(world, baseRequest)
