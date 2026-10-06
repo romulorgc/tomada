@@ -4,15 +4,18 @@
  *
  *  - `face`: onde está o rosto ao longo da gravação (`media/camera-face.json`), uma vez por gravação, em segundo plano. O editor
  *    e a exportação enquadram a câmera por ele.
+ *  - `matte`: o recorte do fundo (`media/camera-matte.mp4`, a pessoa em branco, mais `camera-matte.json` com a origem para o cache).
+ *    O apresentador recortado desenha a câmera por ele. Só roda quando a pessoa escolhe um layout que precisa dele.
  *
  * Segurança: tudo que vem da interface é um id de projeto e o tipo. O vídeo é o `sources.camera` do documento, resolvido por
  * `resolveProjectFile` (relativo, dentro da pasta do projeto, conferido com `realpath`), e o resultado também. Quem executa o
  * motor é o processo principal, com caminhos que ele mesmo montou.
  */
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, rename, rm, stat } from 'node:fs/promises'
 import { CAMERA_KINDS, type CameraJob, type CameraKind, type CameraView } from '@shared/camera-analysis'
 import { FACE_FILE, FACE_TRACK_VERSION, faceCoverage, parseFaceTrack, type FaceTrack } from '@shared/face'
 import type { IpcEvents } from '@shared/ipc'
+import { MATTE_FILE, MATTE_META_FILE, MATTE_PARTIAL_FILE, MATTE_VERSION, type MatteMeta } from '@shared/matte'
 import { mediaUrl } from '@shared/media-url'
 import type { PrepareSnapshot } from '@shared/transcription'
 import type { Project } from '@shared/types'
@@ -20,6 +23,7 @@ import { writeFileAtomic } from '../fs-utils'
 import type { Logger } from '../logger'
 import { resolveProjectFile } from '../project-files'
 import { createPrepareTracker } from '../transcription/prepare-tracker'
+import { freshMatte } from './matte-file'
 import type { CameraEngine } from './types'
 
 export interface CameraService {
@@ -144,6 +148,43 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
     return { url: mediaUrl(projectId, FACE_FILE, have.mtimeMs), faces: track.boxes.length, coverage: faceCoverage(track) }
   }
 
+  async function runMatteJob(projectId: string, cam: NonNullable<Awaited<ReturnType<typeof cameraFile>>>, ctl: AbortController, onProgress: (f: number) => void): Promise<void> {
+    const kind: CameraKind = 'matte'
+    const partial = await resolveProjectFile(cam.dir, MATTE_PARTIAL_FILE)
+    await rm(partial, { force: true })
+    try {
+      const result = await engine.makeMatte({ video: cam.video, out: partial, durationMs: cam.project.sources.camera?.durationMs ?? 0, signal: ctl.signal, onProgress })
+      if (ctl.signal.aborted) throw new Error('Cancelado.')
+      const final = await resolveProjectFile(cam.dir, MATTE_FILE)
+      try {
+        await rename(partial, final)
+      } catch {
+        // o Windows não troca um arquivo que está aberto (a prévia lendo o recorte antigo): apaga o antigo e tenta de novo
+        await rm(final, { force: true })
+        await rename(partial, final)
+      }
+      const meta: MatteMeta = {
+        version: MATTE_VERSION,
+        engine: result.engine,
+        source: cam.relPath,
+        sourceMtimeMs: cam.mtimeMs,
+        frames: result.frames,
+        fps: result.fps,
+        frame: result.frame,
+        createdAt: new Date(now()).toISOString()
+      }
+      await writeFileAtomic(await resolveProjectFile(cam.dir, MATTE_META_FILE), `${JSON.stringify(meta, null, 2)}\n`)
+      const info = await stat(final)
+      setJob({ projectId, kind, state: 'done', fraction: 1, url: mediaUrl(projectId, MATTE_FILE, Math.trunc(info.mtimeMs)) })
+      logger.info(
+        `Recorte do fundo do projeto ${projectId}: ${result.frames} quadros em ${result.seconds.toFixed(1)} s (${result.msPerFrame.toFixed(1)} ms por quadro, ${result.device}, ${result.engine}).`
+      )
+    } catch (err) {
+      await rm(partial, { force: true }).catch(() => undefined)
+      throw err
+    }
+  }
+
   async function runJob(projectId: string, kind: CameraKind, ctl: AbortController): Promise<void> {
     setJob({ projectId, kind, state: 'running', fraction: 0 })
     try {
@@ -156,6 +197,10 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
           last = pct
           setJob({ projectId, kind, state: 'running', fraction: f })
         }
+      }
+      if (kind === 'matte') {
+        await runMatteJob(projectId, cam, ctl, onProgress)
+        return
       }
       if (kind === 'face') {
         const track = await engine.detectFaces({ video: cam.video, durationMs: cam.project.sources.camera?.durationMs ?? 0, signal: ctl.signal, onProgress })
@@ -229,6 +274,14 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
           return job
         }
       }
+      if (kind === 'matte' && !opts.force) {
+        const fresh = await freshMatte(projectId, cam.dir, cam.relPath, cam.mtimeMs)
+        if (fresh) {
+          const job: CameraJob = { projectId, kind, state: 'done', fraction: 1, url: fresh.url }
+          setJob(job)
+          return job
+        }
+      }
       const job: CameraJob = { projectId, kind, state: 'queued', fraction: 0 }
       setJob(job)
       queue.push({ projectId, kind })
@@ -250,6 +303,7 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
       const cam = await cameraFile(projectId)
       if (!cam) return null
       if (kind === 'face') return (await freshFace(projectId, cam.dir, cam.relPath, cam.mtimeMs))?.url ?? null
+      if (kind === 'matte') return (await freshMatte(projectId, cam.dir, cam.relPath, cam.mtimeMs))?.url ?? null
       return null
     },
 

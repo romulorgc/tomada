@@ -18,8 +18,18 @@ import {
 import { buildCaptionTrack, captionAt, pageAlpha, popScale, PAGE_FADE_MS, type CaptionTrack } from './captions'
 import { resolveCaptionStyle, resolveHookStyle, type CaptionRenderStyle, type HookRenderStyle } from './caption-style'
 import { projectDurationMs } from './project'
-import { buildFaceFramer, cameraCropRect, faceAimAt, type FaceFramer, type FaceTrack } from './face'
-import { cameraBoxAspect, cameraRadius, coverCrop, cornerFractions, resolveSideBySide, styleUnit } from './styles'
+import { BUBBLE_TARGET, PRESENTER_TARGET, buildFaceFramer, cameraCropRect, faceAimAt, lerpTarget, type FaceFramer, type FaceTrack } from './face'
+import {
+  cameraBoxAspect,
+  cameraRadius,
+  coverCrop,
+  cornerFractions,
+  presenterScreenHeightV,
+  presenterWindow,
+  resolvePresenter,
+  resolveSideBySide,
+  styleUnit
+} from './styles'
 import { keptRanges, outputDuration, sourceToOutput } from './timeline'
 import type { Background, ClickEvent, CursorSample, KeyEvent, LayoutKind, Project, Range, Rect, Size, Style, Word } from './types'
 import { GRID_HZ } from './cursor'
@@ -99,6 +109,8 @@ export type Derived = {
   captions: CaptionTrack | null
   /** O caminho do rosto na câmera (M4c): o recorte da câmera acompanha. `null` = a análise não existe (recorte do centro). */
   face: FaceFramer | null
+  /** Algum trecho usa o apresentador recortado (`presenter`): precisa do recorte do fundo da câmera (`media/camera-matte.mp4`). */
+  needsMatte: boolean
   screenSize: Size | null
   cameraSize: Size | null
   layoutPoints: LayoutPoint[]
@@ -146,6 +158,13 @@ export function layoutAt(points: readonly LayoutPoint[], t: number): { layout: L
   return { layout: cur.layout, prev, since: cur.t }
 }
 
+/** Algum trecho do documento (neste formato) usa o apresentador recortado? Então a exportação precisa do recorte do fundo da câmera. */
+export function usesPresenter(project: Pick<Project, 'layouts' | 'style' | 'sources'>, kind: FormatSpec['kind']): boolean {
+  const hasScreen = sizeOf(project.sources.screen) !== null
+  const hasCamera = !project.style.camera.hidden && sizeOf(project.sources.camera) !== null
+  return hasCamera && buildLayoutPoints(project).some((pt) => resolveLayout(pt.layout, hasScreen, hasCamera, kind) === 'presenter')
+}
+
 const TRIVIAL_PATH: CameraPath = { hz: GRID_HZ, t: [0], scale: [1], cx: [0.5], cy: [0.5], maxScale: 1 }
 
 /**
@@ -174,7 +193,7 @@ export function deriveProject(project: Project, data: CursorData, format: Format
     const keys = new Set<string>([mainKey])
     for (const pt of layoutPoints) keys.add(resolveLayout(pt.layout, hasScreen, hasCamera, format.kind))
     for (const key of keys) {
-      const f = layoutFollow(key as LayoutKind, format, screenSize)
+      const f = layoutFollow(key as LayoutKind, format, screenSize, project.style.presenter)
       if (key === 'camera' || !hasScreen || f.gain === 0) {
         paths[key] = { view: f.view, path: TRIVIAL_PATH }
         continue
@@ -203,6 +222,7 @@ export function deriveProject(project: Project, data: CursorData, format: Format
     view,
     captions: buildCaptionTrack(words, project, durationMs),
     face: cameraSize ? buildFaceFramer(face, project.sync.cameraOffsetMs, durationMs) : null,
+    needsMatte: usesPresenter(project, format.kind),
     screenSize,
     cameraSize,
     layoutPoints
@@ -227,13 +247,13 @@ export function resolveLayout(layout: LayoutKind, hasScreen: boolean, hasCamera:
   if (kind === 'horizontal') {
     if (l === 'stack') l = 'side-by-side'
     if (l === 'screen-focus' || l === 'screen-wide') l = 'bubble'
-  } else if (l !== 'camera' && l !== 'stack' && l !== 'screen-wide') {
+  } else if (l !== 'camera' && l !== 'stack' && l !== 'screen-wide' && l !== 'presenter') {
     l = 'screen-focus'
   }
   if (!hasCamera) {
     // sem câmera: no vertical sobram o recorte que segue o cursor e a tela na largura; no 16:9, só a tela
     if (kind === 'vertical') return l === 'screen-wide' ? 'screen-wide' : 'screen-focus'
-    if (l === 'bubble' || l === 'side-by-side' || l === 'camera') return 'screen'
+    if (l === 'bubble' || l === 'side-by-side' || l === 'camera' || l === 'presenter') return 'screen'
   }
   return l
 }
@@ -291,6 +311,19 @@ export function layoutGeometry(
   if (!sources.screen) return { screen: null, camera: null }
 
   if (L === 'screen') return { screen: snap(fitRect(sources.screen, inner)), camera: null }
+
+  if (L === 'presenter') {
+    // O apresentador recortado (M4c): a webcam SEM o fundo, a pessoa ancorada na borda de baixo e por cima da tela.
+    //  - 16:9: a tela com a margem de sempre e a pessoa no canto (a janela passa um pouco da borda: ela encosta nela, como nas referências);
+    //  - 9:16 (V-D): o recorte da tela (que segue o cursor) só na faixa de cima e a pessoa embaixo, na largura toda.
+    const pr = resolvePresenter(style.presenter)
+    const win = snap(presenterWindow(pr, format, format.kind === 'vertical'))
+    if (format.kind === 'vertical') {
+      const topH = presenterScreenHeightV(pr) * H
+      return { screen: snap({ x: 0, y: 0, w: W, h: topH }), camera: sources.camera ? { rect: win, radius: 0 } : null }
+    }
+    return { screen: snap(fitRect(sources.screen, inner)), camera: sources.camera ? { rect: win, radius: 0 } : null }
+  }
 
   if (L === 'side-by-side') {
     // O quadro da câmera ao lado (estilo Tella): largura escolhida (fração do quadro), em pé (3:4) ou quadrado (1:1), à esquerda ou à
@@ -366,6 +399,16 @@ export type SceneScreen = {
   shadow: ShadowSpec | null
 }
 
+/** O apresentador recortado desenhado por cima do cartão da câmera (M4c): quanto dele já está no ar (0..1) e os enfeites. */
+export type SceneCutout = {
+  /** 0..1: o cartão da câmera some enquanto o recorte aparece (a troca de layout de 400 ms). */
+  weight: number
+  /** Espessura do contorno branco em px do quadro (0 = sem). */
+  outline: number
+  /** Sombra da silhueta (blur em px do quadro) ou `null`. */
+  shadow: ShadowSpec | null
+}
+
 export type SceneCamera = {
   dest: Rect
   /** Recorte "cobrir" da fonte da câmera (normalizado). */
@@ -375,6 +418,8 @@ export type SceneCamera = {
   mirror: boolean
   border: { width: number; color: string } | null
   shadow: ShadowSpec | null
+  /** O apresentador recortado (layout `presenter`); `null` = só o cartão. Precisa do quadro da máscara (`FrameSet.matte`). */
+  cutout: SceneCutout | null
 }
 
 export type SceneBackdrop = { src: Rect; darken: number; alpha: number }
@@ -440,6 +485,10 @@ export const easeInOutCubic = (u: number): number => (u < 0.5 ? 4 * u * u * u : 
 export const easeOutCubic = (u: number): number => 1 - Math.pow(1 - u, 3)
 const smoothstep = (u: number): number => u * u * (3 - 2 * u)
 
+/** A sombra da silhueta do apresentador: um halo escuro e suave logo abaixo dele (blur em px na altura de 1080). */
+export const PRESENTER_SHADOW = { blur: 22, opacity: 0.42, offsetY: 6 } as const
+const presenterShadow = (unit: number): ShadowSpec => ({ blur: PRESENTER_SHADOW.blur * unit, opacity: PRESENTER_SHADOW.opacity, offsetY: PRESENTER_SHADOW.offsetY * unit })
+
 /** Elemento que existe em um dos layouts da transição (ou nos dois). */
 function blendElement<T extends { rect: Rect; radius: number }>(
   a: T | null,
@@ -491,6 +540,7 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
   const sample = sampleCameraPath((derived.paths[curKey] ?? derived.paths.main ?? { path: derived.cameraPath }).path, sourceT)
 
   const gCur = layoutGeometry(layout, style, format, sources, zoomProgress)
+  const presenterStyle = resolvePresenter(style.presenter)
   const gPrev = p < 1 ? layoutGeometry(prev, style, format, sources, zoomProgress) : null
 
   const rCur = screenRadius(layout, style, unit, kind, hasScreen, hasCamera)
@@ -521,24 +571,41 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
     ? { dest: screenBox.rect, src: srcRect, radius: screenBox.radius, opacity: screenBox.opacity, shadow: shadowOn ? shadowOf(1, 1) : null }
     : null
 
+  // quanto do apresentador recortado já está no ar: entra com a troca para o layout `presenter` e sai com a troca para outro
+  const cutWeight = clamp01((curKey === 'presenter' ? e : 0) + (p < 1 && prevKey === 'presenter' && prevKey !== curKey ? 1 - e : 0))
+  const cutout: SceneCutout | null =
+    cutWeight > 0.002
+      ? { weight: cutWeight, outline: presenterStyle.outline ? presenterStyle.outlineWidth * unit : 0, shadow: presenterStyle.shadow ? presenterShadow(unit) : null }
+      : null
+
   const camera: SceneCamera | null =
     cameraBox && derived.cameraSize
       ? {
           dest: cameraBox.rect,
-          // o recorte da imagem da câmera: centrado no rosto (se a análise existe) e com o ajuste manual por cima (M4c)
-          src: cameraCropRect(derived.cameraSize, cameraBox.rect.w / cameraBox.rect.h, derived.face ? faceAimAt(derived.face, sourceT) : null, style.camera.framing),
+          // o recorte da imagem da câmera: centrado no rosto (se a análise existe) e com o ajuste manual por cima (M4c); o do
+          // apresentador põe a cabeça perto do topo da janela
+          src: cameraCropRect(
+            derived.cameraSize,
+            cameraBox.rect.w / cameraBox.rect.h,
+            derived.face ? faceAimAt(derived.face, sourceT) : null,
+            style.camera.framing,
+            cutWeight > 0 ? lerpTarget(BUBBLE_TARGET, PRESENTER_TARGET, cutWeight) : BUBBLE_TARGET
+          ),
           radius: cameraBox.radius,
           opacity: cameraBox.opacity,
           mirror: style.camera.mirror,
           // o cartão do lado a lado é irmão da tela: sem borda e com a MESMA sombra (a bolha é que leva borda e sombra menor)
           border: style.camera.borderWidth > 0 && !(vertical && curKey === 'stack') && curKey !== 'side-by-side' ? { width: style.camera.borderWidth * unit, color: style.camera.borderColor } : null,
-          shadow: vertical && curKey === 'stack' ? null : curKey === 'side-by-side' ? shadowOf(1, 1) : shadowOf(0.6, 0.5)
+          shadow: vertical && curKey === 'stack' ? null : curKey === 'side-by-side' ? shadowOf(1, 1) : shadowOf(0.6, 0.5),
+          cutout
         }
       : null
 
   // fundo da tela na largura: o próprio vídeo, desfocado e escurecido
   let backdrop: SceneBackdrop | null = null
-  const wideWeight = (curKey === 'screen-wide' ? e : 0) + (p < 1 && prevKey === 'screen-wide' && prevKey !== curKey ? 1 - e : 0)
+  // o fundo desfocado do V-C também aparece embaixo da pessoa no V-D (a tela só ocupa a faixa de cima)
+  const hasBackdrop = (k: string): boolean => k === 'screen-wide' || (vertical && k === 'presenter')
+  const wideWeight = (hasBackdrop(curKey) ? e : 0) + (p < 1 && hasBackdrop(prevKey) && prevKey !== curKey ? 1 - e : 0)
   if (vertical && derived.screenSize && wideWeight > 0.002) {
     backdrop = { src: coverCrop(derived.screenSize, format.w / format.h), darken: 0.58, alpha: Math.min(1, wideWeight) }
   }
@@ -610,7 +677,7 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
       if (m) {
         // no vertical a posição padrão vem do layout (V-B: a emenda tela/câmera; tela na largura: 71%; senão 70%) e acompanha a
         // troca de layout, para a legenda não dar um salto no meio de uma página
-        const autoY = vertical ? lerp(verticalCaptionY(prevKey), verticalCaptionY(curKey), e) : undefined
+        const autoY = vertical ? lerp(verticalCaptionY(prevKey, style.presenter), verticalCaptionY(curKey, style.presenter), e) : undefined
         const rs = resolveCaptionStyle(project.captions, format, autoY)
         captions = {
           key: `${derived.captions.id}:${m.page.id}`,

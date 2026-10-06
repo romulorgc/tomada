@@ -298,6 +298,16 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     void useCamera.getState().analyze(detail.id, 'face')
   }, [detail.id, hasCamera, faceEngineReady])
 
+  // --- recorte do fundo (apresentador recortado) -------------------------------------------------------------------
+  const [matteUrl, setMatteUrl] = useState<string | null>(detail.analysis.matte)
+  useEffect(() => {
+    setMatteUrl(detail.analysis.matte)
+  }, [detail.analysis.matte])
+  const matteJob = useCamera((s) => s.jobs[cameraJobKey(detail.id, 'matte')])
+  useEffect(() => {
+    if (matteJob?.state === 'done' && matteJob.url) setMatteUrl(matteJob.url)
+  }, [matteJob])
+
   // --- cena -----------------------------------------------------------------------------------------------
   const format = useStore(store, (s) => s.format)
   const formatRef = useRef(format)
@@ -308,6 +318,15 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     () => (cursorData ? deriveProject(project, cursorData, format === 'vertical' ? VERTICAL_1080 : HORIZONTAL_1080, words, faceTrack) : null),
     [project, cursorData, format, words, faceTrack]
   )
+
+  // Algum trecho do formato aberto usa o apresentador recortado: pede o recorte do fundo (se o motor está pronto e ainda não existe). Volta na
+  // hora se o guardado vale para esta câmera; se já está na fila ou rodando, devolve o trabalho que existe.
+  const needsMatte = derived?.needsMatte ?? false
+  const matteEngineReady = useCamera((s) => s.view?.matte.state === 'ready')
+  useEffect(() => {
+    if (!hasCamera || !needsMatte || !matteEngineReady || matteUrl) return
+    void useCamera.getState().analyze(detail.id, 'matte')
+  }, [detail.id, hasCamera, needsMatte, matteEngineReady, matteUrl])
 
   // A prévia de um corte: o MESMO documento que a exportação desenha (os trechos do corte, o gancho dele, o layout e a legenda
   // dele), sempre no 9:16. A linha do tempo segue mostrando o vídeo inteiro.
@@ -329,8 +348,8 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
   // Espera a transcrição chegar (a escolha de layout usa onde há fala).
   useEffect(() => {
     if (format !== 'vertical' || !cursorData || transcript.status === 'loading') return
-    store.getState().changeDoc((doc) => ensureVertical(doc, cursorData, { durationMs, words, hasCursorEvents: Boolean(detail.events.cursor) }), { history: false })
-  }, [format, cursorData, transcript.status, words, durationMs, store, detail.events.cursor])
+    store.getState().changeDoc((doc) => ensureVertical(doc, cursorData, { durationMs, words, hasCursorEvents: Boolean(detail.events.cursor), hasMatte: Boolean(matteUrl) }), { history: false })
+  }, [format, cursorData, transcript.status, words, durationMs, store, detail.events.cursor, matteUrl])
 
   // Ao abrir um projeto que nunca teve zoom automático, gera os do preset padrão (uma vez; não entra no "desfazer").
   const generated = useRef(false)
@@ -397,6 +416,11 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenUrl, cameraUrl, playback])
+
+  // o vídeo do recorte do fundo anda com a câmera na prévia (liga e desliga sem refazer o motor)
+  useEffect(() => {
+    engineRef.current?.setMatte(matteUrl)
+  }, [matteUrl, engineGen])
 
   // trocar de formato muda a proporção da prévia
   useEffect(() => {
@@ -580,6 +604,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       transcript,
       reloadTranscript: loadTranscript,
       face,
+      matte: { url: matteUrl, needed: needsMatte },
       levels,
       text,
       exporter,
@@ -588,7 +613,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, store, playback, cursorData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, levels, text, exporter, clips, queue, aiUi]
+    [detail, store, playback, cursorData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatte, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (

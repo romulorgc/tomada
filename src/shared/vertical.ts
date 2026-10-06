@@ -5,9 +5,10 @@
  */
 import type { CursorData, FormatSpec } from './scene'
 import type { CursorGrid } from './cursor'
+import { PRESENTER, presenterScreenHeightV, resolvePresenter } from './styles'
 import { keptRanges } from './timeline'
 import { generateAutoZooms, zoomPresetFor, DEFAULT_VERTICAL_ZOOM_PRESET } from './zoom'
-import type { CaptionStyle, ClickEvent, Corner, KeyEvent, LayoutKind, LayoutSeg, Project, Range, Size, VerticalEdit, Word } from './types'
+import type { CaptionStyle, ClickEvent, Corner, KeyEvent, LayoutKind, LayoutSeg, PresenterStyle, Project, Range, Size, VerticalEdit, Word } from './types'
 
 // ---------------------------------------------------------------------------
 // Caixa segura e zonas das plataformas (px num quadro de 1080×1920)
@@ -77,8 +78,10 @@ export const CAPTION_Y_WIDE = 0.71
  * Onde a legenda do vertical fica (fração da altura) em cada layout, quando a pessoa não escolheu uma posição: em 70% (≈ y 1344);
  * na tela na largura, 71%; no V-B, na EMENDA tela/câmera quando ela cai entre 45% e 70% (3 de 5 canais com essa estrutura).
  */
-export function verticalCaptionY(layout: LayoutKind): number {
+export function verticalCaptionY(layout: LayoutKind, presenter?: PresenterStyle): number {
   if (layout === 'screen-wide') return CAPTION_Y_WIDE
+  // V-D (apresentador recortado): logo ACIMA da cabeça, sem cobrir o rosto (nos Shorts verdes medidos o centro da legenda fica de 3 a 12 pontos acima do topo da cabeça, mediana 4,5; ver `estudo/green-screen-2026-10-05.md`)
+  if (layout === 'presenter') return 1 - resolvePresenter(presenter).heightV - PRESENTER.captionGapV
   if (layout === 'stack') {
     const seam = STACK_SPLIT / VERTICAL_H
     return seam >= 0.45 && seam <= CAPTION_Y_VERTICAL ? seam : CAPTION_Y_VERTICAL
@@ -86,8 +89,8 @@ export function verticalCaptionY(layout: LayoutKind): number {
   return CAPTION_Y_VERTICAL
 }
 
-/** Layouts verticais (os que o formato 9:16 entende). */
-export const VERTICAL_LAYOUTS: readonly LayoutKind[] = ['screen-focus', 'stack', 'screen-wide', 'camera']
+/** Layouts verticais (os que o formato 9:16 entende). `presenter` (V-D) só vale com o recorte do fundo pronto. */
+export const VERTICAL_LAYOUTS: readonly LayoutKind[] = ['screen-focus', 'stack', 'screen-wide', 'presenter', 'camera']
 
 // ---------------------------------------------------------------------------
 // O recorte de cada layout
@@ -113,9 +116,19 @@ export function cropView(destAspect: number, screen: Size | null, heightFrac = 1
  *  - V-B: faixa larga de ~2×; metade da força do zoom (a base já é grande);
  *  - V-C: a tela inteira, sem seguir nada nem dar zoom (serve a interface grande).
  */
-export function layoutFollow(layout: LayoutKind, format: Pick<FormatSpec, 'kind' | 'w' | 'h'>, screen: Size | null): { view: View; gain: number } {
+export function layoutFollow(
+  layout: LayoutKind,
+  format: Pick<FormatSpec, 'kind' | 'w' | 'h'>,
+  screen: Size | null,
+  presenter?: PresenterStyle
+): { view: View; gain: number } {
   if (format.kind === 'horizontal') return { view: { w: 1, h: 1 }, gain: 1 }
   switch (layout) {
+    case 'presenter': {
+      // V-D: o recorte da tela ocupa só a faixa de cima (a pessoa fica por baixo): mais largo que o V-A e segue o cursor do mesmo jeito
+      const topH = presenterScreenHeightV(resolvePresenter(presenter))
+      return { view: cropView(format.w / (format.h * topH), screen, 1), gain: 1 }
+    }
     case 'stack':
       return { view: cropView(STACK_SCREEN.w / STACK_SCREEN.h, screen, STACK_VIEW_HEIGHT), gain: 0.5 }
     case 'screen-wide':
@@ -257,6 +270,8 @@ export type ActivityInput = {
   speech: readonly Range[] | null
   /** Os trechos que ficam no vídeo (sem os cortes). A permanência mínima conta só o que se vê; ausente = a gravação inteira. */
   kept?: readonly Range[]
+  /** O recorte do fundo da câmera existe (M4c): a fala sem atividade de tela vira V-D (apresentador) em vez de V-B (tela + câmera). */
+  hasMatte?: boolean
 }
 
 /** Onde há fala: as palavras de verdade, unidas quando a pausa entre elas é curta. */
@@ -379,7 +394,7 @@ export function autoVerticalLayouts(input: ActivityInput): LayoutSeg[] {
   const runs = enforceMinDwell(layoutRuns(stacks, input.durationMs), MIN_DWELL_MS, input.kept)
   return runs
     .filter((r) => r.on)
-    .map((r, i) => ({ id: `layout-v${i + 1}`, start: Math.round(r.start), end: Math.round(r.end), layout: 'stack' as const }))
+    .map((r, i) => ({ id: `layout-v${i + 1}`, start: Math.round(r.start), end: Math.round(r.end), layout: input.hasMatte ? ('presenter' as const) : ('stack' as const) }))
 }
 
 /**
@@ -390,7 +405,7 @@ export function autoVerticalLayouts(input: ActivityInput): LayoutSeg[] {
 export function ensureVertical(
   project: Project,
   data: Pick<CursorData, 'clicks' | 'keys' | 'grid'>,
-  opts: { durationMs: number; words?: readonly Word[] | null | undefined; hasCursorEvents?: boolean }
+  opts: { durationMs: number; words?: readonly Word[] | null | undefined; hasCursorEvents?: boolean; hasMatte?: boolean }
 ): Project {
   const v = project.vertical
   if (v && (v.zoomPreset !== undefined || v.zooms.length > 0 || v.layouts.length > 0)) return project
@@ -405,7 +420,8 @@ export function ensureVertical(
     keys: data.keys,
     cursor: data.grid,
     speech: speechRanges(opts.words),
-    kept: keptRanges(opts.durationMs, project.cuts)
+    kept: keptRanges(opts.durationMs, project.cuts),
+    ...(opts.hasMatte ? { hasMatte: true } : {})
   })
   return { ...project, vertical: { ...v, layout: v?.layout ?? 'screen-focus', layouts, zooms, ...(hasEvents ? { zoomPreset: DEFAULT_VERTICAL_ZOOM_PRESET } : {}) } }
 }

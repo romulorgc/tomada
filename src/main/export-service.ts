@@ -30,6 +30,7 @@ import {
 } from '@shared/export'
 import { EVENT_FILES } from '@shared/events'
 import { FACE_FILE } from '@shared/face'
+import { currentMatteUrl } from './camera/matte-file'
 import type { ExportJob, ExportProgress, ExportReport, ExportRequest, ExporterResult } from '@shared/ipc'
 import { mediaUrl } from '@shared/media-url'
 import { projectDurationMs } from '@shared/project'
@@ -602,7 +603,9 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
           keys: await eventUrl(request.projectId, dir, EVENT_FILES.keys)
         },
         // a análise do rosto (enquadramento da câmera): o exportador enquadra como a prévia
-        faceUrl: await eventUrl(request.projectId, dir, FACE_FILE)
+        faceUrl: await eventUrl(request.projectId, dir, FACE_FILE),
+        // o recorte do fundo (apresentador recortado): só o que vale para a câmera de agora
+        matteUrl: await currentMatteUrl(request.projectId, dir, project)
       }
       const now = deps.now()
       const run: Run = {

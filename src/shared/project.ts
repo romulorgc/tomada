@@ -64,7 +64,7 @@ const C = defaultCaptions()
 const rectSchema = z.looseObject({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
 const rangeSchema = z.looseObject({ start: z.number(), end: z.number() })
 
-const layoutKind = z.enum(['bubble', 'side-by-side', 'screen', 'camera', 'stack', 'screen-focus', 'screen-wide'])
+const layoutKind = z.enum(['bubble', 'side-by-side', 'screen', 'camera', 'stack', 'screen-focus', 'screen-wide', 'presenter'])
 
 const srcSchema = z.looseObject({
   path: z.string().min(1),
@@ -160,6 +160,16 @@ const styleSchema = z.looseObject({
   cursor: cursorStyleSchema.prefault({}),
   sideBySide: z
     .looseObject({ side: z.enum(['left', 'right']).optional(), ratio: z.enum(['portrait', 'square']).optional(), width: z.number().optional(), gap: z.number().optional() })
+    .optional(),
+  presenter: z
+    .looseObject({
+      side: z.enum(['left', 'right']).optional(),
+      height: z.number().optional(),
+      heightV: z.number().optional(),
+      outline: z.boolean().optional(),
+      outlineWidth: z.number().optional(),
+      shadow: z.boolean().optional()
+    })
     .optional()
 })
 
@@ -212,7 +222,7 @@ const clipSchema = z.looseObject({
   notes: z.looseObject({ hook: z.number(), flow: z.number(), value: z.number() }).optional(),
   reason: z.string().default(''),
   format: z.enum(['vertical', 'horizontal']).default('vertical'),
-  layoutV: z.enum(['auto', 'stack', 'screen-focus', 'screen-wide', 'camera']).default('auto'),
+  layoutV: z.enum(['auto', 'stack', 'screen-focus', 'screen-wide', 'camera', 'presenter']).default('auto'),
   captionStyle: captionStyleId.optional(),
   source: z.enum(['ai', 'heuristic', 'manual']).optional()
 })

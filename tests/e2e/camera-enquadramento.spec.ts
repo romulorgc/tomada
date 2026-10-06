@@ -100,6 +100,8 @@ test('ajuste à mão: aproximação, deslocamento, restaurar e desfazer; tudo no
   await page.getByTestId('tab-camera').click()
   await expect(page.getByTestId('face-status')).toHaveAttribute('data-state', 'found', { timeout: 20_000 })
   await expect(page.getByTestId('framing-reset')).toBeDisabled() // nada ajustado ainda
+  // "achado" chega antes de o editor ler o arquivo e redesenhar: espera o recorte automático (aproximado, pois o rosto é pequeno) aparecer na prévia
+  await expect.poll(async () => (await cropNow(page)).w).toBeLessThan(0.4)
 
   const base = await cropNow(page)
   await page.getByTestId('framing-zoom').fill('2')
@@ -234,7 +236,7 @@ test('sem o motor preparado: o painel oferece preparar; a preparação mostra o 
   await expect(page.getByTestId('camera-prepare-progress')).toBeVisible()
   // falha simulada (uma vez) no passo do modelo: erro à vista, com o passo, e o botão de tentar de novo
   await expect(page.getByTestId('camera-prepare-error')).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByTestId('camera-prepare-error')).toContainText('Detector de rosto')
+  await expect(page.getByTestId('camera-prepare-error')).toContainText('Modelos: rosto e recorte do fundo')
   await page.getByTestId('camera-prepare-retry').click()
   // terminou: o cartão de preparação some e o rosto é procurado sozinho (o editor estava aberto)
   await expect(page.getByTestId('camera-prepare')).toHaveCount(0, { timeout: 30_000 })
@@ -247,8 +249,9 @@ test('o motor desligado (padrão dos testes): o painel funciona e oferece prepar
   await openEditor(s)
   const { page } = s
   await page.getByTestId('tab-camera').click()
-  await expect(page.getByTestId('camera-prepare')).toBeVisible()
+  await expect(page.getByTestId('camera-prepare')).toBeVisible() // uma só caixa: o recorte do fundo usa o mesmo preparo
   await expect(page.getByTestId('camera-prepare')).toContainText('desligada')
+  await expect(page.getByTestId('matte-needs-prepare')).toBeVisible()
   // o resto do painel (aproximação, deslocamento) funciona sem a análise: recorte do centro + ajuste à mão
   await page.getByTestId('framing-zoom').fill('1.5')
   await expect.poll(async () => (await cropNow(page)).w).toBeGreaterThan(0)

@@ -15,7 +15,7 @@
  */
 import { drawCaptions, drawHook, type TextLayout } from './caption-render'
 import { backgroundKey, coverCrop, gradientEndpoints } from './styles'
-import type { Scene, SceneBackdrop, SceneCamera, SceneScreen, ShadowSpec } from './scene'
+import type { Scene, SceneBackdrop, SceneCamera, SceneCutout, SceneScreen, ShadowSpec } from './scene'
 import type { Background, Rect } from './types'
 
 // ---------------------------------------------------------------------------
@@ -85,7 +85,8 @@ export type CanvasFactory = (w: number, h: number) => CanvasLike
 
 /** Uma imagem de origem (frame decodificado, `<video>`, bitmap…) com o tamanho em px da fonte. */
 export type FrameSource = { image: unknown; w: number; h: number }
-export type FrameSet = { screen?: FrameSource | null; camera?: FrameSource | null }
+/** `matte` = o quadro da MÁSCARA do fundo da câmera (M4c): vídeo em tons de cinza, branco = a pessoa, no mesmo instante do quadro da câmera. */
+export type FrameSet = { screen?: FrameSource | null; camera?: FrameSource | null; matte?: FrameSource | null }
 
 // ---------------------------------------------------------------------------
 // Cache
@@ -545,9 +546,162 @@ function drawScreen(ctx: Ctx2D, cache: RenderCache, scene: Scene, s: SceneScreen
   )
 }
 
-function drawCamera(ctx: Ctx2D, cache: RenderCache, c: SceneCamera, frame: FrameSource | null | undefined): void {
-  if (c.shadow) drawShadow(ctx, cache, c.dest, c.radius, c.shadow, c.opacity)
-  drawCard(ctx, cache, 'camera', c.dest, c.radius, c.opacity, (lc, w, h) => drawSource(lc, frame, c.src, { x: 0, y: 0, w, h }, c.mirror))
+// ---------------------------------------------------------------------------
+// Apresentador recortado (M4c)
+//
+// A câmera (C) e a máscara (M, cinza: 1 = pessoa) viram o quadro SEM ler pixel de volta e sem canal alfa, só com modos de mistura do
+// Canvas 2D, que rodam na placa de vídeo. Sobre o quadro D já desenhado (fundo + tela):
+//     D' = D × (1 − M) + C × M
+// 'multiply' com (1 − M) apaga a silhueta e 'lighter' (soma) acrescenta a pessoa. O contorno branco é a MESMA conta com a silhueta
+// dilatada (M ampliada por vários deslocamentos, modo 'lighten') e a sombra é a silhueta borrada que escurece o que está atrás.
+
+/** Prepara uma camada de trabalho: transformação, mistura e suavização no estado de partida. */
+function prepLayer(lc: Ctx2D): void {
+  lc.setTransform(1, 0, 0, 1, 0, 0)
+  lc.globalAlpha = 1
+  lc.globalCompositeOperation = 'source-over'
+  lc.imageSmoothingEnabled = true
+  lc.imageSmoothingQuality = 'high'
+}
+
+function fillLayer(lc: Ctx2D, w: number, h: number, color: string): void {
+  prepLayer(lc)
+  lc.fillStyle = color
+  lc.fillRect(0, 0, w, h)
+}
+
+/** `out` = 1 − `from` (cinza): preenche de branco e subtrai com 'difference'. */
+function invertInto(out: CanvasLike, from: CanvasLike, w: number, h: number): void {
+  const oc = ctxOf(out)
+  fillLayer(oc, w, h, '#fff')
+  oc.globalCompositeOperation = 'difference'
+  oc.drawImage(from, 0, 0, w, h, 0, 0, w, h)
+  oc.globalCompositeOperation = 'source-over'
+}
+
+/** Borra um cinza descendo-o para uma camada menor e voltando (filtro bilinear). Barato e igual na prévia e na exportação. */
+function blurInto(cache: RenderCache, key: string, src: CanvasLike, w: number, h: number, factor: number): CanvasLike {
+  const sw = Math.max(2, Math.ceil(w / factor))
+  const sh = Math.max(2, Math.ceil(h / factor))
+  const small = layerFor(cache, `${key}-small`, sw, sh)
+  const sc = ctxOf(small)
+  fillLayer(sc, sw, sh, '#000')
+  sc.drawImage(src, 0, 0, w, h, 0, 0, sw, sh)
+  const big = layerFor(cache, key, w, h)
+  const bc = ctxOf(big)
+  fillLayer(bc, w, h, '#000')
+  bc.drawImage(small, 0, 0, sw, sh, 0, 0, w, h)
+  return big
+}
+
+/** O apresentador recortado: câmera × máscara por cima do quadro, com sombra e contorno opcionais. `weight` (0..1) é a troca de layout. */
+function drawCutout(ctx: Ctx2D, cache: RenderCache, c: SceneCamera, cut: SceneCutout, frame: FrameSource, matte: FrameSource): void {
+  const w = Math.max(1, Math.round(c.dest.w))
+  const h = Math.max(1, Math.round(c.dest.h))
+  const x = Math.round(c.dest.x)
+  const y = Math.round(c.dest.y)
+  // margem em volta da janela: cabem o contorno e a sombra (o que passa do quadro simplesmente não aparece)
+  const pad = Math.ceil(Math.max(cut.outline, cut.shadow ? cut.shadow.blur * 1.6 + Math.abs(cut.shadow.offsetY) : 0)) + 2
+  const lw = w + 2 * pad
+  const lh = h + 2 * pad
+  const at = { x: pad, y: pad, w, h }
+  const alpha = c.opacity * Math.max(0, Math.min(1, cut.weight))
+  if (alpha <= 0.002) return
+
+  // M: a máscara no recorte da câmera (a mesma janela e o mesmo espelho), levemente suavizada na borda
+  const M = layerFor(cache, 'cut-m', lw, lh)
+  const mc = ctxOf(M)
+  fillLayer(mc, lw, lh, '#000')
+  drawSource(mc, matte, c.src, at, c.mirror)
+  const soft = blurInto(cache, 'cut-soft', M, lw, lh, 2)
+  mc.globalCompositeOperation = 'source-over'
+  mc.drawImage(soft, 0, 0, lw, lh, 0, 0, lw, lh)
+
+  // C × M
+  const C = layerFor(cache, 'cut-c', lw, lh)
+  const cc = ctxOf(C)
+  fillLayer(cc, lw, lh, '#000')
+  drawSource(cc, frame, c.src, at, c.mirror)
+  cc.globalCompositeOperation = 'multiply'
+  cc.drawImage(M, 0, 0, lw, lh, 0, 0, lw, lh)
+  cc.globalCompositeOperation = 'source-over'
+
+  const dx = x - pad
+  const dy = y - pad
+  const prevAlpha = ctx.globalAlpha
+  const prevOp = ctx.globalCompositeOperation
+  const darken = (inv: CanvasLike, a: number): void => {
+    ctx.globalCompositeOperation = 'multiply'
+    ctx.globalAlpha = a
+    ctx.drawImage(inv, 0, 0, lw, lh, dx, dy, lw, lh)
+  }
+  const add = (layer: CanvasLike, a: number): void => {
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.globalAlpha = a
+    ctx.drawImage(layer, 0, 0, lw, lh, dx, dy, lw, lh)
+  }
+
+  // sombra: a silhueta borrada (e um pouco para baixo) escurece o que está atrás
+  if (cut.shadow && cut.shadow.opacity > 0) {
+    const factor = Math.max(2, Math.round(cut.shadow.blur / 2.2))
+    const blurred = blurInto(cache, 'cut-shadow', M, lw, lh, factor)
+    const F = layerFor(cache, 'cut-f', lw, lh)
+    const fc = ctxOf(F)
+    fillLayer(fc, lw, lh, '#fff')
+    fc.globalCompositeOperation = 'difference'
+    fc.globalAlpha = cut.shadow.opacity
+    fc.drawImage(blurred, 0, 0, lw, lh, 0, Math.round(cut.shadow.offsetY), lw, lh)
+    fc.globalAlpha = 1
+    fc.globalCompositeOperation = 'source-over'
+    darken(F, alpha)
+  }
+
+  // contorno branco de figurinha: a silhueta dilatada em 2 anéis (raio r e r/2), tudo em branco por trás da pessoa
+  if (cut.outline > 0.5) {
+    const D = layerFor(cache, 'cut-d', lw, lh)
+    const dc = ctxOf(D)
+    fillLayer(dc, lw, lh, '#000')
+    dc.globalCompositeOperation = 'lighten'
+    dc.drawImage(M, 0, 0, lw, lh, 0, 0, lw, lh)
+    for (const r of [cut.outline, cut.outline * 0.5]) {
+      const n = r === cut.outline ? 16 : 8
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2
+        dc.drawImage(M, 0, 0, lw, lh, Math.cos(a) * r, Math.sin(a) * r, lw, lh)
+      }
+    }
+    dc.globalCompositeOperation = 'source-over'
+    const ID = layerFor(cache, 'cut-di', lw, lh)
+    invertInto(ID, D, lw, lh)
+    darken(ID, alpha)
+    add(D, alpha)
+  }
+
+  // a pessoa: apaga a silhueta do quadro e soma a câmera × máscara
+  const I = layerFor(cache, 'cut-i', lw, lh)
+  invertInto(I, M, lw, lh)
+  darken(I, alpha)
+  add(C, alpha)
+
+  ctx.globalCompositeOperation = prevOp
+  ctx.globalAlpha = prevAlpha
+}
+
+function drawCamera(ctx: Ctx2D, cache: RenderCache, c: SceneCamera, frame: FrameSource | null | undefined, matte: FrameSource | null | undefined): void {
+  // sem a máscara (ainda processando) o apresentador sai como a janela da câmera inteira: a pessoa vê o enquadramento e o motivo está na tela
+  if (c.cutout && matte && matte.w > 0 && matte.h > 0 && frame && frame.w > 0 && frame.h > 0) {
+    // o cartão da câmera some enquanto o recorte aparece (a troca de layout); no resto do tempo só há o recorte
+    const cardOpacity = c.opacity * (1 - Math.max(0, Math.min(1, c.cutout.weight)))
+    if (cardOpacity > 0.002) drawCameraCard(ctx, cache, c, frame, cardOpacity)
+    drawCutout(ctx, cache, c, c.cutout, frame, matte)
+    return
+  }
+  drawCameraCard(ctx, cache, c, frame, c.opacity)
+}
+
+function drawCameraCard(ctx: Ctx2D, cache: RenderCache, c: SceneCamera, frame: FrameSource | null | undefined, opacity: number): void {
+  if (c.shadow) drawShadow(ctx, cache, c.dest, c.radius, c.shadow, opacity)
+  drawCard(ctx, cache, 'camera', c.dest, c.radius, opacity, (lc, w, h) => drawSource(lc, frame, c.src, { x: 0, y: 0, w, h }, c.mirror))
   if (c.border && c.border.width > 0) {
     // borda por dentro do cartão, traço antialiased (nada de clip)
     const bw = c.border.width
@@ -556,7 +710,7 @@ function drawCamera(ctx: Ctx2D, cache: RenderCache, c: SceneCamera, frame: Frame
     const w = Math.max(1, Math.round(c.dest.w))
     const h = Math.max(1, Math.round(c.dest.h))
     const prev = ctx.globalAlpha
-    ctx.globalAlpha = prev * c.opacity
+    ctx.globalAlpha = prev * opacity
     roundedRectPath(ctx, x + bw / 2, y + bw / 2, w - bw, h - bw, Math.max(0, c.radius - bw / 2))
     ctx.strokeStyle = c.border.color
     ctx.lineWidth = bw
@@ -612,7 +766,7 @@ export function renderFrame(ctx: Ctx2D, scene: Scene, frames: FrameSet, cache: R
   if (scene.backdrop) drawBackdrop(ctx, cache, scene.backdrop, frames.screen, w, h)
 
   if (scene.screen) drawScreen(ctx, cache, scene, scene.screen, frames.screen)
-  if (scene.camera) drawCamera(ctx, cache, scene.camera, frames.camera)
+  if (scene.camera) drawCamera(ctx, cache, scene.camera, frames.camera, frames.matte)
   if (scene.hook) drawHook(ctx, cache, scene.hook)
   if (scene.captions) drawCaptions(ctx, cache, scene.captions)
   cache.stats.frames++

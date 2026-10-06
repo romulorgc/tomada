@@ -5,7 +5,10 @@
  */
 import { FACE_TRACK_VERSION, type FaceBox, type FaceTrack } from '@shared/face'
 import type { PrepareTracker } from '../transcription/prepare-tracker'
-import type { CameraEngine, CameraCheck, DetectFacesOptions } from './types'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { runProcess } from '../process-runner'
+import type { CameraEngine, CameraCheck, DetectFacesOptions, MakeMatteOptions, MatteResult } from './types'
 
 export type MockCameraOptions = {
   ready: boolean
@@ -18,6 +21,29 @@ export type MockCameraOptions = {
   to?: number
   /** O rosto sintético some (nenhuma detecção): prova a mensagem "não achei um rosto". */
   noFace?: boolean
+  /** O ffmpeg: com ele a máscara de teste é um VÍDEO de verdade (a silhueta de uma pessoa); sem ele, um arquivo qualquer. */
+  ffmpeg?: () => string | null
+  /** A máscara de teste falha uma vez (prova a mensagem e o "tentar de novo"). */
+  failMatte?: boolean
+  /** O fps e o tamanho da máscara de teste (o da câmera do projeto de exemplo: 30 qps, 640×360). */
+  matteFps?: number
+  matteSize?: { w: number; h: number }
+}
+
+/**
+ * A silhueta de teste: uma cabeça (elipse) sobre ombros e tronco (elipse maior que passa da borda de baixo), em branco sobre preto, com a
+ * borda suavizada. Determinística: é a máscara "conhecida" dos goldens e dos testes de pixel.
+ */
+export const MOCK_SILHOUETTE = {
+  head: { cx: 0.5, cy: 0.3, rx: 0.09, ry: 0.2 },
+  body: { cx: 0.5, cy: 1.1, rx: 0.3, ry: 0.7 }
+} as const
+
+export function silhouetteFilter(w: number, fps = 30): string {
+  const s = MOCK_SILHOUETTE
+  const e = (o: { cx: number; cy: number; rx: number; ry: number }): string => `lte(pow((X-W*${o.cx})/(W*${o.rx}),2)+pow((Y-H*${o.cy})/(H*${o.ry}),2),1)`
+  // um quadro só (a silhueta não muda) repetido pelo filtro loop: o geq por pixel em todos os quadros levaria dezenas de segundos
+  return `geq=lum='255*max(${e(s.head)},${e(s.body)})':cb=128:cr=128,gblur=sigma=${Math.max(1, (w / 640) * 1.4).toFixed(2)},format=yuv420p,loop=loop=-1:size=1:start=0,fps=${fps}`
 }
 
 export const MOCK_FACE = { w: 0.14, h: 0.3, cy: 0.42, sampleMs: 200 } as const
@@ -38,6 +64,7 @@ export function syntheticFaceTrack(durationMs: number, from = 0.32, to = 0.68, n
 export function createMockCamera(opts: MockCameraOptions): CameraEngine {
   let ready = opts.ready
   let failed = false
+  let matteFailed = false
   const missing = 'A análise da câmera ainda não foi preparada neste computador.'
   return {
     id: 'mock',
@@ -83,6 +110,34 @@ export function createMockCamera(opts: MockCameraOptions): CameraEngine {
       }
       o.onProgress?.(1)
       return syntheticFaceTrack(o.durationMs, opts.from, opts.to, opts.noFace)
+    },
+    async makeMatte(o: MakeMatteOptions): Promise<MatteResult> {
+      const fps = opts.matteFps ?? 30
+      const size = opts.matteSize ?? { w: 640, h: 360 }
+      const seconds = Math.max(0.1, o.durationMs / 1000)
+      if (opts.delayMs) {
+        const steps = 5
+        for (let i = 1; i <= steps; i++) {
+          if (o.signal?.aborted) throw new Error('Cancelado.')
+          await new Promise((r) => setTimeout(r, opts.delayMs! / steps))
+          o.onProgress?.(i / (steps + 1))
+        }
+      }
+      if (opts.failMatte && !matteFailed) {
+        matteFailed = true
+        throw new Error('Falha simulada no recorte do fundo (TOMADA_TEST_MATTE_FAIL).')
+      }
+      await mkdir(dirname(o.out), { recursive: true })
+      const ffmpeg = opts.ffmpeg?.() ?? null
+      if (ffmpeg) {
+        const args = ['-v', 'error', '-y', '-f', 'lavfi', '-i', `color=c=black:s=${size.w}x${size.h}:r=${fps}:d=${(1 / fps).toFixed(4)}`, '-vf', silhouetteFilter(size.w, fps), '-t', seconds.toFixed(3)]
+        args.push('-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '14', '-pix_fmt', 'yuv420p', '-g', String(fps), '-movflags', '+faststart', o.out)
+        await runProcess(ffmpeg, args, { timeoutMs: 120_000, ...(o.signal ? { signal: o.signal } : {}) })
+      } else {
+        await writeFile(o.out, 'mascara de teste (sem ffmpeg)')
+      }
+      o.onProgress?.(1)
+      return { engine: 'teste', device: 'teste', frames: Math.round(seconds * fps), fps, frame: size, seconds: 0, msPerFrame: 0 }
     }
   }
 }

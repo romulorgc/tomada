@@ -7,6 +7,8 @@
  * modelo do detector de rosto, em revisão fixa, com tamanho e SHA-256 conferidos aqui).
  *
  * Detector de rosto: YuNet (OpenCV Zoo, licença MIT), 232 KB, roda no processador a dezenas de vezes o tempo real.
+ * Recorte do fundo: RobustVideoMatting (licença GPL-3.0: aceitável para uso pessoal, registrado no README) em ONNX, na placa de vídeo
+ * pelo `onnxruntime-gpu` (o ffmpeg do app grava o vídeo da máscara).
  */
 import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
@@ -15,11 +17,11 @@ import { writeFileAtomic } from '../fs-utils'
 import type { Logger } from '../logger'
 import { ProcessError, runProcess, tail } from '../process-runner'
 import { downloadFile, DownloadError } from '../transcription/download'
-import { explain, FW_PIP_INDEX, parsePipDownloadLine, parsePipProgressLine, venvPython } from '../transcription/faster-whisper'
+import { detectNvidiaGpu, explain, FW_CUDA_PACKAGES, FW_PIP_INDEX, parsePipDownloadLine, parsePipProgressLine, venvPython } from '../transcription/faster-whisper'
 import { bytesLine, type PrepareTracker, type StepSpec } from '../transcription/prepare-tracker'
 import { locatePython, type PythonFound } from '../transcription/python-locator'
 import type { ToolPaths } from '../transcription/tools-dir'
-import type { CameraCheck, CameraEngine, DetectFacesOptions } from './types'
+import type { CameraCheck, CameraEngine, DetectFacesOptions, MakeMatteOptions, MatteResult } from './types'
 
 export const CAMERA_ENGINE_ID = 'python' as const
 /** Pasta dos modelos da câmera, dentro de `models/` das ferramentas. */
@@ -31,14 +33,32 @@ export const YUNET_FILE = {
   sha256: '8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4',
   url: 'https://github.com/opencv/opencv_zoo/raw/f12e12798e8314f7c074a6656816c048dcc95b7a/models/face_detection_yunet/face_detection_yunet_2023mar.onnx'
 } as const
+/**
+ * O modelo do recorte do fundo: RobustVideoMatting ResNet50 em ONNX (fp32), versão FIXA (tag v1.0.0), com tamanho e SHA-256 conferidos
+ * aqui. Medido na gravação real do usuário na RTX 3050 (ver README, "Recorte do fundo"). Licença GPL-3.0 (uso pessoal: registrado).
+ */
+export const MATTE_MODEL = {
+  id: 'rvm-resnet50',
+  name: 'rvm_resnet50_fp32.onnx',
+  size: 107_479_165,
+  sha256: '25db300fcb6ee27f941a1b52c97856e8d1f13c7f35817f81a612f89af0e8a85c',
+  url: 'https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_resnet50_fp32.onnx'
+} as const
 /** O GitHub serve os arquivos grandes (LFS) por `media.githubusercontent.com`. */
 export const CAMERA_DOWNLOAD_HOSTS = ['github.com', 'githubusercontent.com'] as const
 export const CAMERA_PACKAGES = ['opencv-python-headless>=4.9,<5', 'av>=12'] as const
-/** Estimativa do que o pip baixa (opencv ~39 MB, av ~30 MB), para a barra de progresso. */
-const PIP_ESTIMATE_BYTES = 80_000_000
+/** O recorte do fundo roda no onnxruntime: o da placa NVIDIA (com as rodas CUDA da transcrição, que já costumam estar lá) ou o do processador. */
+export const MATTE_PACKAGES_GPU = ['onnxruntime-gpu>=1.20,<2', ...FW_CUDA_PACKAGES] as const
+export const MATTE_PACKAGES_CPU = ['onnxruntime>=1.20,<2'] as const
+/** Estimativa do que o pip baixa (opencv ~39 MB, av ~30 MB, onnxruntime-gpu ~280 MB), para a barra de progresso. */
+const PIP_ESTIMATE_BYTES = 360_000_000
 /** De quanto em quanto tempo o detector olha a imagem (ms): 5 por segundo bastam para um rosto que fala. */
 export const FACE_SAMPLE_MS = 200
 const MARKER_VERSION = 1
+/** A máscara é calculada e gravada numa imagem de no máximo isto (px, lado maior): a de 1080p custa o dobro e a borda sai igual. */
+export const MATTE_MAX_SIDE = 1280
+/** Qualidade do vídeo da máscara (x264 crf; baixo = mais fiel). */
+export const MATTE_CRF = 14
 
 export const CAMERA_STEPS: readonly StepSpec[] = [
   { id: 'python', weight: 2 },
@@ -47,7 +67,17 @@ export const CAMERA_STEPS: readonly StepSpec[] = [
   { id: 'check', weight: 5 }
 ]
 
-type Marker = { version: number; python: string; opencv: string; av: string; completedAt: string }
+type Marker = {
+  version: number
+  python: string
+  opencv: string
+  av: string
+  completedAt: string
+  /** O recorte do fundo (M4c): versão do onnxruntime, provedores e a placa; ausente = preparado só com o rosto. */
+  onnxruntime?: string
+  providers?: string[]
+  gpu?: string | null
+}
 
 export type PythonCameraDeps = {
   tools: ToolPaths
@@ -58,11 +88,16 @@ export type PythonCameraDeps = {
   /** Para os testes. */
   locate?: () => Promise<PythonFound>
   now?: () => Date
+  /** O ffmpeg do app (grava o vídeo da máscara). `null` = não achei. */
+  ffmpeg?: () => string | null
+  /** A placa NVIDIA (para os testes). */
+  detectGpu?: () => Promise<{ name: string } | null>
 }
 
 const markerFile = (t: ToolPaths): string => join(t.state, 'camera.json')
 export const cameraModelDir = (t: ToolPaths): string => join(t.models, CAMERA_MODEL_DIR)
 export const yunetPath = (t: ToolPaths): string => join(cameraModelDir(t), YUNET_FILE.name)
+export const mattePath = (t: ToolPaths): string => join(cameraModelDir(t), MATTE_MODEL.name)
 
 async function exists(path: string, size?: number): Promise<boolean> {
   try {
@@ -98,7 +133,12 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
     const face = (await exists(yunetPath(tools), YUNET_FILE.size))
       ? ({ state: 'ready', detail: null } as const)
       : ({ state: 'missing', detail: 'Falta o modelo que acha o rosto. Prepare de novo para baixar.' } as const)
-    return { face, matte: { ...off, detail: 'O recorte do fundo ainda não está disponível.' }, device: null }
+    const matteMissing = 'O recorte do fundo ainda não está preparado. Prepare para instalar o modelo e a execução na placa de vídeo.'
+    const matte: CameraCheck['matte'] =
+      marker.onnxruntime && (await exists(mattePath(tools), MATTE_MODEL.size))
+        ? { state: 'ready', detail: marker.providers?.includes('CUDAExecutionProvider') ? null : 'Sem placa de vídeo compatível: o recorte do fundo vai rodar no processador (bem mais devagar).' }
+        : { state: 'missing', detail: matteMissing }
+    return { face, matte, device: marker.providers?.includes('CUDAExecutionProvider') ? (marker.gpu ?? 'Placa NVIDIA') : null }
   }
 
   /** Roda `pip install` lendo o progresso (`--progress-bar raw`). */
@@ -193,8 +233,9 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
       // --- 2. pacotes (pip, só do PyPI) ----------------------------------------------------------------------------
       current = 'packages'
       tracker.begin('packages', 'Instalando os pacotes da análise da câmera…')
-      await pip([...CAMERA_PACKAGES], tracker, signal, 'Instalando')
-      tracker.done('packages', 'OpenCV e leitura de vídeo')
+      const gpu = await (deps.detectGpu ?? ((): Promise<{ name: string } | null> => detectNvidiaGpu()))()
+      await pip([...CAMERA_PACKAGES, ...(gpu ? MATTE_PACKAGES_GPU : MATTE_PACKAGES_CPU)], tracker, signal, 'Instalando')
+      tracker.done('packages', gpu ? `OpenCV, leitura de vídeo e onnxruntime na placa ${gpu.name}` : 'OpenCV, leitura de vídeo e onnxruntime (processador)')
       if (signal.aborted) throw new DownloadError('Cancelado.', false)
 
       // --- 3. modelo do detector de rosto (revisão fixa, com tamanho e SHA-256) -------------------------------------
@@ -209,15 +250,43 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
           onNote: (m) => tracker.note(m)
         }
       )
-      tracker.done('model', 'YuNet conferido')
+      tracker.progress('model', 0.5, 'Baixando o modelo do recorte do fundo…')
+      await downloadFile(
+        { url: MATTE_MODEL.url, dest: mattePath(tools), allowedHosts: CAMERA_DOWNLOAD_HOSTS, size: MATTE_MODEL.size, sha256: MATTE_MODEL.sha256 },
+        {
+          ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+          signal,
+          onProgress: (p) => tracker.progress('model', 0.5 + (0.5 * p.received) / MATTE_MODEL.size, `Baixando ${MATTE_MODEL.name} · ${bytesLine(p.received, MATTE_MODEL.size)}`),
+          onNote: (m) => tracker.note(m)
+        }
+      )
+      tracker.done('model', 'YuNet e RVM conferidos')
 
       // --- 4. conferência: o ambiente enxerga o OpenCV e o detector? ---------------------------------------------------
       current = 'check'
       tracker.begin('check', 'Conferindo a análise da câmera…')
       const { stdout } = await runProcess(venvPython(tools), [deps.scriptPath, '--check'], { signal, timeoutMs: 180_000, env: { PYTHONUTF8: '1' } })
-      const info = JSON.parse(stdout.trim().split(/\r?\n/).pop() ?? '{}') as { python?: string; opencv?: string; av?: string; yunet?: boolean }
+      const info = JSON.parse(stdout.trim().split(/\r?\n/).pop() ?? '{}') as {
+        python?: string
+        opencv?: string
+        av?: string
+        yunet?: boolean
+        onnxruntime?: string | null
+        providers?: string[]
+        onnxruntimeError?: string
+      }
       if (!info.yunet) throw new Error('O OpenCV deste computador não tem o detector de rosto (FaceDetectorYN). Tente de novo.')
-      const marker: Marker = { version: MARKER_VERSION, python: info.python ?? pythonVersion, opencv: info.opencv ?? '?', av: info.av ?? '?', completedAt: now().toISOString() }
+      if (!info.onnxruntime) throw new Error(`O onnxruntime não abriu neste computador (${info.onnxruntimeError ?? 'motivo desconhecido'}). Tente de novo.`)
+      const marker: Marker = {
+        version: MARKER_VERSION,
+        python: info.python ?? pythonVersion,
+        opencv: info.opencv ?? '?',
+        av: info.av ?? '?',
+        completedAt: now().toISOString(),
+        onnxruntime: info.onnxruntime,
+        providers: info.providers ?? [],
+        gpu: gpu?.name ?? null
+      }
       await writeFileAtomic(markerFile(tools), `${JSON.stringify(marker, null, 2)}\n`)
       tracker.done('check', `OpenCV ${marker.opencv}`)
       logger.info(`Análise da câmera preparada (OpenCV ${marker.opencv}, PyAV ${marker.av}).`)
@@ -274,5 +343,58 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
     return parseFaceTrack(JSON.stringify({ ...json, version: FACE_TRACK_VERSION, createdAt: now().toISOString() }))
   }
 
-  return { id: CAMERA_ENGINE_ID, prepareSteps: CAMERA_STEPS, check, prepare, detectFaces }
+  async function makeMatte(o: MakeMatteOptions): Promise<MatteResult> {
+    if (!isAbsolute(o.video) || o.video.startsWith('-') || !isAbsolute(o.out) || o.out.startsWith('-')) throw new Error('Caminho inválido para o recorte do fundo.')
+    const state = await check()
+    if (state.matte.state !== 'ready') throw new Error(state.matte.detail ?? 'O recorte do fundo não está preparado.')
+    const ffmpeg = deps.ffmpeg?.() ?? null
+    if (!ffmpeg) throw new Error('Não achei o ffmpeg, que grava o vídeo do recorte do fundo. Aponte o ffmpeg nos Ajustes.')
+    const request = JSON.stringify({ mode: 'matte', video: o.video, out: o.out, model: mattePath(tools), ffmpeg, maxSide: MATTE_MAX_SIDE, crf: MATTE_CRF })
+    let buffer = ''
+    const onStderr = (text: string): void => {
+      buffer += text
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        const m = /^PROGRESS\s+([\d.]+)/.exec(line)
+        if (m) o.onProgress?.(Math.min(1, Math.max(0, Number(m[1]))))
+      }
+    }
+    let stdout: string
+    try {
+      ;({ stdout } = await runProcess(venvPython(tools), [deps.scriptPath], {
+        stdin: request,
+        ...(o.signal ? { signal: o.signal } : {}),
+        // folga larga: na placa roda perto do tempo real; no processador pode levar muitas vezes a duração da gravação
+        timeoutMs: Math.max(30 * 60_000, o.durationMs * 12 + 10 * 60_000),
+        env: { PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
+        onStderr
+      }))
+    } catch (err) {
+      if (err instanceof ProcessError && err.reason === 'exit') {
+        const why = /ERRO: .*/.exec(err.stderr)?.[0] ?? tail(err.stderr, 4)
+        throw new Error(`O recorte do fundo falhou: ${why || err.message}`)
+      }
+      throw err
+    }
+    let json: { engine?: string; device?: string; frames?: number; fps?: number; frame?: { w?: number; h?: number }; stats?: { seconds?: number; msPerFrame?: number } }
+    try {
+      json = JSON.parse(stdout) as typeof json
+    } catch {
+      throw new Error('O recorte do fundo devolveu algo que não é JSON.')
+    }
+    if (!json.frames || json.frames <= 0 || !json.fps || !json.frame?.w || !json.frame.h) throw new Error('O recorte do fundo terminou sem quadros.')
+    o.onProgress?.(1)
+    return {
+      engine: MATTE_MODEL.id,
+      device: json.device ?? 'cpu',
+      frames: json.frames,
+      fps: json.fps,
+      frame: { w: json.frame.w, h: json.frame.h },
+      seconds: json.stats?.seconds ?? 0,
+      msPerFrame: json.stats?.msPerFrame ?? 0
+    }
+  }
+
+  return { id: CAMERA_ENGINE_ID, prepareSteps: CAMERA_STEPS, check, prepare, detectFaces, makeMatte }
 }

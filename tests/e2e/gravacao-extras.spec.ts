@@ -249,3 +249,29 @@ test('as escolhas da tela Gravar (modo e quadros por segundo) voltam na próxima
   await expect(s.page.getByTestId('fps-60')).toHaveAttribute('aria-pressed', 'true')
   await expect(s.page.getByTestId('mode-screen-camera')).toHaveAttribute('aria-pressed', 'false')
 })
+
+test('moldura-guia na prévia da câmera: aparece com a dica, só na prévia, e desliga e volta pelo ajuste', async () => {
+  test.setTimeout(90_000)
+  s = await launchTomada({ seed: false, env: AUTO })
+  const { page } = s
+  await page.getByTestId('nav-record').click()
+  await expect(page.getByTestId('camera-preview')).toHaveAttribute('data-live', 'true', { timeout: 20_000 })
+  const guide = page.getByTestId('framing-guide')
+  await expect(guide).toBeVisible()
+  await expect(guide).toContainText('tronco e as mãos')
+  await expect(guide).toContainText('luz de frente')
+  // a moldura é só da prévia: o vídeo gravado e a bolha não a têm
+  await expect(page.getByTestId('camera-preview').locator('video')).toHaveCount(1)
+  await shot(page, 'gravar-moldura-guia')
+
+  await page.getByText('Ajustes do som e da bolha').click()
+  await page.getByTestId('guide-toggle').click()
+  await expect(guide).toHaveCount(0)
+  await page.getByTestId('guide-toggle').click()
+  await expect(guide).toBeVisible()
+
+  // só tela: sem câmera não há prévia nem ajuste da moldura
+  await page.getByTestId('mode-screen').click()
+  await expect(page.getByTestId('guide-toggle')).toHaveCount(0)
+  await expect(guide).toHaveCount(0)
+})

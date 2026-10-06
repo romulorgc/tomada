@@ -1,11 +1,12 @@
 /**
  * Aba CÂMERA: mostrar/esconder, o ENQUADRAMENTO DO ROSTO (o recorte acompanha o rosto; aproximação e deslocamento à mão; também dá
- * para arrastar dentro da câmera na prévia), a câmera AO LADO da tela (lado, formato, largura e espaço), forma, tamanho, posição
+ * para arrastar dentro da câmera na prévia), a câmera AO LADO da tela (lado, formato, largura e espaço), o APRESENTADOR RECORTADO
+ * (o recorte do fundo, o canto, a altura da pessoa, contorno e sombra), forma, tamanho, posição
  * (grade 3×3; também dá para arrastar a bolha na prévia), borda, espelhar e "encolher durante o zoom".
  */
 import { MANUAL_ZOOM, MANUAL_OFFSET_MAX, resolveFraming } from '@shared/face'
-import { SIDE_GAP, SIDE_WIDTH, CAMERA_CORNERS, resolveSideBySide } from '@shared/styles'
-import type { CameraFraming, CameraStyle, Corner, SideBySideStyle } from '@shared/types'
+import { PRESENTER, SIDE_GAP, SIDE_WIDTH, CAMERA_CORNERS, resolvePresenter, resolveSideBySide } from '@shared/styles'
+import type { CameraFraming, CameraStyle, Corner, PresenterStyle, SideBySideStyle } from '@shared/types'
 import { cameraJobKey, isCameraJobActive, useCamera } from '../../camera-store'
 import { CameraPrepare } from '../../components/CameraPrepare'
 import { CameraIcon, ShapeCircleIcon, ShapeRoundedIcon, ShapeSquareIcon } from '../../components/Icons'
@@ -16,6 +17,7 @@ import { useDoc, useEditor } from '../context'
 const T = t.editor.camera
 const F = T.framing
 const S = T.side
+const P = T.presenter
 
 /** O estado da análise do rosto: preparar o motor, procurando, achado, não achado, ou o erro com o "tentar de novo". */
 function FaceStatus() {
@@ -76,11 +78,82 @@ function FaceStatus() {
   )
 }
 
+/** O estado do recorte do fundo: preparar o motor, recortando (com o andamento), pronto, ainda não feito, ou o erro com o "tentar de novo". */
+function MatteStatus() {
+  const { detail, matte } = useEditor()
+  const view = useCamera((s) => s.view)
+  const job = useCamera((s) => s.jobs[cameraJobKey(detail.id, 'matte')])
+  const analyze = useCamera((s) => s.analyze)
+  const cancel = useCamera((s) => s.cancel)
+  const pct = Math.round((job?.fraction ?? 0) * 100)
+
+  if (isCameraJobActive(job)) {
+    return (
+      <div className="cam-status" data-testid="matte-status" data-state={job!.state}>
+        <p className="ctl-note" aria-live="polite">
+          {job!.state === 'queued' ? P.status.queued : P.status.running(pct)}
+        </p>
+        <div className="meter" role="progressbar" aria-label={P.status.running(pct)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+          <i style={{ width: `${pct}%` }} />
+        </div>
+        <button type="button" className="btn btn-ghost" onClick={() => void cancel(detail.id, 'matte')} data-testid="matte-cancel">
+          {P.status.cancel}
+        </button>
+      </div>
+    )
+  }
+  if (job?.state === 'error') {
+    return (
+      <div className="cam-status" role="alert" data-testid="matte-status" data-state="error">
+        <p className="ctl-note">
+          {P.status.failed}
+          {job.error ? `: ${job.error}` : ''}
+        </p>
+        <button type="button" className="btn" onClick={() => void analyze(detail.id, 'matte')} data-testid="matte-retry">
+          {P.status.retry}
+        </button>
+      </div>
+    )
+  }
+  if (matte.url) {
+    const cpu = view && view.matte.state === 'ready' && view.matte.detail
+    return (
+      <div className="cam-status" data-testid="matte-status" data-state="ready">
+        <p className="ctl-note">{P.status.ready}</p>
+        {cpu ? <p className="ctl-note">{view.matte.detail}</p> : null}
+        <button type="button" className="btn btn-ghost" onClick={() => void analyze(detail.id, 'matte')} data-testid="matte-redo">
+          {P.status.redo}
+        </button>
+      </div>
+    )
+  }
+  if (view && view.matte.state !== 'ready') {
+    // o preparo do rosto e o do recorte são UM só (mesmo ambiente, mesmos pacotes): enquanto o do rosto ainda aparece no alto da aba, não há segunda caixa
+    if (view.face.state !== 'ready') {
+      return (
+        <p className="ctl-note" data-testid="matte-needs-prepare">
+          {P.needsPrepareAbove}
+        </p>
+      )
+    }
+    return <CameraPrepare feature="matte" explain={P.needsPrepare} />
+  }
+  return (
+    <div className="cam-status" data-testid="matte-status" data-state="missing">
+      <p className="ctl-note">{P.status.missing}</p>
+      <button type="button" className="btn" onClick={() => void analyze(detail.id, 'matte')} data-testid="matte-start">
+        {P.status.start}
+      </button>
+    </div>
+  )
+}
+
 export function CameraPanel() {
   const { store, hasCamera } = useEditor()
   const cam = useDoc((s) => s.project.style.camera)
   const layout = useDoc((s) => s.project.style.defaultLayout)
   const sideBySide = useDoc((s) => s.project.style.sideBySide)
+  const presenterStyle = useDoc((s) => s.project.style.presenter)
   const vertical = useDoc((s) => s.format === 'vertical')
 
   if (!hasCamera) {
@@ -110,11 +183,16 @@ export function CameraPanel() {
   const editSide = (patch: Partial<SideBySideStyle>, coalesce?: string): void => {
     store.getState().change((p) => ({ ...p, style: { ...p.style, sideBySide: { ...p.style.sideBySide, ...patch } } }), coalesce ? { coalesce } : undefined)
   }
+  const editPresenter = (patch: Partial<PresenterStyle>, coalesce?: string): void => {
+    store.getState().change((p) => ({ ...p, style: { ...p.style, presenter: { ...p.style.presenter, ...patch } } }), coalesce ? { coalesce } : undefined)
+  }
   const off = cam.hidden
   const framing = resolveFraming(cam.framing)
   const hasManual = cam.framing !== undefined && (cam.framing.zoom !== undefined || cam.framing.dx !== undefined || cam.framing.dy !== undefined || cam.framing.auto === false)
   const side = resolveSideBySide(sideBySide)
   const sideActive = layout === 'side-by-side'
+  const presenter = resolvePresenter(presenterStyle)
+  const presenterActive = layout === 'presenter'
 
   return (
     <div className="panel" data-testid="camera-panel">
@@ -191,6 +269,66 @@ export function CameraPanel() {
             <Slider label={S.gap} value={side.gap} min={SIDE_GAP.min} max={SIDE_GAP.max} step={0.002} testId="side-gap" disabled={off} format={S.percent} onChange={(v) => editSide({ gap: v }, 'side-gap')} />
           </Section>
         ) : null}
+
+        <Section title={P.title} testId="camera-presenter">
+          <p className="ctl-note">{P.help}</p>
+          {!presenterActive ? (
+            <p className="ctl-note" data-testid="presenter-inactive">
+              {P.notActive}
+            </p>
+          ) : null}
+          <MatteStatus />
+          {!vertical ? (
+            <Segmented<'left' | 'right'>
+              label={P.side}
+              value={presenter.side}
+              onChange={(v) => editPresenter({ side: v })}
+              options={[
+                { value: 'left', label: P.sides.left, disabled: off, testId: 'presenter-left' },
+                { value: 'right', label: P.sides.right, disabled: off, testId: 'presenter-right' }
+              ]}
+            />
+          ) : null}
+          {vertical ? (
+            <Slider
+              label={P.height}
+              value={presenter.heightV}
+              min={PRESENTER.heightV.min}
+              max={PRESENTER.heightV.max}
+              step={0.005}
+              testId="presenter-height"
+              disabled={off}
+              format={P.percent}
+              onChange={(v) => editPresenter({ heightV: v }, 'presenter-height')}
+            />
+          ) : (
+            <Slider
+              label={P.height}
+              value={presenter.height}
+              min={PRESENTER.height.min}
+              max={PRESENTER.height.max}
+              step={0.005}
+              testId="presenter-height"
+              disabled={off}
+              format={P.percent}
+              onChange={(v) => editPresenter({ height: v }, 'presenter-height')}
+            />
+          )}
+          <Toggle label={P.outline} hint={P.outlineHint} checked={presenter.outline} testId="presenter-outline" disabled={off} onChange={(v) => editPresenter({ outline: v })} />
+          <Slider
+            label={P.outlineWidth}
+            value={presenter.outlineWidth}
+            min={PRESENTER.outline.min}
+            max={PRESENTER.outline.max}
+            step={1}
+            testId="presenter-outline-width"
+            disabled={off || !presenter.outline}
+            format={(v) => `${Math.round(v)} px`}
+            onChange={(v) => editPresenter({ outlineWidth: v }, 'presenter-outline-width')}
+          />
+          <Toggle label={P.shadow} checked={presenter.shadow} testId="presenter-shadow" disabled={off} onChange={(v) => editPresenter({ shadow: v })} />
+          <p className="ctl-note">{P.mirrorHint}</p>
+        </Section>
 
         <Section title={T.shape}>
           <Segmented<CameraStyle['shape']>

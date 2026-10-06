@@ -1,7 +1,7 @@
 /**
- * Preparação de primeira vez da análise da câmera (M4c): pacotes e detector de rosto, com o progresso REAL, o erro à vista com o
- * passo em que parou e "Tentar de novo" (retoma de onde parou). Mostrada na aba Câmera do editor enquanto a análise não está
- * pronta. O estado vem do store global; este componente só mostra e dispara.
+ * Preparação de primeira vez da análise da câmera (M4c): pacotes e modelos (detector de rosto e recorte do fundo), com o progresso
+ * REAL, o erro à vista com o passo em que parou e "Tentar de novo" (retoma de onde parou). Mostrada na aba Câmera do editor enquanto
+ * a análise (`feature`: o rosto ou o recorte do fundo) não está pronta. O estado vem do store global; este componente só mostra e dispara.
  */
 import { useEffect } from 'react'
 import type { PrepareStep } from '@shared/transcription'
@@ -29,7 +29,7 @@ function StepRow({ step }: { step: PrepareStep }) {
   )
 }
 
-export function CameraPrepare({ explain }: { explain?: string }) {
+export function CameraPrepare({ explain, feature = 'face' }: { explain?: string; feature?: 'face' | 'matte' }) {
   const view = useCamera((s) => s.view)
   const prepare = useCamera((s) => s.prepare)
   const storeError = useCamera((s) => s.error)
@@ -49,10 +49,11 @@ export function CameraPrepare({ explain }: { explain?: string }) {
     )
   }
 
-  const running = prepare?.status === 'running' || view.face.state === 'preparing'
+  const mine = view[feature]
+  const running = prepare?.status === 'running' || mine.state === 'preparing'
   const failed = !running && prepare?.status === 'error' ? prepare : null
   const cancelled = !running && prepare?.status === 'cancelled'
-  const ready = view.face.state === 'ready' && !running
+  const ready = mine.state === 'ready' && !running
   const state = running ? 'running' : ready ? 'ready' : failed ? 'error' : cancelled ? 'cancelled' : 'missing'
   if (ready) return null
 
@@ -106,7 +107,7 @@ export function CameraPrepare({ explain }: { explain?: string }) {
       {!running && !failed ? (
         <>
           {explain ? <p className="prep-note">{explain}</p> : null}
-          {!cancelled && view.face.detail ? <p className="prep-note">{view.face.detail}</p> : null}
+          {!cancelled && mine.detail ? <p className="prep-note">{mine.detail}</p> : null}
           {storeError ? (
             <p className="prep-error-title" role="alert">
               {storeError}

@@ -1,7 +1,7 @@
 /**
  * Renderização do vídeo (roda na janela ESCONDIDA de exportação, num processo próprio).
  *
- * mediabunny lê `media/screen.mp4` e `media/camera.mp4` por `tomada-media://` (Range) e entrega os
+ * mediabunny lê `media/screen.mp4`, `media/camera.mp4` e (só no layout Apresentador) `media/camera-matte.mp4` por `tomada-media://` (Range) e entrega os
  * quadros pelo sink de amostras por timestamp (eficiente para sequência crescente, com saltos nos
  * cortes); cada quadro de saída é desenhado por `evaluateScene` + `renderFrame` num OffscreenCanvas
  * (as MESMAS funções da prévia) e codificado em H.264 por hardware num MP4 sem áudio. Os pedaços
@@ -113,11 +113,13 @@ type Context = {
   ctx: Ctx2D
   screen: Track | null
   camera: Track | null
+  /** O vídeo do recorte do fundo (máscara), só quando algum trecho usa o apresentador recortado. */
+  matte: Track | null
   close(): void
 }
 
 async function createContext(
-  job: Pick<ExportJob, 'projectId' | 'project' | 'screenUrl' | 'cameraUrl' | 'eventUrls' | 'clipLayout'> & { words?: Word[] | null; faceUrl?: string | null },
+  job: Pick<ExportJob, 'projectId' | 'project' | 'screenUrl' | 'cameraUrl' | 'eventUrls' | 'clipLayout'> & { words?: Word[] | null; faceUrl?: string | null; matteUrl?: string | null },
   format: FormatSpec
 ): Promise<Context> {
   const [cursor, clicks, keys, faceText] = await Promise.all([
@@ -143,7 +145,7 @@ async function createContext(
   await ensureCaptionFonts()
   // O vertical nunca editado ganha os zooms (Intenso) e os layouts por atividade, como o editor faria ao entrar no 9:16;
   // depois, a visão do formato: é sobre ela que a cena é calculada (a mesma coisa que a prévia faz)
-  const ensured = format.kind === 'vertical' ? ensureVertical(doc, data, { durationMs, words: job.words, hasCursorEvents: Boolean(job.eventUrls.cursor) }) : doc
+  const ensured = format.kind === 'vertical' ? ensureVertical(doc, data, { durationMs, words: job.words, hasCursorEvents: Boolean(job.eventUrls.cursor), hasMatte: Boolean(job.matteUrl) }) : doc
   // Um corte vertical com layout fixo (V-A, V-B, V-C ou só câmera) o usa no corte todo; o automático segue a atividade (depois do ensure)
   const edited = format.kind === 'vertical' && job.clipLayout ? withClipLayout(ensured, job.clipLayout) : ensured
   const project = projectForFormat(edited, format.kind)
@@ -155,8 +157,16 @@ async function createContext(
   const cache = createRenderCache(canvasFactory)
   await loadBackgroundImage(project, job.projectId, cache)
 
+  // O apresentador recortado desenha a câmera pela máscara: sem ela o vídeo sairia com o fundo da webcam onde a prévia mostra a pessoa
+  // recortada. Falha AQUI, com o que fazer, em vez de exportar um vídeo diferente do que a pessoa viu.
+  if (derived.needsMatte && !job.matteUrl) {
+    throw new Error(
+      'O layout Apresentador precisa do recorte do fundo da câmera, e ele ainda não existe (ou é de outra gravação). Abra o projeto, espere o recorte terminar na aba Câmera e exporte de novo.'
+    )
+  }
   const screen = await openTrack(job.screenUrl, project.sync.screenOffsetMs)
   const camera = await openTrack(job.cameraUrl, project.sync.cameraOffsetMs)
+  const matte = derived.needsMatte ? await openTrack(job.matteUrl ?? null, project.sync.cameraOffsetMs) : null
   return {
     project,
     format,
@@ -166,9 +176,11 @@ async function createContext(
     ctx: raw as unknown as Ctx2D,
     screen,
     camera,
+    matte,
     close() {
       closeTrack(screen)
       closeTrack(camera)
+      closeTrack(matte)
     }
   }
 }
@@ -268,8 +280,11 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
       })()
     const screenIter = c.screen ? c.screen.sink.samplesAtTimestamps(times(c.screen.offsetMs)) : null
     const cameraIter = c.camera ? c.camera.sink.samplesAtTimestamps(times(c.camera.offsetMs)) : null
+    // a máscara anda nos MESMOS instantes da câmera (mesmo deslocamento, mesmos quadros)
+    const matteIter = c.matte ? c.matte.sink.samplesAtTimestamps(times(c.matte.offsetMs)) : null
     const screenHold = new FrameHold()
     const cameraHold = new FrameHold()
+    const matteHold = new FrameHold()
 
     const next = async (iter: AsyncGenerator<VideoSample | null, void, unknown> | null): Promise<VideoSample | null> => {
       if (!iter) return null
@@ -277,7 +292,7 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
       return r.done ? null : r.value
     }
     // decodifica o quadro i + 1 enquanto o i é desenhado e codificado
-    let pending = Promise.all([next(screenIter), next(cameraIter)])
+    let pending = Promise.all([next(screenIter), next(cameraIter), next(matteIter)])
     const meter = new FpsMeter()
     let lastReport = 0
     // onde o tempo vai (ms acumulados): esperar a decodificação, copiar o quadro, desenhar, esperar o encoder
@@ -290,17 +305,18 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
         throw new Error('Exportação cancelada.')
       }
       let t0 = performance.now()
-      const [s, cam] = await pending
+      const [s, cam, mat] = await pending
       spent.decode += performance.now() - t0
-      if (i + 1 < total) pending = Promise.all([next(screenIter), next(cameraIter)])
+      if (i + 1 < total) pending = Promise.all([next(screenIter), next(cameraIter), next(matteIter)])
       t0 = performance.now()
       screenHold.update(s)
       cameraHold.update(cam)
+      matteHold.update(mat)
       spent.hold += performance.now() - t0
       t0 = performance.now()
 
       const scene = evaluateScene(project, derived, sourceTimeOfFrame(i, fps, derived.kept), format)
-      const frames: FrameSet = { screen: screenHold.source(), camera: cameraHold.source() }
+      const frames: FrameSet = { screen: screenHold.source(), camera: cameraHold.source(), matte: matteHold.source() }
       renderFrame(c.ctx, scene, frames, c.cache)
       spent.draw += performance.now() - t0
       t0 = performance.now()
@@ -315,6 +331,7 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
     }
     screenHold.close()
     cameraHold.close()
+    matteHold.close()
     const tFinal = performance.now()
     await output.finalize()
     const finalizeMs = performance.now() - tFinal
@@ -345,6 +362,8 @@ export type StillRequest = {
   eventUrls: ExportJob['eventUrls']
   /** A análise do rosto (enquadramento da câmera), se existe. */
   faceUrl?: string | null
+  /** O vídeo do recorte do fundo (a máscara), se o layout Apresentador é usado. */
+  matteUrl?: string | null
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -364,7 +383,8 @@ export async function renderStills(req: StillRequest): Promise<string[]> {
       const hold: FrameHold[] = []
       for (const [key, track] of [
         ['screen', c.screen],
-        ['camera', c.camera]
+        ['camera', c.camera],
+        ['matte', c.matte]
       ] as const) {
         if (!track) continue
         const sample = await track.sink.getSample(fileTimeSeconds(t, track.offsetMs))

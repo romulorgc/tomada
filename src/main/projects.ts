@@ -9,6 +9,7 @@ import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path'
 import type { MediaFile, ProjectDetail } from '@shared/ipc'
 import { EVENT_FILES } from '@shared/events'
 import { FACE_FILE } from '@shared/face'
+import { currentMatteUrl } from './camera/matte-file'
 import { mediaUrl } from '@shared/media-url'
 import { ProjectFormatError, parseProject, projectDurationMs, serializeProject } from '@shared/project'
 import { isReservedWindowsName } from '@shared/safe-path'
@@ -224,7 +225,7 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
           clicks: await eventUrl(EVENT_FILES.clicks),
           keys: await eventUrl(EVENT_FILES.keys)
         },
-        analysis: { face: await versionedUrl(FACE_FILE) }
+        analysis: { face: await versionedUrl(FACE_FILE), matte: await currentMatteUrl(id, dir, project) }
       }
     },
 

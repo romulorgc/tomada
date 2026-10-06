@@ -5,8 +5,10 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { EXPORT_RESOLUTION_LABEL, EXPORT_SIZES, defaultExportStem, exportBitrate, type ExportFormatKind, type ExportFps, type ExportResolution } from '@shared/export'
+import { usesPresenter } from '@shared/scene'
 import { projectForFormat } from '@shared/vertical'
 import { formatBytes, formatSpan } from '@shared/format'
+import { cameraJobKey, isCameraJobActive, useCamera } from '../camera-store'
 import { AlertIcon, CheckIcon, CopyIcon, CrossIcon, FolderIcon, PlayFolderIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
@@ -26,7 +28,7 @@ function formatEta(ms: number): string {
 const baseName = (path: string): string => path.split(/[\\/]/).pop() ?? path
 
 export function ExportDialog() {
-  const { exporter, detail, derived, transcript } = useEditor()
+  const { exporter, detail, derived, transcript, matte } = useEditor()
   const notify = useApp((s) => s.notify)
   const title = useDoc((s) => s.project.title)
   const doc = useDoc((s) => s.doc)
@@ -50,6 +52,9 @@ export function ExportDialog() {
   const estimate = useMemo(() => formatBytes(((exportBitrate(resolution, fps, format) + (vertical ? 192_000 : 384_000)) * (outMs / 1000)) / 8), [resolution, fps, format, vertical, outMs])
   // legenda ligada neste formato e nenhuma palavra para legendar: o vídeo sai sem legenda, e a pessoa precisa saber
   const captionsWithoutText = projectForFormat(doc, format).captions.enabled && (transcript.data?.words.length ?? 0) === 0
+  // o layout Apresentador desenha a câmera pela máscara do fundo: sem ela o vídeo sairia diferente da prévia, então a exportação espera
+  const needsMatte = usesPresenter(projectForFormat(doc, format), format) && !matte.url
+  const matteJob = useCamera((s) => s.jobs[cameraJobKey(detail.id, 'matte')])
 
   // Esc fecha (a exportação segue rodando); o foco entra no diálogo ao abrir
   useEffect(() => {
@@ -204,12 +209,17 @@ export function ExportDialog() {
                 {T.captionsNoText}
               </p>
             ) : null}
+            {needsMatte ? (
+              <p className="ctl-note" data-testid="export-matte-warning" role="alert">
+                {isCameraJobActive(matteJob) ? T.matteRunning(Math.round((matteJob?.fraction ?? 0) * 100)) : T.matteMissing}
+              </p>
+            ) : null}
 
             <footer className="dialog-actions">
               <button type="button" className="btn btn-ghost" onClick={() => exporter.setOpen(false)}>
                 {t.common.cancel}
               </button>
-              <button type="button" className="btn btn-primary" disabled={outMs <= 0 || stem.trim() === ''} data-testid="export-start" onClick={start}>
+              <button type="button" className="btn btn-primary" disabled={outMs <= 0 || stem.trim() === '' || needsMatte} data-testid="export-start" onClick={start}>
                 {T.button(vertical ? T.formats.vertical : EXPORT_RESOLUTION_LABEL[resolution])}
               </button>
             </footer>

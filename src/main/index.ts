@@ -156,7 +156,12 @@ async function main(): Promise<void> {
   // --- Análise da câmera (M4c): o rosto, para enquadrar a câmera --------------------------------------------------
   const camera = createCameraService({
     logger,
-    engine: chooseCameraEngine({ env: process.env, scriptPath: join(resourcesDir, 'camera_tools.py'), logger }),
+    engine: chooseCameraEngine({
+      env: process.env,
+      scriptPath: join(resourcesDir, 'camera_tools.py'),
+      logger,
+      ffmpeg: () => locateFfmpeg(state.ffmpegLocateOptions())?.ffmpeg ?? null
+    }),
     read: (id) => store.read(id),
     emit
   })

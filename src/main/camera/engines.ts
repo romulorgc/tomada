@@ -23,11 +23,14 @@ function unavailable(message: string): CameraEngine {
     },
     async detectFaces() {
       throw new Error(message)
+    },
+    async makeMatte() {
+      throw new Error(message)
     }
   }
 }
 
-export function chooseCameraEngine(args: { env: NodeJS.ProcessEnv; scriptPath: string; logger: Logger }): CameraEngine {
+export function chooseCameraEngine(args: { env: NodeJS.ProcessEnv; scriptPath: string; logger: Logger; ffmpeg?: () => string | null }): CameraEngine {
   const { env, logger } = args
   const forced = env.TOMADA_CAMERA?.trim()
   if (forced === 'off') return unavailable('A análise da câmera está desligada (TOMADA_CAMERA=off).')
@@ -39,6 +42,8 @@ export function chooseCameraEngine(args: { env: NodeJS.ProcessEnv; scriptPath: s
       ...(num(env.TOMADA_TEST_CAMERA_FROM) !== undefined ? { from: num(env.TOMADA_TEST_CAMERA_FROM)! } : {}),
       ...(num(env.TOMADA_TEST_CAMERA_TO) !== undefined ? { to: num(env.TOMADA_TEST_CAMERA_TO)! } : {}),
       ...(env.TOMADA_TEST_CAMERA_NOFACE === '1' ? { noFace: true } : {}),
+      ...(args.ffmpeg ? { ffmpeg: args.ffmpeg } : {}),
+      ...(env.TOMADA_TEST_MATTE_FAIL === '1' ? { failMatte: true } : {}),
       ...(env.TOMADA_TEST_PREPARE_FAIL ? { failStep: env.TOMADA_TEST_PREPARE_FAIL } : {}),
       ...(env.TOMADA_TEST_PREPARE_STEP_MS ? { stepMs: Number(env.TOMADA_TEST_PREPARE_STEP_MS) } : {})
     })
@@ -51,5 +56,5 @@ export function chooseCameraEngine(args: { env: NodeJS.ProcessEnv; scriptPath: s
     logger.error(message, err)
     return unavailable(message)
   }
-  return createPythonCamera({ tools: toolPaths(base), scriptPath: args.scriptPath, logger })
+  return createPythonCamera({ tools: toolPaths(base), scriptPath: args.scriptPath, logger, ...(args.ffmpeg ? { ffmpeg: args.ffmpeg } : {}) })
 }

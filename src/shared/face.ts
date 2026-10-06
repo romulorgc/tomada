@@ -109,6 +109,17 @@ export const FACE_MAX_W_SHARE = 0.55
 export const FACE_MAX_AUTO_ZOOM = 1.6
 /** Onde o centro do rosto fica na altura do quadro quando há folga vertical: um pouco acima do meio, com espaço para o corpo. */
 export const FACE_HEADROOM_Y = 0.42
+/** O que o enquadramento automático persegue: tamanho do rosto, onde o centro dele fica na altura do recorte e a aproximação máxima. */
+export type CropTarget = { targetH: number; headroomY: number; maxZoom: number }
+/** Bolha, lado a lado e V-B: o rosto grande no quadro. */
+export const BUBBLE_TARGET: CropTarget = { targetH: FACE_TARGET_H, headroomY: FACE_HEADROOM_Y, maxZoom: FACE_MAX_AUTO_ZOOM }
+/** Apresentador recortado (M4c): a pessoa do peito para cima, a cabeça logo abaixo do topo da janela e o corpo até a borda de baixo. */
+export const PRESENTER_TARGET: CropTarget = { targetH: 0.27, headroomY: 0.34, maxZoom: 2.2 }
+export const lerpTarget = (a: CropTarget, b: CropTarget, u: number): CropTarget => ({
+  targetH: a.targetH + (b.targetH - a.targetH) * u,
+  headroomY: a.headroomY + (b.headroomY - a.headroomY) * u,
+  maxZoom: a.maxZoom + (b.maxZoom - a.maxZoom) * u
+})
 export const MANUAL_ZOOM = { min: 1, max: 3 } as const
 export const MANUAL_OFFSET_MAX = 0.5
 
@@ -235,11 +246,11 @@ export function resolveFraming(framing: CameraFraming | undefined): { auto: bool
   }
 }
 
-/** A aproximação automática: o rosto na altura de `FACE_TARGET_H` do quadro, sem passar de `FACE_MAX_W_SHARE` da largura. */
-export function autoZoomFor(aim: Pick<FaceAim, 'faceW' | 'faceH'>, base: Pick<Rect, 'w' | 'h'>): number {
-  const byHeight = aim.faceH > 0 ? (FACE_TARGET_H * base.h) / aim.faceH : 1
+/** A aproximação automática: o rosto na altura de `target.targetH` do quadro, sem passar de `FACE_MAX_W_SHARE` da largura. */
+export function autoZoomFor(aim: Pick<FaceAim, 'faceW' | 'faceH'>, base: Pick<Rect, 'w' | 'h'>, target: CropTarget = BUBBLE_TARGET): number {
+  const byHeight = aim.faceH > 0 ? (target.targetH * base.h) / aim.faceH : 1
   const byWidth = aim.faceW > 0 ? (FACE_MAX_W_SHARE * base.w) / aim.faceW : 1
-  return clamp(Math.min(byHeight, byWidth), 1, FACE_MAX_AUTO_ZOOM)
+  return clamp(Math.min(byHeight, byWidth), 1, target.maxZoom)
 }
 
 /**
@@ -250,18 +261,18 @@ export function autoZoomFor(aim: Pick<FaceAim, 'faceW' | 'faceH'>, base: Pick<Re
  *    do meio (`FACE_HEADROOM_Y`) quando o recorte tem folga vertical;
  *  - o ajuste manual (`zoom`, `dx`, `dy`) vem por cima; o recorte sempre cabe dentro da imagem.
  */
-export function cameraCropRect(cam: Size, destAspect: number, aim: FaceAim | null, framing?: CameraFraming): Rect {
+export function cameraCropRect(cam: Size, destAspect: number, aim: FaceAim | null, framing?: CameraFraming, target: CropTarget = BUBBLE_TARGET): Rect {
   const base = coverCrop(cam, destAspect)
   const f = resolveFraming(framing)
   const useAuto = aim !== null && f.auto
-  const zoom = (useAuto ? autoZoomFor(aim, base) : 1) * f.zoom
+  const zoom = (useAuto ? autoZoomFor(aim, base, target) : 1) * f.zoom
   const w = base.w / zoom
   const h = base.h / zoom
   let cx = 0.5
   let cy = 0.5
   if (useAuto) {
     cx = aim.cx
-    cy = aim.cy + (0.5 - FACE_HEADROOM_Y) * h
+    cy = aim.cy + (0.5 - target.headroomY) * h
   }
   cx = clamp(cx + f.dx, w / 2, 1 - w / 2)
   cy = clamp(cy + f.dy, h / 2, 1 - h / 2)

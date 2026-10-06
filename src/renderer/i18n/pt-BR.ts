@@ -203,6 +203,33 @@ export const ptBR = {
         },
         needsPrepare: 'Para centralizar a câmera no seu rosto, o app precisa de um detector pequeno (OpenCV e um modelo de 230 KB). Roda neste computador e nada sai dele.'
       },
+      presenter: {
+        title: 'Apresentador recortado',
+        help: 'Vale para o layout "Apresentador": você, sem o fundo da webcam, do peito para cima e com as mãos, na frente da tela. O recorte do fundo é feito neste computador, na placa de vídeo, uma vez por gravação.',
+        notActive: 'O layout atual não é o "Apresentador".',
+        side: 'Canto',
+        sides: { left: 'Esquerda', right: 'Direita' },
+        height: 'Altura da pessoa',
+        percent: (v: number): string => `${Math.round(v * 100)}%`,
+        outline: 'Contorno branco',
+        outlineHint: 'Um contorno de figurinha em volta de você: separa a pessoa de telas escuras ou da mesma cor.',
+        outlineWidth: 'Espessura do contorno',
+        shadow: 'Sombra',
+        mirrorHint: 'Para as suas mãos apontarem para a tela, use "Espelhar a imagem" em Comportamento. Mostre o tronco e as mãos, com a luz de frente.',
+        status: {
+          queued: 'Na fila para recortar o fundo…',
+          running: (pct: number): string => `Recortando o fundo… ${pct}%`,
+          ready: 'O fundo da câmera já está recortado.',
+          missing: 'O fundo ainda não foi recortado. Isso acontece sozinho quando você escolhe o layout Apresentador.',
+          start: 'Recortar o fundo agora',
+          redo: 'Recortar de novo',
+          failed: 'Não consegui recortar o fundo',
+          retry: 'Tentar de novo',
+          cancel: 'Cancelar'
+        },
+        needsPrepare: 'Para recortar o fundo, o app precisa baixar um modelo (107 MB) e a execução na placa de vídeo. Tudo roda neste computador e nada sai dele.',
+        needsPrepareAbove: 'O recorte do fundo usa o mesmo preparo da análise do rosto, no começo desta aba: ele também baixa o modelo do recorte.'
+      },
       side: {
         title: 'Câmera ao lado da tela',
         help: 'Vale para o layout "Lado a lado" do vídeo 16:9: a imagem normal da câmera, num cartão com os mesmos cantos e a mesma sombra da tela.',
@@ -268,20 +295,24 @@ export const ptBR = {
         camera: 'Só a câmera',
         'screen-focus': 'Cursor',
         stack: 'Câmera + tela',
-        'screen-wide': 'Tela na largura'
+        'screen-wide': 'Tela na largura',
+        presenter: 'Apresentador'
       },
       optionHints: {
         'side-by-side': 'A câmera num quadro ao lado da tela, com a imagem normal da webcam. Lado, formato e largura ficam na aba Câmera.',
         'screen-focus': 'A tela recortada em tela cheia, seguindo o cursor, com a câmera numa bolha.',
         stack: 'A tela em cima e a câmera embaixo, metade e metade, de ponta a ponta. A tela segue o cursor.',
         'screen-wide': 'A tela inteira na largura, com o mesmo vídeo desfocado ao fundo. Para telas de letra grande.',
-        camera: 'Só a câmera, em tela cheia.'
+        camera: 'Só a câmera, em tela cheia.',
+        presenter:
+          'Você recortado, sem o fundo da webcam, na frente da tela: do peito para cima e com as mãos, na borda de baixo. No 16:9 fica num canto; no vertical a tela vai em cima (seguindo o cursor) e você embaixo. O recorte do fundo é feito sozinho na placa de vídeo (aba Câmera). Mostre o tronco e as mãos, com a luz de frente.'
       },
       vertical: {
         video: 'Layout do vídeo vertical',
         videoHelp: 'Vale para todo o vídeo, menos nos trechos da trilha Layout.',
         auto: 'Escolher pelo que acontece',
-        autoHelp: 'Fala sem nada acontecendo na tela por 3 s ou mais vira "Câmera + tela". O resto fica no recorte do cursor. Nenhum layout fica menos de 6 s na tela antes de trocar.',
+        autoHelp:
+          'Fala sem nada acontecendo na tela por 3 s ou mais vira "Câmera + tela" (ou "Apresentador", quando o recorte do fundo da câmera já existe). O resto fica no recorte do cursor. Nenhum layout fica menos de 6 s na tela antes de trocar.',
         cameraTop: 'Câmera em cima',
         cameraTopHint: 'No "Câmera + tela", põe a câmera em cima e a tela embaixo. O padrão é a tela em cima.',
         autoWarn: (n: number): string => (n === 1 ? 'Isto substitui o trecho de layout do vertical.' : `Isto substitui os ${n} trechos de layout do vertical.`),
@@ -389,7 +420,7 @@ export const ptBR = {
         hookCount: (n: number, max: number): string => `${n} de ${max} palavras`,
         hookTooLong: 'O gancho passa de 8 palavras: o vídeo mostra todas, mas fica mais fraco.',
         layout: 'Layout',
-        layouts: { auto: 'Automático', 'screen-focus': 'Cursor', stack: 'Câmera + tela', 'screen-wide': 'Tela larga', camera: 'Só câmera' },
+        layouts: { auto: 'Automático', 'screen-focus': 'Cursor', stack: 'Câmera + tela', presenter: 'Apresentador', 'screen-wide': 'Tela larga', camera: 'Só câmera' },
         layoutHint: 'Automático escolhe pela atividade da tela; os outros valem o corte todo.',
         captions: 'Legenda',
         captionsInherit: 'Como no vertical',
@@ -675,6 +706,8 @@ export const ptBR = {
       formats: { horizontal: 'YouTube 16:9', vertical: 'Vertical 9:16' },
       verticalCard: { name: 'Vertical 1080×1920', detail: '10 Mbps · áudio 192 kbps' },
       captionsNoText: 'A legenda está ligada, mas este projeto não tem transcrição: o vídeo sai sem legenda.',
+      matteMissing: 'O layout Apresentador precisa do recorte do fundo da câmera, e ele ainda não foi feito. Faça na aba Câmera e exporte em seguida.',
+      matteRunning: (pct: number): string => `Recortando o fundo da câmera… ${pct}%. A exportação libera quando terminar.`,
       presets: 'Qualidade',
       preset: { '1080p': 'YouTube 1080p', '1440p': 'YouTube 1440p', '2160p': 'YouTube 4K' },
       presetSize: (w: number, h: number): string => `${w}×${h}`,
@@ -747,6 +780,8 @@ export const ptBR = {
       title: 'Câmera',
       none: 'Sem câmera',
       previewLabel: 'Prévia da câmera',
+      guideLabel: 'Moldura-guia do enquadramento',
+      guideTip: 'Mostre o tronco e as mãos; luz de frente.',
       loading: 'Abrindo a câmera…',
       off: 'Sem câmera: só a tela e o som.',
       noDevices: 'Nenhuma câmera encontrada.'
@@ -764,7 +799,8 @@ export const ptBR = {
       title: 'Ajustes do som e da bolha',
       noiseSuppression: 'Reduzir ruído do microfone',
       echoCancellation: 'Cancelar eco',
-      bubble: 'Mostrar a bolha da câmera durante a gravação (não aparece no vídeo)'
+      bubble: 'Mostrar a bolha da câmera durante a gravação (não aparece no vídeo)',
+      framingGuide: 'Mostrar a moldura-guia na prévia da câmera (não aparece no vídeo)'
     },
     start: 'Gravar',
     startShortcut: 'Ctrl+Shift+R',
@@ -859,7 +895,7 @@ export const ptBR = {
 
   /** A preparação da análise da câmera (M4c): pacotes e o detector de rosto. */
   cameraTools: {
-    steps: { python: 'Ambiente do Python', packages: 'Pacotes da análise', binary: 'Programa', model: 'Detector de rosto', check: 'Teste final' },
+    steps: { python: 'Ambiente do Python', packages: 'Pacotes da análise', binary: 'Programa', model: 'Modelos: rosto e recorte do fundo', check: 'Teste final' },
     stepStatus: { pending: 'Na fila', running: 'Em andamento', done: 'Pronto', error: 'Erro' },
     state: { ready: 'Pronta', missing: 'Falta preparar', preparing: 'Preparando…', error: 'Com problema' },
     prepare: 'Preparar a análise da câmera',

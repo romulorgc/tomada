@@ -55,6 +55,7 @@ export type LayoutKind =
   | 'stack' // vertical V-B: tela em cima, câmera embaixo (ou o contrário, com `VerticalEdit.cameraTop`)
   | 'screen-focus' // vertical V-A: recorte da tela ocupa tudo (segue o cursor), câmera em bolha
   | 'screen-wide' // vertical V-C: a tela inteira na largura, fundo = o mesmo vídeo desfocado e escurecido
+  | 'presenter' // M4c: o apresentador RECORTADO (sem o fundo da webcam) na frente da tela. 16:9: no canto de baixo; 9:16 (V-D): tela em cima, você embaixo
 
 export type LayoutSeg = {
   id: string
@@ -127,6 +128,26 @@ export type SideBySideStyle = {
   gap?: number
 }
 
+/**
+ * O apresentador recortado (M4c, layout `presenter`): a webcam SEM o fundo (máscara local), a pessoa do peito para cima e as mãos na
+ * frente da tela, ancorada na borda de baixo. Tudo opcional (ausente = os padrões medidos em vídeos reais, ver
+ * `estudo/green-screen-2026-10-05.md`).
+ */
+export type PresenterStyle = {
+  /** Canto do 16:9 em que a pessoa fica (ausente = direita; nos 11 vídeos medidos todos estavam à direita). */
+  side?: 'left' | 'right'
+  /** Altura da PESSOA no quadro 16:9, fração da altura (0,45..0,75; ausente = 0,56, a mediana medida). */
+  height?: number
+  /** Altura da pessoa no 9:16 (V-D), fração da altura (0,35..0,60; ausente = 0,45). */
+  heightV?: number
+  /** Contorno branco de figurinha em volta da pessoa. */
+  outline?: boolean
+  /** Espessura do contorno em px na altura de 1080 (6..12; ausente = 8). */
+  outlineWidth?: number
+  /** Sombra suave da pessoa sobre a tela (ausente = ligada). */
+  shadow?: boolean
+}
+
 export type CursorStyle = {
   /** 'real' mantém o cursor da captura; 'synthetic' redesenha pelo cursor.jsonl. */
   mode: 'real' | 'synthetic'
@@ -151,6 +172,8 @@ export type Style = {
   cursor: CursorStyle
   /** O quadro da câmera ao lado da tela (layout `side-by-side`, 16:9). Ausente = os padrões. */
   sideBySide?: SideBySideStyle
+  /** O apresentador recortado (layout `presenter`, M4c). Ausente = os padrões. */
+  presenter?: PresenterStyle
   /** Só na VISÃO do vertical (vem de `VerticalEdit.cameraTop`): no V-B a câmera fica em cima e a tela embaixo. Nunca é gravada aqui. */
   stackCameraTop?: boolean
 }
@@ -190,7 +213,7 @@ export type CaptionStyle = {
 
 export type ClipFormat = 'vertical' | 'horizontal'
 /** O layout de um corte vertical: `auto` segue a escolha por atividade do projeto; os outros fixam o layout no corte todo. */
-export type VerticalLayout = 'auto' | 'stack' | 'screen-focus' | 'screen-wide' | 'camera'
+export type VerticalLayout = 'auto' | 'stack' | 'screen-focus' | 'screen-wide' | 'camera' | 'presenter'
 
 /**
  * Edição PRÓPRIA do vertical 9:16 (M4a). Zooms, trechos de layout, câmera e legenda do vertical são independentes

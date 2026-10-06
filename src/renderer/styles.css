@@ -305,6 +305,33 @@ button:disabled {
   background: #000;
   box-shadow: inset 0 0 0 1px var(--color-line);
 }
+/* moldura-guia do enquadramento sobre a prévia da câmera: só na tela Gravar, não entra no vídeo */
+.framing-guide {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  pointer-events: none;
+}
+.framing-guide svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: rgb(255 255 255 / 0.85);
+  stroke-width: 0.9;
+  filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.7));
+}
+.framing-guide p {
+  align-self: start;
+  justify-self: center;
+  margin: 0.5rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.55);
+  color: #fff;
+  font-size: 0.75rem;
+}
 .video-frame > video {
   display: block;
   width: 100%;

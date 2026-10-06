@@ -3,7 +3,7 @@
  * raio, sombra e câmera, e a geometria de posição da câmera na grade 3×3.
  * Código puro: sem DOM, sem Node.
  */
-import type { Background, CameraStyle, Corner, SideBySideStyle, Size } from './types'
+import type { Background, CameraStyle, Corner, PresenterStyle, SideBySideStyle, Size } from './types'
 
 export type BackgroundPreset = { id: string; name: string; from: string; to: string }
 
@@ -139,6 +139,79 @@ export function resolveSideBySide(s: SideBySideStyle | undefined): { side: 'left
     width: clampTo(s?.width, SIDE_WIDTH.min, SIDE_WIDTH.max, SIDE_WIDTH.default),
     gap: clampTo(s?.gap, SIDE_GAP.min, SIDE_GAP.max, SIDE_GAP.default)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Apresentador RECORTADO (M4c)
+
+/**
+ * Medido em vídeos reais (`estudo/green-screen-2026-10-05.md`): no YouTube 16:9 (11 vídeos, 3 criadores) a pessoa recortada tem 56% da
+ * altura do quadro [52-65], 36% da largura [31-37], ancorada na borda de baixo e colada na borda da direita (centro em x 81%);
+ * nos Shorts 9:16 verdes (14 vídeos, 3 criadores) ela tem 43% da altura [38-48], o topo da cabeça em y 57% [52-62] e 84% da largura.
+ * A pessoa ocupa ~85% da altura da JANELA (o recorte da webcam), que é de onde a janela sai a partir da altura da pessoa.
+ */
+export const PRESENTER = {
+  /** Quanto da altura da janela da webcam a pessoa (da cabeça à borda de baixo) ocupa. */
+  personFrac: 0.85,
+  /**
+   * Proporção (largura/altura) da janela no 16:9. A janela é só o recorte da webcam: fora da pessoa ela é transparente, então largura a mais não custa
+   * nada e evita que as mãos e o braço sejam cortados por uma linha reta no meio da tela (com 1,2 o recorte da webcam cortava a mão de lado).
+   */
+  aspect: 1.5,
+  /**
+   * Fração da largura da janela que passa da borda do quadro: põe o centro da pessoa em x ≈ 82% (a mediana medida, 81%) e o ombro encostado na borda,
+   * como nas referências. Vale de 0,5 − 0,185·(largura do quadro ÷ largura da janela) = 0,17 para a janela de 1,5.
+   */
+  bleed: 0.165,
+  /** Altura da pessoa: 16:9 e 9:16. */
+  height: { min: 0.45, max: 0.75, default: 0.56 },
+  heightV: { min: 0.35, max: 0.6, default: 0.45 },
+  /** Contorno branco de figurinha: 6-12 px na altura de 1080. */
+  outline: { min: 6, max: 12, default: 8 },
+  /** No V-D a tela acaba esta fração do quadro abaixo do topo da cabeça (mãos e ombros invadem a tela). */
+  screenOverlapV: 0.07,
+  /** No V-D a legenda fica esta fração do quadro acima do topo da cabeça (medido: de 3 a 12 pontos, mediana 4,5). */
+  captionGapV: 0.04
+} as const
+
+/** O apresentador com os padrões aplicados e os valores presos às faixas aceitas. */
+export function resolvePresenter(p: PresenterStyle | undefined): {
+  side: 'left' | 'right'
+  height: number
+  heightV: number
+  outline: boolean
+  outlineWidth: number
+  shadow: boolean
+} {
+  return {
+    side: p?.side === 'left' ? 'left' : 'right',
+    height: clampTo(p?.height, PRESENTER.height.min, PRESENTER.height.max, PRESENTER.height.default),
+    heightV: clampTo(p?.heightV, PRESENTER.heightV.min, PRESENTER.heightV.max, PRESENTER.heightV.default),
+    outline: p?.outline === true,
+    outlineWidth: clampTo(p?.outlineWidth, PRESENTER.outline.min, PRESENTER.outline.max, PRESENTER.outline.default),
+    shadow: p?.shadow !== false
+  }
+}
+
+/**
+ * A janela (retângulo em px do quadro) em que a webcam recortada aparece. 16:9: ancorada embaixo, no canto, passando um pouco da borda
+ * (`bleed`). 9:16 (V-D): a largura toda, ancorada embaixo. A altura da janela vem da altura da pessoa (`personFrac`).
+ */
+export function presenterWindow(p: ReturnType<typeof resolvePresenter>, format: Size & { kind?: string }, vertical: boolean): { x: number; y: number; w: number; h: number } {
+  const { w: W, h: H } = format
+  if (vertical) {
+    const h = Math.min(H, (p.heightV / PRESENTER.personFrac) * H)
+    return { x: 0, y: H - h, w: W, h }
+  }
+  const h = Math.min(H, (p.height / PRESENTER.personFrac) * H)
+  const w = h * PRESENTER.aspect
+  const x = p.side === 'right' ? W - w * (1 - PRESENTER.bleed) : -w * PRESENTER.bleed
+  return { x, y: H - h, w, h }
+}
+
+/** V-D: a altura (fração do quadro) da faixa de cima que é a tela: vai um pouco abaixo do topo da cabeça. */
+export function presenterScreenHeightV(p: ReturnType<typeof resolvePresenter>): number {
+  return Math.min(0.75, 1 - p.heightV + PRESENTER.screenOverlapV)
 }
 
 // ---------------------------------------------------------------------------
