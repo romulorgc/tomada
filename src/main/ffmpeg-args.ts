@@ -114,6 +114,9 @@ export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
 }
 
 export type ExtractAudioArgs = {
+  alignmentSamples?: number
+  durationMs?: number
+  losslessFloat?: boolean
   audioLeadingMs?: number
   input: string
   output: string
@@ -128,14 +131,18 @@ export type ExtractAudioArgs = {
 export function buildExtractAudioArgs(o: ExtractAudioArgs): string[] {
   const input = assertFfmpegPath(o.input, 'entrada')
   const output = assertFfmpegPath(o.output, 'saída')
+  const filters = o.audioLeadingMs !== undefined ? [`asetpts=PTS-STARTPTS+${(o.audioLeadingMs / 1000).toFixed(6)}/TB`, 'aresample=async=1:first_pts=0'] : []
+  if (o.alignmentSamples && o.alignmentSamples > 0) filters.push(`adelay=delays=${Math.round(o.alignmentSamples)}S:all=1`)
+  if (o.alignmentSamples && o.alignmentSamples < 0) filters.push(`atrim=start_sample=${-Math.round(o.alignmentSamples)}`, 'asetpts=PTS-STARTPTS')
+  if (o.durationMs) filters.push(`apad=whole_dur=${(o.durationMs / 1000).toFixed(6)}`, `atrim=end=${(o.durationMs / 1000).toFixed(6)}`)
   return [
     '-i', input,
     '-map', `0:a:${o.track ?? 0}`,
     '-vn',
-    ...(o.audioLeadingMs !== undefined ? ['-af', `asetpts=PTS-STARTPTS+${(o.audioLeadingMs / 1000).toFixed(6)}/TB,aresample=async=1:first_pts=0`] : []),
+    ...(filters.length ? ['-af', filters.join(',')] : []),
     '-ac', String(o.channels),
     '-ar', String(o.sampleRate ?? 48_000),
-    '-c:a', 'pcm_s16le',
+    '-c:a', o.losslessFloat ? 'pcm_f32le' : 'pcm_s16le',
     '-f', 'wav',
     output
   ]

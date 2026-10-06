@@ -4,7 +4,9 @@
  * (e a confirmação repete o mesmo verbo); erro explica o que houve e o que fazer.
  */
 import { m5Settings } from './m5-settings'
+import { audioQualityPtBR } from '@shared/audio-quality-messages'
 export const ptBR = {
+  audioQuality: audioQualityPtBR,
   m5Settings,
   diskSpace: {
     title: 'Espaço no disco', low: 'Pouco espaço para concluir', unknown: 'Não consegui medir o disco',

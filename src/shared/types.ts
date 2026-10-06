@@ -13,6 +13,7 @@ import type { PipelineState } from './autopilot'
 import type { ReviewState } from './review'
 import type { VideoScript } from './script'
 import type { RetakeMark } from './retake-marker'
+import type { AudioQualityReport } from './audio-quality'
 
 export type Rect = { x: number; y: number; w: number; h: number }
 export type Size = { w: number; h: number }
@@ -330,6 +331,10 @@ export type ProjectMeta = {
 }
 
 export type Project = {
+  /** Medição do PCM original, antes do tratamento; avisos sobrevivem à reabertura. */
+  audioQuality?: AudioQualityReport
+  /** A referência da câmera não confirmou o tempo da voz PCM; pede conferência no editor. */
+  pcmSyncWarning?: boolean
   autoExclusions?: { zooms?:string[]; layouts?:string[] }
   /**
    * Versão do formato. Este código escreve 2; aceita ≥ 2 (documentos de versões

@@ -8,6 +8,7 @@ import { keptRanges, outputDuration, sourceToOutput } from '@shared/timeline'
 import type { Project, Transcript, CutReason, LayoutKind, CaptionStyleId } from '@shared/types'
 import { projectForFormat } from '@shared/vertical'
 import { ErrorPanel } from '../components/Feedback'
+import { AudioQualityNotice } from '../components/AudioQualityNotice'
 import { CheckIcon, AlertIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
@@ -47,6 +48,7 @@ export function Review({ id }: { id: string }) {
       <div><button className="btn btn-ghost" onClick={() => go({name:'library'})}>{t.nav.library}</button><p className="review-eyebrow">{T.review}</p><h1>{doc.title}</h1><p className="text-muted" role="status">{running ? T.running : doc.autopilot?.steps.some((s) => s.status === 'error') ? T.hasErrors : T.ready}</p>{doc.autopilot?.notice ? <p className="text-muted" role="alert" data-testid="pilot-notice">{doc.autopilot.notice}</p> : null}</div>
       <div className="review-head-actions"><button className="btn" onClick={() => go({name:'project',id})} data-testid="review-editor">{T.editor}</button><button className="btn btn-rec" data-testid="review-post" onClick={() => void action(() => window.tomada.review.post(id))}>{T.post}</button><p className="text-muted text-xs">{T.postHelp}</p></div>
     </header>
+    <AudioQualityNotice report={doc.audioQuality} pcmSyncWarning={doc.pcmSyncWarning} />
     {error ? <p role="alert">{error}</p> : null}
     <div className="review-layout">
       <aside className="review-summary" aria-label={T.summary}>
