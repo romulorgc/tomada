@@ -17,8 +17,11 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export async function writeFileAtomic(file: string, data: string | Uint8Array): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+  let created = false
   try {
-    const handle = await open(tmp, 'w')
+    // 'wx': só cria; um nome que já exista (plantado, por exemplo) nunca é escrito por dentro, nem apagado no erro
+    const handle = await open(tmp, 'wx')
+    created = true
     try {
       await handle.writeFile(data)
       await handle.sync()
@@ -39,7 +42,7 @@ export async function writeFileAtomic(file: string, data: string | Uint8Array): 
     }
     throw lastError
   } catch (err) {
-    await rm(tmp, { force: true }).catch(() => undefined)
+    if (created) await rm(tmp, { force: true }).catch(() => undefined)
     throw err
   }
 }

@@ -8,7 +8,7 @@
  * de novo (passos já concluídos não se repetem). Sem Electron.
  */
 import { mkdir, rm, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { ProcessSnapshot, ProcessStepId, ProcessStepState } from '@shared/ipc'
 import { createProject, parseProject, serializeProject } from '@shared/project'
 import { CONTENT_RECT_FILE } from '@shared/events'
@@ -20,6 +20,8 @@ import type { Logger } from './logger'
 import { writeManifest, type RecordingManifest } from './manifest'
 import { extractAudio, makeThumbnail, normalizeVideo } from './normalize'
 import { PROJECT_FILE, THUMB_PATH } from './projects'
+import { resolveProjectFile } from './project-files'
+import { commitToProject, createProjectTmpDir, removeTmpDir } from './safe-output'
 
 /** Estado que sobrevive entre uma tentativa e a seguinte (mesma sessão do app). */
 export type ProcessContext = {
@@ -102,7 +104,22 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
 
   const expectedMs = manifest.recordedMs ?? undefined
   const rawPath = (rel: string): string => join(dir, rel)
-  const mediaPath = (rel: string): string => join(dir, 'media', rel)
+  /**
+   * A saída do ffmpeg nasce numa pasta temporária EXCLUSIVA de `media/` (nome sorteado, vazia) e só ganha o nome definitivo, conferido,
+   * no fim: um parcial de nome previsível (`screen.mp4.parcial`) plantado como link não recebe nada, e um destino que já é atalho,
+   * junção ou link físico é recusado com o motivo (o passo falha, o bruto fica).
+   */
+  const produce = async <T>(finalRel: string, make: (out: string) => Promise<T>): Promise<T> => {
+    const tmp = await createProjectTmpDir(dir, 'media', '.tmp-proc-')
+    try {
+      const out = await tmp.file(basename(finalRel))
+      const result = await make(out)
+      await commitToProject(dir, out, finalRel)
+      return result
+    } finally {
+      await removeTmpDir(tmp.dir, logger)
+    }
+  }
 
   const impl: Record<ProcessStepId, (step: ProcessStepState) => Promise<string | undefined>> = {
     async save() {
@@ -111,21 +128,23 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
 
     async screen(step) {
       const screen = manifest.screen!
-      const result = await normalizeVideo(deps.ff, {
-        input: rawPath(screen.file),
-        output: mediaPath('screen.mp4'),
-        fps: manifest.fps,
-        // A janela pode ser redimensionada no meio: o quadro novo é esticado ao tamanho do primeiro, sem perder tempo.
-        lockSize: true,
-        // A captura de tela só entrega quadro quando algo muda: o rabo estático da gravação não vira
-        // quadro nenhum. O vídeo precisa durar o que a gravação durou (o último quadro é repetido).
-        ...(expectedMs ? { durationMs: expectedMs, padToMs: expectedMs } : {}),
-        onProgress: (f) => {
-          step.fraction = f
-          emit(false)
-        },
-        onNote: note
-      })
+      const result = await produce('media/screen.mp4', (out) =>
+        normalizeVideo(deps.ff, {
+          input: rawPath(screen.file),
+          output: out,
+          fps: manifest.fps,
+          // A janela pode ser redimensionada no meio: o quadro novo é esticado ao tamanho do primeiro, sem perder tempo.
+          lockSize: true,
+          // A captura de tela só entrega quadro quando algo muda: o rabo estático da gravação não vira
+          // quadro nenhum. O vídeo precisa durar o que a gravação durou (o último quadro é repetido).
+          ...(expectedMs ? { durationMs: expectedMs, padToMs: expectedMs } : {}),
+          onProgress: (f) => {
+            step.fraction = f
+            emit(false)
+          },
+          onNote: note
+        })
+      )
       const v = result.probe.video!
       if (expectedMs && Math.abs(result.probe.durationMs - expectedMs) > 1000) {
         note(`O vídeo da tela ficou com ${(result.probe.durationMs / 1000).toFixed(1)} s e a gravação durou ${(expectedMs / 1000).toFixed(1)} s: a captura de tela parou antes do fim.`)
@@ -136,17 +155,19 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
 
     async camera(step) {
       const cam = manifest.camera!
-      const result = await normalizeVideo(deps.ff, {
-        input: rawPath(cam.file),
-        output: mediaPath('camera.mp4'),
-        fps: CAMERA_FPS,
-        ...(expectedMs ? { durationMs: expectedMs } : {}),
-        onProgress: (f) => {
-          step.fraction = f
-          emit(false)
-        },
-        onNote: note
-      })
+      const result = await produce('media/camera.mp4', (out) =>
+        normalizeVideo(deps.ff, {
+          input: rawPath(cam.file),
+          output: out,
+          fps: CAMERA_FPS,
+          ...(expectedMs ? { durationMs: expectedMs } : {}),
+          onProgress: (f) => {
+            step.fraction = f
+            emit(false)
+          },
+          onNote: note
+        })
+      )
       const v = result.probe.video!
       ctx.sources.camera = { path: 'media/camera.mp4', w: v.width ?? 0, h: v.height ?? 0, fps: CAMERA_FPS, durationMs: result.probe.durationMs }
       return `${v.width}×${v.height}`
@@ -154,7 +175,7 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
 
     async voice() {
       const cam = manifest.camera!
-      const probe = await extractAudio(deps.ff, { input: rawPath(cam.file), output: mediaPath('voice.wav'), channels: 1, sampleRate: 48_000 })
+      const probe = await produce('media/voice.wav', (out) => extractAudio(deps.ff, { input: rawPath(cam.file), output: out, channels: 1, sampleRate: 48_000 }))
       ctx.sources.voice = { path: 'media/voice.wav', w: 0, h: 0, fps: 0, durationMs: probe.durationMs }
       return undefined
     },
@@ -167,8 +188,8 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
         note('O som do computador estava ligado, mas a gravação da tela não trouxe nenhuma faixa de áudio.')
         return 'sem faixa de áudio'
       }
-      const out = await extractAudio(deps.ff, { input: rawPath(screen.file), output: mediaPath('system.wav'), channels: 2, sampleRate: 48_000 })
-      ctx.sources.system = { path: 'media/system.wav', w: 0, h: 0, fps: 0, durationMs: out.durationMs }
+      const extracted = await produce('media/system.wav', (out) => extractAudio(deps.ff, { input: rawPath(screen.file), output: out, channels: 2, sampleRate: 48_000 }))
+      ctx.sources.system = { path: 'media/system.wav', w: 0, h: 0, fps: 0, durationMs: extracted.durationMs }
       return undefined
     },
 
@@ -179,7 +200,7 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
         return 'sem vídeo'
       }
       const at = Math.min(3000, Math.max(0, base.durationMs / 2))
-      await makeThumbnail(deps.ff, { input: join(dir, base.path), output: join(dir, THUMB_PATH), atMs: at, width: 640 })
+      await produce(THUMB_PATH, (out) => makeThumbnail(deps.ff, { input: join(dir, base.path), output: out, atMs: at, width: 640 }))
       return undefined
     },
 
@@ -235,7 +256,7 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
       snapshot.status = 'failed'
       snapshot.error = { step: id, message }
       // Arquivo parcial de um passo que falhou não pode ficar com cara de bom.
-      await cleanupPartial(dir, id)
+      await cleanupPartial(dir, id, logger)
       logger.error(`Processamento falhou no passo "${id}" (o bruto foi preservado em ${join(dir, 'raw')}).`, err)
       emit()
       return { ...snapshot, steps: steps.map((s) => ({ ...s })), notes: [...ctx.notes] }
@@ -248,7 +269,7 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
   return { ...snapshot, steps: steps.map((s) => ({ ...s })), notes: [...ctx.notes] }
 }
 
-async function cleanupPartial(dir: string, id: ProcessStepId): Promise<void> {
+async function cleanupPartial(dir: string, id: ProcessStepId, logger: Logger): Promise<void> {
   const targets: Record<ProcessStepId, string[]> = {
     save: [],
     screen: ['media/screen.mp4.parcial'],
@@ -258,7 +279,14 @@ async function cleanupPartial(dir: string, id: ProcessStepId): Promise<void> {
     thumb: [THUMB_PATH],
     project: []
   }
-  for (const rel of targets[id]) await rm(join(dir, rel), { force: true }).catch(() => undefined)
+  for (const rel of targets[id]) {
+    try {
+      // pelo `resolveProjectFile`: uma pasta que aponta para fora não faz o `rm` apagar arquivo de fora
+      await rm(await resolveProjectFile(dir, rel), { force: true })
+    } catch (err) {
+      logger.warn(`Não consegui apagar o arquivo parcial ${rel}.`, err)
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

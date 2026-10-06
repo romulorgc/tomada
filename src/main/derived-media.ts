@@ -9,9 +9,13 @@
  *
  * Cada uma só é refeita quando a fonte mudou (data do arquivo). O arquivo novo é escrito ao lado e
  * renomeado por cima: quem lê nunca vê um meio-termo. Sem Electron: roda igual nos testes.
+ *
+ * O ffmpeg só escreve numa pasta temporária EXCLUSIVA (`safe-output`: nome sorteado, criada agora, vazia), nunca num nome
+ * previsível que um projeto de terceiros possa ter enchido de links; o destino final que já é atalho, junção ou link físico é
+ * recusado, com o motivo.
  */
-import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { Levels } from '@shared/clean'
 import { suggestPageRect, type CropSuggestion, type GrayFrame } from '@shared/crop-detect'
 import type { PeaksData, PreviewAudioData, ThumbsData } from '@shared/ipc'
@@ -23,9 +27,10 @@ import type { Project } from '@shared/types'
 import { buildAudioArgs, buildAudioGraph, buildMeasureArgs, parseLoudnormMeasure } from './audio-graph'
 import type { Ffmpeg } from './ffmpeg'
 import { buildGrayFramesArgs, buildPeaksPcmArgs, buildThumbStripArgs } from './ffmpeg-args'
-import { pathExists, writeFileAtomic } from './fs-utils'
+import { pathExists } from './fs-utils'
 import type { Logger } from './logger'
 import { resolveProjectFile } from './project-files'
+import { commitToProject, createProjectTmpDir, removeTmpDir, writeProjectFile, type ExclusiveDir } from './safe-output'
 
 export const PEAKS_PATH = 'media/peaks.json'
 export const PREVIEW_AUDIO_PATH = 'media/voice-preview.m4a'
@@ -104,6 +109,16 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     return job
   }
 
+  /** Roda `job` com uma pasta temporária exclusiva dentro de `media/` e apaga a pasta no fim (erro ao apagar vai para o log). */
+  async function withTmp<T>(dir: string, kind: string, job: (tmp: ExclusiveDir) => Promise<T>): Promise<T> {
+    const tmp = await createProjectTmpDir(dir, 'media', `.tmp-${kind}-`)
+    try {
+      return await job(tmp)
+    } finally {
+      await removeTmpDir(tmp.dir, logger)
+    }
+  }
+
   // --- picos -----------------------------------------------------------------------------------------
   async function buildPeaks(id: string): Promise<PeaksData | null> {
     const { project, dir } = await deps.read(id)
@@ -123,10 +138,8 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     }
     const ff = deps.ffmpeg()
     if (!ff) return null
-    const tmpDir = await resolveProjectFile(dir, `media/.tmp-peaks-${process.pid}`)
-    await mkdir(tmpDir, { recursive: true })
-    try {
-      const pcmFile = join(tmpDir, 'voz.pcm')
+    return withTmp(dir, 'peaks', async (tmp) => {
+      const pcmFile = await tmp.file('voz.pcm')
       await ff.run(buildPeaksPcmArgs({ input: voicePath, output: pcmFile, sampleRate: PEAKS_SAMPLE_RATE }), { signal: abort.signal, timeoutMs: 600_000 })
       const bytes = await readFile(pcmFile)
       const pcm = pcmFromBytes(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength))
@@ -139,12 +152,10 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
         sourceMtimeMs: mtime,
         peaks
       }
-      await writeFileAtomic(peaksFile, JSON.stringify(file))
+      await writeProjectFile(dir, PEAKS_PATH, JSON.stringify(file))
       logger.info(`Forma de onda do projeto ${id}: ${peaks.length} colunas.`)
       return { perSecond: file.perSecond, durationMs: file.durationMs, peaks }
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => undefined)
-    }
+    })
   }
 
   // --- áudio da prévia -------------------------------------------------------------------------------
@@ -177,34 +188,29 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
 
     const ff = deps.ffmpeg()
     if (!ff || !(durationMs > 0)) return null
-    const tmpDir = await resolveProjectFile(dir, `media/.tmp-preview-${process.pid}`)
-    await mkdir(tmpDir, { recursive: true })
-    try {
+    return withTmp(dir, 'preview', async (tmp) => {
       const inputs: string[] = []
       const voice = voiceMtime !== null ? { input: inputs.push(voicePath!) - 1, offsetMs: want.voiceOffsetMs, channels: 1 as const } : null
       const system = systemMtime !== null ? { input: inputs.push(systemPath!) - 1, offsetMs: want.systemOffsetMs, channels: 2 as const } : null
       const kept = [{ start: 0, end: durationMs }]
       const opts = { signal: abort.signal, timeoutMs: 900_000 }
 
-      const g1 = join(tmpDir, 'medir.txt')
+      const g1 = await tmp.file('medir.txt')
       await writeFile(g1, buildAudioGraph({ kept, voice, system, mode: 'measure' }).graph, 'utf8')
       const measureRun = await ff.run(buildMeasureArgs({ inputs, graphFile: g1 }), opts)
       const measured = parseLoudnormMeasure(measureRun.stderr)
 
-      const g2 = join(tmpDir, 'final.txt')
+      const g2 = await tmp.file('final.txt')
       await writeFile(g2, buildAudioGraph({ kept, voice, system, mode: 'final', measured }).graph, 'utf8')
-      const partial = join(tmpDir, 'voice-preview.m4a')
+      const partial = await tmp.file('voice-preview.m4a')
       await ff.run(buildAudioArgs({ inputs, graphFile: g2, output: partial }), opts)
 
-      await rm(target, { force: true })
-      await rename(partial, target)
-      await writeFileAtomic(infoFile, JSON.stringify(want))
+      await commitToProject(dir, partial, PREVIEW_AUDIO_PATH)
+      await writeProjectFile(dir, PREVIEW_AUDIO_INFO, JSON.stringify(want))
       logger.info(`Áudio da prévia do projeto ${id} pronto.`)
       const finalMtime = (await mtimeOf(target)) ?? Date.now()
       return { url: mediaUrl(id, PREVIEW_AUDIO_PATH, finalMtime) }
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => undefined)
-    }
+    })
   }
 
   // --- miniaturas ------------------------------------------------------------------------------------
@@ -234,31 +240,26 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     if (!ff) return null
 
     const intervalMs = thumbIntervalMs(src.durationMs)
-    const tmpDir = await resolveProjectFile(dir, `media/.tmp-thumbs-${process.pid}`)
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined)
-    await mkdir(tmpDir, { recursive: true })
-    try {
-      await ff.run(buildThumbStripArgs({ input: srcPath, outputPattern: join(tmpDir, 'thumb-%04d.jpg'), intervalMs, height: THUMB_HEIGHT }), { signal: abort.signal, timeoutMs: 600_000 })
-      const files = (await readdir(tmpDir)).filter((f) => /^thumb-\d{4}\.jpg$/.test(f)).sort()
+    return withTmp(dir, 'thumbs', async (tmp) => {
+      const pattern = await tmp.file('thumb-%04d.jpg')
+      await ff.run(buildThumbStripArgs({ input: srcPath, outputPattern: pattern, intervalMs, height: THUMB_HEIGHT }), { signal: abort.signal, timeoutMs: 600_000 })
+      const files = (await readdir(tmp.dir)).filter((f) => /^thumb-\d{4}\.jpg$/.test(f)).sort()
       if (files.length === 0) throw new Error('o ffmpeg não gerou nenhuma miniatura')
-      await rm(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
-      await mkdir(dirname(folder), { recursive: true })
-      await rename(tmpDir, folder)
+      // a pasta pronta vira `media/thumbs` (a antiga sai; atalho, junção ou link no lugar dela é recusado)
+      await commitToProject(dir, tmp.dir, THUMBS_DIR, { directory: true })
       const info: ThumbsInfo = { version: 1, intervalMs, count: files.length, height: THUMB_HEIGHT, source: src.path, sourceMtimeMs: mtime }
-      await writeFileAtomic(infoFile, JSON.stringify(info))
+      await writeProjectFile(dir, THUMBS_INFO, JSON.stringify(info))
       logger.info(`Miniaturas do projeto ${id}: ${files.length} (uma a cada ${intervalMs} ms).`)
       return toData(info)
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => undefined)
-    }
+    })
   }
 
   // --- nível do áudio (limpeza de silêncio) ----------------------------------------------------------------
   /** Taxa de análise do nível (basta para RMS de 20 ms). */
   const LEVEL_SAMPLE_RATE = 8000
 
-  async function pcmOf(ff: Ffmpeg, input: string, tmpDir: string, name: string): Promise<Int16Array> {
-    const pcmFile = join(tmpDir, name)
+  async function pcmOf(ff: Ffmpeg, input: string, tmp: ExclusiveDir, name: string): Promise<Int16Array> {
+    const pcmFile = await tmp.file(name)
     await ff.run(buildPeaksPcmArgs({ input, output: pcmFile, sampleRate: LEVEL_SAMPLE_RATE }), { signal: abort.signal, timeoutMs: 600_000 })
     const bytes = await readFile(pcmFile)
     return pcmFromBytes(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength))
@@ -286,23 +287,19 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
 
     const ff = deps.ffmpeg()
     if (!ff) return null
-    const tmpDir = await resolveProjectFile(dir, `media/.tmp-levels-${process.pid}`)
-    await mkdir(tmpDir, { recursive: true })
-    try {
-      const mic = voicePath && voiceMtime !== null ? computeLevels(await pcmOf(ff, voicePath, tmpDir, 'mic.pcm'), LEVEL_SAMPLE_RATE, LEVEL_FRAME_MS) : null
+    return withTmp(dir, 'levels', async (tmp) => {
+      const mic = voicePath && voiceMtime !== null ? computeLevels(await pcmOf(ff, voicePath, tmp, 'mic.pcm'), LEVEL_SAMPLE_RATE, LEVEL_FRAME_MS) : null
       let sys: number[] | null = null
       if (systemPath && systemMtime !== null) {
-        const raw = computeLevels(await pcmOf(ff, systemPath, tmpDir, 'sys.pcm'), LEVEL_SAMPLE_RATE, LEVEL_FRAME_MS)
+        const raw = computeLevels(await pcmOf(ff, systemPath, tmp, 'sys.pcm'), LEVEL_SAMPLE_RATE, LEVEL_FRAME_MS)
         // o som do computador vem do arquivo da tela: alinha ao eixo da voz
         sys = alignLevels(raw, Math.round((project.sync.screenOffsetMs - startMs) / LEVEL_FRAME_MS))
       }
       const out: LevelsFile = { version: LEVELS_VERSION, frameMs: LEVEL_FRAME_MS, startMs, sources: want, mic, system: sys }
-      await writeFileAtomic(file, JSON.stringify(out))
+      await writeProjectFile(dir, LEVELS_PATH, JSON.stringify(out))
       logger.info(`Níveis de áudio do projeto ${id}: ${mic?.length ?? 0} quadros de microfone, ${sys?.length ?? 0} de som do computador.`)
       return toLevels(out)
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => undefined)
-    }
+    })
   }
 
   // --- recorte sugerido (C1) -------------------------------------------------------------------------------
@@ -316,16 +313,8 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     const srcPath = await resolveProjectFile(dir, src.path, 'sources.screen.path')
     const ff = deps.ffmpeg()
     if (!ff) throw new Error('não encontrei o ffmpeg')
-    // Pasta temporária EXCLUSIVA (nome sorteado, criada agora, vazia): nada plantado antes dela (um link físico ou simbólico com o
-    // nome do arquivo de saída, por exemplo) pode receber o que o ffmpeg escreve. A pasta e o arquivo de saída passam por
-    // resolveProjectFile (dentro do projeto, sem atalho nem junção), e o arquivo não pode existir ainda.
-    const mediaDir = await resolveProjectFile(dir, 'media')
-    await mkdir(mediaDir, { recursive: true })
-    const tmpDir = await mkdtemp(join(mediaDir, '.tmp-crop-'))
-    try {
-      await resolveProjectFile(dir, `media/${basename(tmpDir)}`)
-      const out = await resolveProjectFile(dir, `media/${basename(tmpDir)}/quadros.gray`)
-      if (await lstat(out).then(() => true, () => false)) throw new Error('o arquivo temporário da análise já existe')
+    return withTmp(dir, 'crop', async (tmp) => {
+      const out = await tmp.file('quadros.gray')
       const w = SUGGEST_WIDTH
       const h = 2 * Math.round(((src.h / src.w) * SUGGEST_WIDTH) / 2)
       await ff.run(buildGrayFramesArgs({ input: srcPath, output: out, count: SUGGEST_FRAMES, durationMs: src.durationMs, width: w, height: h }), { signal: abort.signal, timeoutMs: 120_000 })
@@ -336,9 +325,7 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
       const found = suggestPageRect(frames)
       logger.info(`Recorte sugerido do projeto ${id}: ${found ? `a página começa em ${(found.rect.y * 100).toFixed(1)}% da altura (confiança ${(found.confidence * 100).toFixed(0)}%)` : 'nenhuma barra de navegador achada'} (${frames.length} quadros).`)
       return found
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => undefined)
-    }
+    })
   }
 
   /** Falha vira aviso no log e `null` (o editor funciona sem a forma de onda ou as miniaturas). */
