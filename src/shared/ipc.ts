@@ -365,7 +365,8 @@ export type IpcContract = {
   'camera:status': { args: []; result: CameraView }
   'camera:prepare': { args: []; result: void }
   'camera:cancel-prepare': { args: []; result: void }
-  'camera:analyze': { args: [projectId: string, kind: CameraKind]; result: CameraJob }
+  /** `force`: refaz mesmo com o resultado guardado valendo ("Recortar de novo"); ausente = devolve o guardado. */
+  'camera:analyze': { args: [projectId: string, kind: CameraKind, force?: boolean]; result: CameraJob }
   'camera:cancel': { args: [projectId: string, kind: CameraKind]; result: void }
 
   // Transcrição (M3): a interface só diz QUAL projeto; o main resolve a voz, executa o motor e grava o transcript.json.
@@ -513,7 +514,7 @@ export type TomadaApi = {
     status(): Promise<CameraView>
     prepare(): Promise<void>
     cancelPrepare(): Promise<void>
-    analyze(projectId: string, kind: CameraKind): Promise<CameraJob>
+    analyze(projectId: string, kind: CameraKind, force?: boolean): Promise<CameraJob>
     cancel(projectId: string, kind: CameraKind): Promise<void>
   }
   transcription: {

@@ -58,6 +58,8 @@ export type LongOptions = {
   solidScreen?: boolean
   /** `false`: deixa a edição vertical por conta do programa (zooms e layouts pela atividade), em vez de fixá-la. */
   fixedVertical?: boolean
+  /** Variáveis de ambiente a mais para o app (por exemplo `TOMADA_CAMERA=mock`, que liga o motor de teste da câmera). */
+  env?: Record<string, string>
 }
 
 /**
@@ -103,7 +105,7 @@ export async function launchLong(opts: LongOptions = {}): Promise<Session> {
   writeFileSync(join(dir, 'events', 'clicks.jsonl'), `${DEMO.clicks.map((t) => JSON.stringify({ t, x: 0.5, y: 0.5, button: 'left', upT: t + 80 })).join('\n')}\n`)
   writeFileSync(join(dir, 'events', 'keys.jsonl'), `${DEMO.keys.map((t) => JSON.stringify({ t })).join('\n')}\n`)
 
-  const env: Record<string, string> = { TOMADA_LLM: opts.llm ?? 'mock' }
+  const env: Record<string, string> = { TOMADA_LLM: opts.llm ?? 'mock', ...opts.env }
   if (opts.responses) env.TOMADA_LLM_RESPONSES = writeResponses(opts.responses)
   return launchTomada({ base, env })
 }

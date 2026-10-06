@@ -879,7 +879,17 @@ export const ptBR = {
   countdown: { label: 'Contagem para começar a gravar', cancel: 'Esc para cancelar', go: 'Gravando' },
 
   transcription: {
-    steps: { python: 'Ambiente do Python', packages: 'Pacotes de transcrição', binary: 'Programa de transcrição', model: 'Modelo de voz', check: 'Teste final' },
+    steps: {
+      python: 'Ambiente do Python',
+      packages: 'Pacotes de transcrição',
+      binary: 'Programa de transcrição',
+      model: 'Modelo de voz',
+      check: 'Teste final',
+      // só a câmera usa estes (o recorte do fundo); estão aqui para o mapa cobrir todos os passos
+      'matte-packages': 'Pacotes do recorte do fundo',
+      'matte-model': 'Modelo do recorte do fundo',
+      'matte-check': 'Teste do recorte do fundo'
+    },
     state: { ready: 'Pronta', missing: 'Falta preparar', preparing: 'Preparando…', error: 'Com problema' },
     prepare: 'Preparar transcrição',
     preparing: 'Preparando…',
@@ -895,7 +905,16 @@ export const ptBR = {
 
   /** A preparação da análise da câmera (M4c): pacotes e o detector de rosto. */
   cameraTools: {
-    steps: { python: 'Ambiente do Python', packages: 'Pacotes da análise', binary: 'Programa', model: 'Modelos: rosto e recorte do fundo', check: 'Teste final' },
+    steps: {
+      python: 'Ambiente do Python',
+      packages: 'Pacotes do rosto',
+      binary: 'Programa',
+      model: 'Modelo do rosto',
+      check: 'Teste do rosto',
+      'matte-packages': 'Pacotes do recorte do fundo',
+      'matte-model': 'Modelo do recorte do fundo',
+      'matte-check': 'Teste do recorte do fundo'
+    },
     stepStatus: { pending: 'Na fila', running: 'Em andamento', done: 'Pronto', error: 'Erro' },
     state: { ready: 'Pronta', missing: 'Falta preparar', preparing: 'Preparando…', error: 'Com problema' },
     prepare: 'Preparar a análise da câmera',

@@ -79,7 +79,7 @@ const api: TomadaApi = {
     status: () => invoke('camera:status'),
     prepare: () => invoke('camera:prepare'),
     cancelPrepare: () => invoke('camera:cancel-prepare'),
-    analyze: (projectId, kind) => invoke('camera:analyze', projectId, kind),
+    analyze: (projectId, kind, force) => invoke('camera:analyze', projectId, kind, force),
     cancel: (projectId, kind) => invoke('camera:cancel', projectId, kind)
   },
   transcription: {

@@ -61,6 +61,8 @@ export function syntheticFaceTrack(durationMs: number, from = 0.32, to = 0.68, n
   return { version: FACE_TRACK_VERSION, engine: 'teste', frame: { w: 1280, h: 720 }, sampleMs: MOCK_FACE.sampleMs, durationMs, boxes, createdAt: new Date().toISOString() }
 }
 
+const MOCK_STEPS = ['packages', 'model', 'check', 'matte-packages', 'matte-model', 'matte-check'] as const
+
 export function createMockCamera(opts: MockCameraOptions): CameraEngine {
   let ready = opts.ready
   let failed = false
@@ -68,17 +70,14 @@ export function createMockCamera(opts: MockCameraOptions): CameraEngine {
   const missing = 'A análise da câmera ainda não foi preparada neste computador.'
   return {
     id: 'mock',
-    prepareSteps: [
-      { id: 'packages', weight: 1 },
-      { id: 'model', weight: 1 },
-      { id: 'check', weight: 1 }
-    ],
+    // as mesmas duas trilhas do motor de verdade: o rosto e o recorte do fundo
+    prepareSteps: MOCK_STEPS.map((id) => ({ id, weight: 1 })),
     async check(): Promise<CameraCheck> {
       const state = ready ? ({ state: 'ready', detail: null } as const) : ({ state: 'missing', detail: missing } as const)
       return { face: state, matte: state, device: ready ? 'Placa de teste' : null }
     },
     async prepare(tracker: PrepareTracker, signal: AbortSignal): Promise<void> {
-      for (const id of ['packages', 'model', 'check'] as const) {
+      for (const id of MOCK_STEPS) {
         tracker.begin(id, 'Simulando…')
         const ticks = 4
         for (let t = 1; t <= ticks; t++) {

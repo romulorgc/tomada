@@ -236,7 +236,7 @@ test('sem o motor preparado: o painel oferece preparar; a preparação mostra o 
   await expect(page.getByTestId('camera-prepare-progress')).toBeVisible()
   // falha simulada (uma vez) no passo do modelo: erro à vista, com o passo, e o botão de tentar de novo
   await expect(page.getByTestId('camera-prepare-error')).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByTestId('camera-prepare-error')).toContainText('Modelos: rosto e recorte do fundo')
+  await expect(page.getByTestId('camera-prepare-error')).toContainText('Modelo do rosto')
   await page.getByTestId('camera-prepare-retry').click()
   // terminou: o cartão de preparação some e o rosto é procurado sozinho (o editor estava aberto)
   await expect(page.getByTestId('camera-prepare')).toHaveCount(0, { timeout: 30_000 })

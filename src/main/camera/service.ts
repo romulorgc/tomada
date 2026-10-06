@@ -17,6 +17,7 @@ import { FACE_FILE, FACE_TRACK_VERSION, faceCoverage, parseFaceTrack, type FaceT
 import type { IpcEvents } from '@shared/ipc'
 import { MATTE_FILE, MATTE_META_FILE, MATTE_PARTIAL_FILE, MATTE_VERSION, type MatteMeta } from '@shared/matte'
 import { mediaUrl } from '@shared/media-url'
+import { documentFilePaths } from '@shared/safe-path'
 import type { PrepareSnapshot } from '@shared/transcription'
 import type { Project } from '@shared/types'
 import { writeFileAtomic } from '../fs-utils'
@@ -54,6 +55,57 @@ export type CameraServiceDeps = {
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const MAX_JOBS_KEPT = 50
+
+/** Os arquivos que cada análise grava na pasta do projeto (todos em `media/`). */
+const DERIVED_FILES: Record<CameraKind, readonly string[]> = {
+  face: [FACE_FILE],
+  matte: [MATTE_FILE, MATTE_META_FILE, MATTE_PARTIAL_FILE]
+}
+
+/** A limpeza do arquivo parcial falhou: o motivo precisa chegar à pessoa (um parcial aberto no Windows não se apaga). */
+class CleanupError extends Error {
+  override readonly name = 'CleanupError'
+}
+
+const samePath = (a: string, b: string): boolean => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b)
+
+/** Os dois caminhos são o MESMO arquivo no disco (atalho rígido, nome em outra caixa)? */
+async function sameFile(a: string, b: string): Promise<boolean> {
+  try {
+    const [x, y] = await Promise.all([stat(a, { bigint: true }), stat(b, { bigint: true })])
+    return x.ino !== 0n && x.ino === y.ino && x.dev === y.dev
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Antes de apagar ou substituir qualquer arquivo derivado (a máscara, o parcial, o JSON do rosto), confere que NENHUMA fonte do
+ * documento (tela, câmera, voz, som do sistema, imagem de fundo) ocupa o lugar dele: um projeto cuja câmera se chama
+ * `media/camera-matte.partial.mp4` perderia a própria gravação na limpeza. Compara os caminhos RESOLVIDOS (`realpath`).
+ */
+async function assertDerivedClear(project: Project, dir: string, kind: CameraKind): Promise<void> {
+  const derived = await Promise.all(DERIVED_FILES[kind].map(async (rel) => ({ rel, real: await resolveProjectFile(dir, rel) })))
+  for (const source of documentFilePaths(project)) {
+    const real = await resolveProjectFile(dir, source.path, source.field)
+    for (const d of derived) {
+      if (samePath(real, d.real) || (await sameFile(real, d.real))) {
+        throw new Error(
+          `${source.field} do projeto ("${source.path}") ocupa o lugar de um arquivo que esta análise grava ("${d.rel}"). Por segurança nada foi apagado nem substituído: troque o nome desse arquivo no projeto e tente de novo.`
+        )
+      }
+    }
+  }
+}
+
+/** Apaga o arquivo parcial (com novas tentativas: o Windows demora a soltar um arquivo que acabou de fechar); se não conseguir, AVISA. */
+async function removePartial(path: string, rel: string): Promise<void> {
+  try {
+    await rm(path, { force: true, maxRetries: 8, retryDelay: 250 })
+  } catch (err) {
+    throw new CleanupError(`Não consegui apagar o arquivo parcial do recorte (${rel}): ${messageOf(err)}. Feche o que estiver usando esse arquivo e tente de novo.`)
+  }
+}
 
 /** O que o arquivo da análise guarda para saber se ainda vale: a câmera de onde saiu (caminho e data do arquivo). */
 type FaceFileHead = { version?: number; source?: string; sourceMtimeMs?: number }
@@ -101,6 +153,12 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
   const jobs = new Map<string, CameraJob>()
   const queue: { projectId: string; kind: CameraKind }[] = []
   let running: { projectId: string; kind: CameraKind; ctl: AbortController; promise: Promise<void> } | null = null
+  /**
+   * Pedidos que já começaram (consulta ao motor, leitura do projeto, cache) mas ainda não chegaram à fila. A CHAVE é reservada aqui,
+   * de forma síncrona, antes de qualquer `await`: duas chamadas simultâneas não passam as duas pela consulta inicial. `cancelled`
+   * é o aviso de que a pessoa cancelou enquanto o pedido ainda se preparava.
+   */
+  const starting = new Map<string, { promise: Promise<CameraJob>; cancelled: boolean }>()
   const keyOf = (projectId: string, kind: CameraKind): string => `${kind}:${projectId}`
 
   const setJob = (job: CameraJob): void => {
@@ -150,8 +208,9 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
 
   async function runMatteJob(projectId: string, cam: NonNullable<Awaited<ReturnType<typeof cameraFile>>>, ctl: AbortController, onProgress: (f: number) => void): Promise<void> {
     const kind: CameraKind = 'matte'
+    await assertDerivedClear(cam.project, cam.dir, kind)
     const partial = await resolveProjectFile(cam.dir, MATTE_PARTIAL_FILE)
-    await rm(partial, { force: true })
+    await removePartial(partial, MATTE_PARTIAL_FILE)
     try {
       const result = await engine.makeMatte({ video: cam.video, out: partial, durationMs: cam.project.sources.camera?.durationMs ?? 0, signal: ctl.signal, onProgress })
       if (ctl.signal.aborted) throw new Error('Cancelado.')
@@ -180,7 +239,11 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
         `Recorte do fundo do projeto ${projectId}: ${result.frames} quadros em ${result.seconds.toFixed(1)} s (${result.msPerFrame.toFixed(1)} ms por quadro, ${result.device}, ${result.engine}).`
       )
     } catch (err) {
-      await rm(partial, { force: true }).catch(() => undefined)
+      // o que falhou (ou o cancelamento) vem primeiro; se a limpeza também falhar, a limpeza é o que a pessoa precisa ver
+      await removePartial(partial, MATTE_PARTIAL_FILE).catch((cleanup) => {
+        logger.error(`Recorte do fundo do projeto ${projectId}: ${messageOf(err)}`, err)
+        throw cleanup
+      })
       throw err
     }
   }
@@ -203,6 +266,7 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
         return
       }
       if (kind === 'face') {
+        await assertDerivedClear(cam.project, cam.dir, kind)
         const track = await engine.detectFaces({ video: cam.video, durationMs: cam.project.sources.camera?.durationMs ?? 0, signal: ctl.signal, onProgress })
         if (ctl.signal.aborted) throw new Error('Cancelado.')
         const file = await resolveProjectFile(cam.dir, FACE_FILE)
@@ -215,7 +279,7 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
       }
       throw new Error(`Análise desconhecida: ${String(kind)}.`)
     } catch (err) {
-      if (ctl.signal.aborted) {
+      if (ctl.signal.aborted && !(err instanceof CleanupError)) {
         setJob({ projectId, kind, state: 'cancelled', fraction: 0, error: 'Análise cancelada.' })
         return
       }
@@ -236,7 +300,43 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
     running = { ...next, ctl, promise }
   }
 
-  return {
+  async function startAnalysis(projectId: string, kind: CameraKind, opts: { force?: boolean }, entry: { cancelled: boolean }): Promise<CameraJob> {
+    const cancelledJob = (): CameraJob => {
+      const job: CameraJob = { projectId, kind, state: 'cancelled', fraction: 0, error: 'Análise cancelada.' }
+      setJob(job)
+      return job
+    }
+    const check = await engine.check()
+    const feature = kind === 'face' ? check.face : check.matte
+    if (feature.state !== 'ready') throw new Error(feature.detail ?? 'A análise da câmera ainda não está preparada.')
+    const cam = await cameraFile(projectId)
+    if (!cam) throw new Error('Esta gravação não tem o vídeo da câmera, então não há o que analisar.')
+    await assertDerivedClear(cam.project, cam.dir, kind)
+    if (kind === 'face' && !opts.force) {
+      const fresh = await freshFace(projectId, cam.dir, cam.relPath, cam.mtimeMs)
+      if (fresh) {
+        const job: CameraJob = { projectId, kind, state: 'done', fraction: 1, url: fresh.url, faces: fresh.faces, coverage: fresh.coverage }
+        setJob(job)
+        return job
+      }
+    }
+    if (kind === 'matte' && !opts.force) {
+      const fresh = await freshMatte(projectId, cam.dir, cam.relPath, cam.mtimeMs)
+      if (fresh) {
+        const job: CameraJob = { projectId, kind, state: 'done', fraction: 1, url: fresh.url }
+        setJob(job)
+        return job
+      }
+    }
+    if (entry.cancelled) return cancelledJob()
+    const job: CameraJob = { projectId, kind, state: 'queued', fraction: 0 }
+    setJob(job)
+    queue.push({ projectId, kind })
+    pump()
+    return job
+  }
+
+  const api: CameraService = {
     async view() {
       const check = await engine.check()
       const failed = snapshot?.status === 'error' ? snapshot : null
@@ -257,45 +357,38 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
       preparing?.ctl.abort()
     },
 
-    async analyze(projectId, kind, opts = {}) {
-      if (!CAMERA_KINDS.includes(kind)) throw new Error('Tipo de análise desconhecido.')
-      const existing = jobs.get(keyOf(projectId, kind))
-      if (existing && (existing.state === 'queued' || existing.state === 'running')) return existing
-      const check = await engine.check()
-      const feature = kind === 'face' ? check.face : check.matte
-      if (feature.state !== 'ready') throw new Error(feature.detail ?? 'A análise da câmera ainda não está preparada.')
-      const cam = await cameraFile(projectId)
-      if (!cam) throw new Error('Esta gravação não tem o vídeo da câmera, então não há o que analisar.')
-      if (kind === 'face' && !opts.force) {
-        const fresh = await freshFace(projectId, cam.dir, cam.relPath, cam.mtimeMs)
-        if (fresh) {
-          const job: CameraJob = { projectId, kind, state: 'done', fraction: 1, url: fresh.url, faces: fresh.faces, coverage: fresh.coverage }
-          setJob(job)
-          return job
-        }
+    analyze(projectId, kind, opts = {}) {
+      // tudo daqui até o `starting.set` é SÍNCRONO: é o que impede duas chamadas simultâneas de duplicar a análise
+      if (!CAMERA_KINDS.includes(kind)) return Promise.reject(new Error('Tipo de análise desconhecido.'))
+      const key = keyOf(projectId, kind)
+      const existing = jobs.get(key)
+      if (existing && (existing.state === 'queued' || existing.state === 'running')) return Promise.resolve(existing)
+      const pending = starting.get(key)
+      if (pending) {
+        // quem pede "refazer" enquanto outro pedido ainda se prepara espera esse terminar e então decide em cima do resultado dele
+        return opts.force ? pending.promise.then(() => api.analyze(projectId, kind, opts)) : pending.promise
       }
-      if (kind === 'matte' && !opts.force) {
-        const fresh = await freshMatte(projectId, cam.dir, cam.relPath, cam.mtimeMs)
-        if (fresh) {
-          const job: CameraJob = { projectId, kind, state: 'done', fraction: 1, url: fresh.url }
-          setJob(job)
-          return job
-        }
-      }
-      const job: CameraJob = { projectId, kind, state: 'queued', fraction: 0 }
-      setJob(job)
-      queue.push({ projectId, kind })
-      pump()
-      return job
+      const entry = { promise: undefined as unknown as Promise<CameraJob>, cancelled: false }
+      entry.promise = startAnalysis(projectId, kind, opts, entry).finally(() => {
+        if (starting.get(key) === entry) starting.delete(key)
+      })
+      starting.set(key, entry)
+      return entry.promise
     },
 
     cancel(projectId, kind) {
-      const at = queue.findIndex((q) => q.projectId === projectId && q.kind === kind)
-      if (at >= 0) {
-        queue.splice(at, 1)
-        setJob({ projectId, kind, state: 'cancelled', fraction: 0, error: 'Análise cancelada.' })
-        return
+      const key = keyOf(projectId, kind)
+      const pending = starting.get(key)
+      if (pending) pending.cancelled = true
+      // TODAS as entradas da fila (não só a primeira) e também a que está rodando agora
+      let removed = false
+      for (let i = queue.length - 1; i >= 0; i--) {
+        if (queue[i]!.projectId === projectId && queue[i]!.kind === kind) {
+          queue.splice(i, 1)
+          removed = true
+        }
       }
+      if (removed) setJob({ projectId, kind, state: 'cancelled', fraction: 0, error: 'Análise cancelada.' })
       if (running?.projectId === projectId && running.kind === kind) running.ctl.abort()
     },
 
@@ -324,4 +417,5 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
       queue.length = 0
     }
   }
+  return api
 }

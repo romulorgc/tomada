@@ -144,6 +144,8 @@ export class PreviewEngine {
   private raf = 0
   private lastNow = 0
   private dirty = true
+  /** O erro mostrado agora veio do vídeo do recorte do fundo: trocar ou tirar a máscara (`setMatte`) o resolve. */
+  private matteFailed = false
   private destroyed = false
   private frames = 0
   private lastScene: Scene | null = null
@@ -195,6 +197,11 @@ export class PreviewEngine {
       if (url !== null && this.tracks[old]!.url === url) return
       this.tracks[old]!.dispose()
       this.tracks.splice(old, 1)
+    }
+    if (this.matteFailed) {
+      // a máscara que não abria saiu (layout que não a usa, ou "Recortar de novo" gerou outra): o erro dela não vale mais
+      this.matteFailed = false
+      this.setError(null)
     }
     if (url) {
       const track = new VideoTrack('matte', url, this.o.host, () => (this.dirty = true), (k, el) => this.mediaFailed(k, el))
@@ -569,7 +576,8 @@ export class PreviewEngine {
   private mediaFailed(kind: MediaKind, el: HTMLVideoElement): void {
     if (el.dataset.role !== 'active') return
     const code = el.error ? `${el.error.code}: ${el.error.message}` : 'erro desconhecido'
-    this.fail(`O vídeo ${kind === 'screen' ? 'da tela' : kind === 'camera' ? 'da câmera' : 'do recorte do fundo (apague media/camera-matte.mp4 do projeto para refazer)'} não abriu (${code}).`)
+    if (kind === 'matte') this.matteFailed = true
+    this.fail(`O vídeo ${kind === 'screen' ? 'da tela' : kind === 'camera' ? 'da câmera' : 'do recorte do fundo (abra a aba Câmera e clique em "Recortar de novo")'} não abriu (${code}).`)
   }
 
   private fail(message: string): void {

@@ -24,6 +24,7 @@ Os caminhos chegam pelo stdin (nunca pela linha de comando) e quem os monta e o 
 Nada daqui sai da maquina. O video e lido com o PyAV (que ja vem com o faster-whisper e abre caminho com acento).
 """
 import json
+import math
 import os
 import sys
 import time
@@ -171,12 +172,21 @@ def _face(request):
     sys.stdout.flush()
 
 
+# fracao de um instante da grade que um quadro pode estar ANTES dele e ainda assim entrar nele (erro de ponto flutuante e de relogio)
+SLOT_TOLERANCE = 0.02
+
+
 class SlotWriter:
     """Escreve a mascara numa grade fixa de 1/rate s, no MESMO instante em que cada quadro da camera aparece.
 
     A camera pode ter taxa variavel (quadros que faltam). Cada quadro vale do instante dele ate o do proximo (o render segura o quadro
-    anterior), entao um quadro que falta repete o ultimo; dois quadros no mesmo instante: vale o ultimo. `sink(bytes)` recebe um quadro
-    por instante da grade, em ordem.
+    anterior), entao um quadro que falta repete o ultimo; dois quadros no mesmo instante da grade: vale o ultimo. `sink(bytes)` recebe um
+    quadro por instante da grade, em ordem.
+
+    Em cada instante k/rate da grade vale o ULTIMO quadro cuja apresentacao JA COMECOU (pts <= k/rate): um quadro que chega entre dois
+    instantes (aos 40 ms numa grade de 30 qps) so entra no instante seguinte (66,7 ms), porque a camera segue mostrando o anterior ate
+    os 40 ms e a mascara nao pode andar na frente dela. A tolerancia de 0,02 instante cobre o erro de ponto flutuante e o arredondamento
+    do relogio do arquivo (1/90000 s), nao um atraso que se veja.
     """
 
     def __init__(self, sink, rate, start_seconds):
@@ -188,7 +198,7 @@ class SlotWriter:
         self.written = 0
 
     def slot_of(self, seconds):
-        return max(0, int(round((float(seconds) - self.start) * self.rate)))
+        return max(0, int(math.ceil((float(seconds) - self.start) * self.rate - SLOT_TOLERANCE)))
 
     def push(self, seconds, payload):
         slot = self.slot_of(seconds)

@@ -15,7 +15,7 @@ import { regenerateZooms } from '@shared/edits'
 import { formatSpan } from '@shared/format'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
-import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, prepareEvents, type CursorData } from '@shared/scene'
+import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, prepareEvents, usesPresenter, type CursorData } from '@shared/scene'
 import type { Transcript } from '@shared/types'
 import { ensureVertical } from '@shared/vertical'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
@@ -319,14 +319,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     [project, cursorData, format, words, faceTrack]
   )
 
-  // Algum trecho do formato aberto usa o apresentador recortado: pede o recorte do fundo (se o motor está pronto e ainda não existe). Volta na
-  // hora se o guardado vale para esta câmera; se já está na fila ou rodando, devolve o trabalho que existe.
   const needsMatte = derived?.needsMatte ?? false
-  const matteEngineReady = useCamera((s) => s.view?.matte.state === 'ready')
-  useEffect(() => {
-    if (!hasCamera || !needsMatte || !matteEngineReady || matteUrl) return
-    void useCamera.getState().analyze(detail.id, 'matte')
-  }, [detail.id, hasCamera, needsMatte, matteEngineReady, matteUrl])
 
   // A prévia de um corte: o MESMO documento que a exportação desenha (os trechos do corte, o gancho dele, o layout e a legenda
   // dele), sempre no 9:16. A linha do tempo segue mostrando o vídeo inteiro.
@@ -337,6 +330,19 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     () => (!previewClip ? derived : cursorData ? deriveProject(sceneProject, cursorData, VERTICAL_1080, words, faceTrack) : null),
     [previewClip, derived, sceneProject, cursorData, words, faceTrack]
   )
+  // O recorte do fundo é necessário quando QUALQUER coisa que vai ser vista ou exportada usa o Apresentador: o formato aberto, a cena da prévia
+  // de um corte, ou o layout de algum corte (a exportação do corte percorre a mesma cadeia: `clipScene`). Olhar só o formato aberto deixava o
+  // corte com Apresentador sem máscara (prévia com o fundo e exportação falhando).
+  const sceneNeedsMatte = (sceneDerived ?? derived)?.needsMatte ?? false
+  const clipsNeedMatte = useMemo(() => doc.clips.some((c) => usesPresenter(clipScene(doc, c), 'vertical')), [doc])
+  const needsMatteAny = needsMatte || sceneNeedsMatte || clipsNeedMatte
+  // Pede o recorte do fundo (se o motor está pronto e ainda não existe). Volta na hora se o guardado vale para esta câmera; se já está na
+  // fila ou rodando, devolve o trabalho que existe.
+  const matteEngineReady = useCamera((s) => s.view?.matte.state === 'ready')
+  useEffect(() => {
+    if (!hasCamera || !needsMatteAny || !matteEngineReady || matteUrl) return
+    void useCamera.getState().analyze(detail.id, 'matte')
+  }, [detail.id, hasCamera, needsMatteAny, matteEngineReady, matteUrl])
   // a prévia só existe no 9:16 e enquanto o corte existe
   useEffect(() => {
     if (previewId && (format !== 'vertical' || !previewClip)) clips.getState().preview(null)
@@ -417,10 +423,11 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenUrl, cameraUrl, playback])
 
-  // o vídeo do recorte do fundo anda com a câmera na prévia (liga e desliga sem refazer o motor)
+  // o vídeo do recorte do fundo anda com a câmera na prévia (liga e desliga sem refazer o motor). Só é carregado quando a cena que está
+  // sendo desenhada precisa dele: uma máscara estragada não pode pausar nem mostrar erro numa prévia de bolha, lado a lado ou tela cheia.
   useEffect(() => {
-    engineRef.current?.setMatte(matteUrl)
-  }, [matteUrl, engineGen])
+    engineRef.current?.setMatte(sceneNeedsMatte ? matteUrl : null)
+  }, [matteUrl, sceneNeedsMatte, engineGen])
 
   // trocar de formato muda a proporção da prévia
   useEffect(() => {
@@ -604,7 +611,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       transcript,
       reloadTranscript: loadTranscript,
       face,
-      matte: { url: matteUrl, needed: needsMatte },
+      matte: { url: matteUrl, needed: needsMatteAny },
       levels,
       text,
       exporter,
@@ -613,7 +620,7 @@ export function Editor({ detail }: { detail: ProjectDetail }) {
       ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, store, playback, cursorData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatte, levels, text, exporter, clips, queue, aiUi]
+    [detail, store, playback, cursorData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (

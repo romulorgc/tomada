@@ -109,7 +109,7 @@ function MatteStatus() {
           {P.status.failed}
           {job.error ? `: ${job.error}` : ''}
         </p>
-        <button type="button" className="btn" onClick={() => void analyze(detail.id, 'matte')} data-testid="matte-retry">
+        <button type="button" className="btn" onClick={() => void analyze(detail.id, 'matte', true)} data-testid="matte-retry">
           {P.status.retry}
         </button>
       </div>
@@ -121,7 +121,7 @@ function MatteStatus() {
       <div className="cam-status" data-testid="matte-status" data-state="ready">
         <p className="ctl-note">{P.status.ready}</p>
         {cpu ? <p className="ctl-note">{view.matte.detail}</p> : null}
-        <button type="button" className="btn btn-ghost" onClick={() => void analyze(detail.id, 'matte')} data-testid="matte-redo">
+        <button type="button" className="btn btn-ghost" onClick={() => void analyze(detail.id, 'matte', true)} data-testid="matte-redo">
           {P.status.redo}
         </button>
       </div>

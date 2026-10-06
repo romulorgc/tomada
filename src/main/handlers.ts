@@ -85,6 +85,13 @@ function cameraKind(kind: unknown): CameraKind {
   return kind as CameraKind
 }
 
+/** O pedido de "refazer": só `true`/`false` (ausente = não). Qualquer outra coisa vinda da interface é recusada. */
+function cameraForce(force: unknown): boolean {
+  if (force === undefined) return false
+  if (typeof force !== 'boolean') throw new Error('Pedido de análise da câmera inválido (refazer).')
+  return force
+}
+
 const CHUNK_KINDS: readonly ChunkKind[] = ['screen', 'camera', 'mic']
 const BAR_ACTIONS: readonly BarAction[] = ['pause', 'resume', 'stop', 'discard', 'restart']
 /** Maior posição aceita em `exporter:write` (128 GiB): nada de mandar o arquivo de vídeo para o infinito. */
@@ -208,7 +215,7 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'camera:status': () => camera.view(),
     'camera:prepare': () => camera.prepare(),
     'camera:cancel-prepare': async () => camera.cancelPrepare(),
-    'camera:analyze': (projectId, kind) => camera.analyze(projectId, cameraKind(kind)),
+    'camera:analyze': async (projectId, kind, force) => camera.analyze(projectId, cameraKind(kind), { force: cameraForce(force) }),
     'camera:cancel': async (projectId, kind) => {
       store.dirOf(projectId) // id inválido falha aqui
       camera.cancel(projectId, cameraKind(kind))

@@ -25,8 +25,11 @@ interface CameraStore {
   refresh(): Promise<void>
   prepareEngine(): Promise<void>
   cancelPrepare(): Promise<void>
-  /** Põe a análise na fila (ou devolve a que já vale). `false` = não deu (o motivo vai para o estado do trabalho). */
-  analyze(projectId: string, kind: CameraKind): Promise<boolean>
+  /**
+   * Põe a análise na fila (ou devolve a que já vale; `force` = refaz de qualquer jeito, o que "Recortar de novo" quer).
+   * `false` = não deu (o motivo vai para o estado do trabalho).
+   */
+  analyze(projectId: string, kind: CameraKind, force?: boolean): Promise<boolean>
   cancel(projectId: string, kind: CameraKind): Promise<void>
   attach(): () => void
 }
@@ -70,9 +73,9 @@ export const useCamera = create<CameraStore>()((set, get) => ({
     }
   },
 
-  async analyze(projectId, kind) {
+  async analyze(projectId, kind, force) {
     try {
-      const job = await window.tomada.camera.analyze(projectId, kind)
+      const job = await window.tomada.camera.analyze(projectId, kind, force)
       set((s) => ({ jobs: { ...s.jobs, [cameraJobKey(projectId, kind)]: job } }))
       return true
     } catch (err) {

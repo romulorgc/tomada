@@ -15,9 +15,10 @@ import { isAbsolute, join } from 'node:path'
 import { FACE_TRACK_VERSION, parseFaceTrack, type FaceTrack } from '@shared/face'
 import { writeFileAtomic } from '../fs-utils'
 import type { Logger } from '../logger'
+import type { PrepareStepId } from '@shared/transcription'
 import { ProcessError, runProcess, tail } from '../process-runner'
 import { downloadFile, DownloadError } from '../transcription/download'
-import { detectNvidiaGpu, explain, FW_CUDA_PACKAGES, FW_PIP_INDEX, parsePipDownloadLine, parsePipProgressLine, venvPython } from '../transcription/faster-whisper'
+import { detectNvidiaGpu, explain, FW_CUDA_PACKAGES, FW_PIP_INDEX, parsePipDownloadLine, parsePipProgressLine, pipHasRawProgress, venvPython } from '../transcription/faster-whisper'
 import { bytesLine, type PrepareTracker, type StepSpec } from '../transcription/prepare-tracker'
 import { locatePython, type PythonFound } from '../transcription/python-locator'
 import type { ToolPaths } from '../transcription/tools-dir'
@@ -50,8 +51,9 @@ export const CAMERA_PACKAGES = ['opencv-python-headless>=4.9,<5', 'av>=12'] as c
 /** O recorte do fundo roda no onnxruntime: o da placa NVIDIA (com as rodas CUDA da transcrição, que já costumam estar lá) ou o do processador. */
 export const MATTE_PACKAGES_GPU = ['onnxruntime-gpu>=1.20,<2', ...FW_CUDA_PACKAGES] as const
 export const MATTE_PACKAGES_CPU = ['onnxruntime>=1.20,<2'] as const
-/** Estimativa do que o pip baixa (opencv ~39 MB, av ~30 MB, onnxruntime-gpu ~280 MB), para a barra de progresso. */
-const PIP_ESTIMATE_BYTES = 360_000_000
+/** Estimativa do que o pip baixa, para a barra de progresso: o rosto (opencv ~39 MB, av ~30 MB) e o recorte (onnxruntime-gpu ~280 MB). */
+const FACE_PIP_ESTIMATE_BYTES = 70_000_000
+const MATTE_PIP_ESTIMATE_BYTES = 290_000_000
 /** De quanto em quanto tempo o detector olha a imagem (ms): 5 por segundo bastam para um rosto que fala. */
 export const FACE_SAMPLE_MS = 200
 const MARKER_VERSION = 1
@@ -60,11 +62,15 @@ export const MATTE_MAX_SIDE = 1280
 /** Qualidade do vídeo da máscara (x264 crf; baixo = mais fiel). */
 export const MATTE_CRF = 14
 
+/** Dois blocos independentes depois do Python: o ROSTO (packages, model, check) e o RECORTE DO FUNDO (matte-*). */
 export const CAMERA_STEPS: readonly StepSpec[] = [
   { id: 'python', weight: 2 },
-  { id: 'packages', weight: 50 },
-  { id: 'model', weight: 8 },
-  { id: 'check', weight: 5 }
+  { id: 'packages', weight: 12 },
+  { id: 'model', weight: 1 },
+  { id: 'check', weight: 2 },
+  { id: 'matte-packages', weight: 38 },
+  { id: 'matte-model', weight: 8 },
+  { id: 'matte-check', weight: 3 }
 ]
 
 type Marker = {
@@ -87,6 +93,10 @@ export type PythonCameraDeps = {
   fetchImpl?: typeof fetch
   /** Para os testes. */
   locate?: () => Promise<PythonFound>
+  /** Executa os programas (o Python do venv, o pip, o teste final). Os testes trocam por um falso. */
+  run?: typeof runProcess
+  /** Baixa os modelos. Os testes trocam por um falso. */
+  download?: typeof downloadFile
   now?: () => Date
   /** O ffmpeg do app (grava o vídeo da máscara). `null` = não achei. */
   ffmpeg?: () => string | null
@@ -120,6 +130,8 @@ async function readMarker(t: ToolPaths): Promise<Marker | null> {
 export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
   const { tools, logger } = deps
   const locate = deps.locate ?? ((): Promise<PythonFound> => locatePython())
+  const run = deps.run ?? runProcess
+  const download = deps.download ?? downloadFile
   const now = deps.now ?? ((): Date => new Date())
 
   const MISSING = 'A análise da câmera ainda não foi preparada neste computador.'
@@ -141,8 +153,8 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
     return { face, matte, device: marker.providers?.includes('CUDAExecutionProvider') ? (marker.gpu ?? 'Placa NVIDIA') : null }
   }
 
-  /** Roda `pip install` lendo o progresso (`--progress-bar raw`). */
-  async function pip(args: string[], tracker: PrepareTracker, signal: AbortSignal, label: string): Promise<void> {
+  /** Roda `pip install` lendo o progresso (`--progress-bar raw`, que só existe do pip 25.1 em diante: `raw = false` para o pip antigo). */
+  async function pip(args: string[], tracker: PrepareTracker, signal: AbortSignal, o: { step: PrepareStepId; label: string; estimate: number; raw?: boolean }): Promise<void> {
     let buffer = ''
     let finished = 0
     let current = 0
@@ -155,17 +167,17 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
         currentTotal = dl.bytes
         current = line.trim().startsWith('Using cached') ? dl.bytes : 0
         currentName = dl.name
-        tracker.progress('packages', Math.min(0.98, (finished + current) / PIP_ESTIMATE_BYTES), `${label}: ${currentName}`)
+        tracker.progress(o.step, Math.min(0.98, (finished + current) / o.estimate), `${o.label}: ${currentName}`)
         return
       }
       const pr = parsePipProgressLine(line)
       if (pr) {
         current = pr.current
         currentTotal = pr.total
-        tracker.progress('packages', Math.min(0.98, (finished + current) / PIP_ESTIMATE_BYTES), `Baixando ${currentName} · ${bytesLine(pr.current, pr.total)}`)
+        tracker.progress(o.step, Math.min(0.98, (finished + current) / o.estimate), `Baixando ${currentName} · ${bytesLine(pr.current, pr.total)}`)
       }
     }
-    await runProcess(
+    await run(
       venvPython(tools),
       [
         '-m',
@@ -179,8 +191,7 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
         FW_PIP_INDEX,
         '--cache-dir',
         tools.pipCache,
-        '--progress-bar',
-        'raw',
+        ...(o.raw === false ? [] : ['--progress-bar', 'raw']),
         '--retries',
         '8',
         '--timeout',
@@ -201,95 +212,131 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
     )
   }
 
+  /** O pip do venv conhece `--progress-bar raw`? (Um venv novo vem com o pip que o Python trouxe, em geral mais velho que o 25.1.) */
+  async function ensureRawProgressPip(tracker: PrepareTracker, signal: AbortSignal): Promise<void> {
+    const { stdout } = await run(venvPython(tools), ['-m', 'pip', '--version'], { timeoutMs: 60_000, signal })
+    if (pipHasRawProgress(stdout)) return
+    // o pip antigo não conhece a barra: esta atualização (2 MB) roda sem ela
+    await pip(['--upgrade', 'pip'], tracker, signal, { step: 'packages', label: 'Atualizando o pip', estimate: 4_000_000, raw: false })
+  }
+
+  const cancelledError = (): DownloadError => new DownloadError('Cancelado.', false)
+
+  /** Baixa um modelo (origem fixa, tamanho e SHA-256 conferidos) com o progresso no passo `step`. */
+  async function fetchModel(file: { url: string; size: number; sha256: string; name: string }, dest: string, tracker: PrepareTracker, signal: AbortSignal, step: PrepareStepId): Promise<void> {
+    await download(
+      { url: file.url, dest, allowedHosts: CAMERA_DOWNLOAD_HOSTS, size: file.size, sha256: file.sha256 },
+      {
+        ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+        signal,
+        onProgress: (p) => tracker.progress(step, p.received / file.size, `Baixando ${file.name} · ${bytesLine(p.received, file.size)}`),
+        onNote: (m) => tracker.note(m)
+      }
+    )
+  }
+
+  type CheckInfo = { python?: string; opencv?: string; av?: string; yunet?: boolean; onnxruntime?: string | null; providers?: string[]; onnxruntimeError?: string }
+
+  async function runCheck(signal: AbortSignal): Promise<CheckInfo> {
+    const { stdout } = await run(venvPython(tools), [deps.scriptPath, '--check'], { signal, timeoutMs: 180_000, env: { PYTHONUTF8: '1' } })
+    return JSON.parse(stdout.trim().split(/\r?\n/).pop() ?? '{}') as CheckInfo
+  }
+
+  /**
+   * Duas TRILHAS independentes sobre o mesmo ambiente do Python: o ROSTO (OpenCV, PyAV, detector YuNet) e o RECORTE DO FUNDO
+   * (onnxruntime, modelo RVM de 107 MB). Cada uma grava a marca de preparo dela assim que passa na conferência: se o download do RVM
+   * cai, o enquadramento do rosto já está pronto e segue disponível (o especificação exige a independência); "Tentar de novo" refaz o que falta.
+   */
   async function prepare(tracker: PrepareTracker, signal: AbortSignal): Promise<void> {
-    let current: 'python' | 'packages' | 'model' | 'check' = 'python'
+    let current: PrepareStepId = 'python'
     try {
       await mkdir(tools.base, { recursive: true })
       await mkdir(tools.state, { recursive: true })
 
-      // --- 1. Python e venv (o mesmo da transcrição: se ele já existe, nada a fazer) ---------------------------------
+      // --- 1. Python e venv (o mesmo da transcrição: se ele já existe e funciona, nada a fazer) -----------------------
       tracker.begin('python', 'Procurando o Python…')
       let pythonVersion = ''
       let venvWorks = false
       if (await exists(venvPython(tools))) {
         try {
-          const { stdout } = await runProcess(venvPython(tools), ['-c', 'import sys; print(sys.version.split()[0])'], { timeoutMs: 30_000, signal })
+          const { stdout } = await run(venvPython(tools), ['-c', 'import sys; print(sys.version.split()[0])'], { timeoutMs: 30_000, signal })
           pythonVersion = stdout.trim()
           venvWorks = pythonVersion.length > 0
-        } catch {
+        } catch (err) {
+          // O venv é COMPARTILHADO com a transcrição: só se refaz com CERTEZA de que está quebrado (o Python dele abriu e falhou, ou nem
+          // abre). Cancelar, estourar o tempo ou qualquer outra dúvida sobem como erro, SEM apagar nada.
+          if (signal.aborted || !(err instanceof ProcessError) || (err.reason !== 'exit' && err.reason !== 'spawn')) throw err
           venvWorks = false
         }
+        if (signal.aborted) throw cancelledError()
       }
       if (!venvWorks) {
         const base = await locate()
         tracker.progress('python', 0.2, `Criando o ambiente do Python ${base.version.join('.')}…`)
         await rm(tools.venv, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
-        await runProcess(base.exe, [...base.prefix, '-m', 'venv', tools.venv], { signal, timeoutMs: 10 * 60_000 })
+        await run(base.exe, [...base.prefix, '-m', 'venv', tools.venv], { signal, timeoutMs: 10 * 60_000 })
         pythonVersion = base.version.join('.')
       }
       tracker.done('python', `Python ${pythonVersion}`)
-      if (signal.aborted) throw new DownloadError('Cancelado.', false)
+      if (signal.aborted) throw cancelledError()
 
-      // --- 2. pacotes (pip, só do PyPI) ----------------------------------------------------------------------------
+      // --- TRILHA DO ROSTO ------------------------------------------------------------------------------------------
+      // 2. pacotes (pip, só do PyPI)
       current = 'packages'
-      tracker.begin('packages', 'Instalando os pacotes da análise da câmera…')
-      const gpu = await (deps.detectGpu ?? ((): Promise<{ name: string } | null> => detectNvidiaGpu()))()
-      await pip([...CAMERA_PACKAGES, ...(gpu ? MATTE_PACKAGES_GPU : MATTE_PACKAGES_CPU)], tracker, signal, 'Instalando')
-      tracker.done('packages', gpu ? `OpenCV, leitura de vídeo e onnxruntime na placa ${gpu.name}` : 'OpenCV, leitura de vídeo e onnxruntime (processador)')
-      if (signal.aborted) throw new DownloadError('Cancelado.', false)
+      tracker.begin('packages', 'Preparando o instalador de pacotes…')
+      await ensureRawProgressPip(tracker, signal)
+      tracker.progress('packages', 0.02, 'Instalando OpenCV e a leitura de vídeo…')
+      await pip([...CAMERA_PACKAGES], tracker, signal, { step: 'packages', label: 'Instalando', estimate: FACE_PIP_ESTIMATE_BYTES })
+      tracker.done('packages', 'OpenCV e leitura de vídeo')
+      if (signal.aborted) throw cancelledError()
 
-      // --- 3. modelo do detector de rosto (revisão fixa, com tamanho e SHA-256) -------------------------------------
+      // 3. modelo do detector de rosto
       current = 'model'
       tracker.begin('model', 'Baixando o detector de rosto…')
-      await downloadFile(
-        { url: YUNET_FILE.url, dest: yunetPath(tools), allowedHosts: CAMERA_DOWNLOAD_HOSTS, size: YUNET_FILE.size, sha256: YUNET_FILE.sha256 },
-        {
-          ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
-          signal,
-          onProgress: (p) => tracker.progress('model', p.received / YUNET_FILE.size, `Baixando ${YUNET_FILE.name} · ${bytesLine(p.received, YUNET_FILE.size)}`),
-          onNote: (m) => tracker.note(m)
-        }
-      )
-      tracker.progress('model', 0.5, 'Baixando o modelo do recorte do fundo…')
-      await downloadFile(
-        { url: MATTE_MODEL.url, dest: mattePath(tools), allowedHosts: CAMERA_DOWNLOAD_HOSTS, size: MATTE_MODEL.size, sha256: MATTE_MODEL.sha256 },
-        {
-          ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
-          signal,
-          onProgress: (p) => tracker.progress('model', 0.5 + (0.5 * p.received) / MATTE_MODEL.size, `Baixando ${MATTE_MODEL.name} · ${bytesLine(p.received, MATTE_MODEL.size)}`),
-          onNote: (m) => tracker.note(m)
-        }
-      )
-      tracker.done('model', 'YuNet e RVM conferidos')
+      await fetchModel(YUNET_FILE, yunetPath(tools), tracker, signal, 'model')
+      tracker.done('model', 'YuNet conferido')
 
-      // --- 4. conferência: o ambiente enxerga o OpenCV e o detector? ---------------------------------------------------
+      // 4. conferência: o ambiente enxerga o OpenCV e o detector? Passou: o rosto está pronto (a marca é gravada já)
       current = 'check'
-      tracker.begin('check', 'Conferindo a análise da câmera…')
-      const { stdout } = await runProcess(venvPython(tools), [deps.scriptPath, '--check'], { signal, timeoutMs: 180_000, env: { PYTHONUTF8: '1' } })
-      const info = JSON.parse(stdout.trim().split(/\r?\n/).pop() ?? '{}') as {
-        python?: string
-        opencv?: string
-        av?: string
-        yunet?: boolean
-        onnxruntime?: string | null
-        providers?: string[]
-        onnxruntimeError?: string
-      }
-      if (!info.yunet) throw new Error('O OpenCV deste computador não tem o detector de rosto (FaceDetectorYN). Tente de novo.')
-      if (!info.onnxruntime) throw new Error(`O onnxruntime não abriu neste computador (${info.onnxruntimeError ?? 'motivo desconhecido'}). Tente de novo.`)
-      const marker: Marker = {
+      tracker.begin('check', 'Conferindo o detector de rosto…')
+      const faceInfo = await runCheck(signal)
+      if (!faceInfo.yunet) throw new Error('O OpenCV deste computador não tem o detector de rosto (FaceDetectorYN). Tente de novo.')
+      const faceMarker: Marker = {
         version: MARKER_VERSION,
-        python: info.python ?? pythonVersion,
-        opencv: info.opencv ?? '?',
-        av: info.av ?? '?',
-        completedAt: now().toISOString(),
-        onnxruntime: info.onnxruntime,
-        providers: info.providers ?? [],
-        gpu: gpu?.name ?? null
+        python: faceInfo.python ?? pythonVersion,
+        opencv: faceInfo.opencv ?? '?',
+        av: faceInfo.av ?? '?',
+        completedAt: now().toISOString()
       }
+      await writeFileAtomic(markerFile(tools), `${JSON.stringify(faceMarker, null, 2)}\n`)
+      tracker.done('check', `OpenCV ${faceMarker.opencv}`)
+      logger.info(`Análise do rosto preparada (OpenCV ${faceMarker.opencv}, PyAV ${faceMarker.av}).`)
+      if (signal.aborted) throw cancelledError()
+
+      // --- TRILHA DO RECORTE DO FUNDO ---------------------------------------------------------------------------------
+      // 5. onnxruntime (o da placa NVIDIA, com as rodas CUDA da transcrição, ou o do processador)
+      current = 'matte-packages'
+      tracker.begin('matte-packages', 'Instalando a execução do recorte do fundo…')
+      const gpu = await (deps.detectGpu ?? ((): Promise<{ name: string } | null> => detectNvidiaGpu()))()
+      await pip([...(gpu ? MATTE_PACKAGES_GPU : MATTE_PACKAGES_CPU)], tracker, signal, { step: 'matte-packages', label: 'Instalando', estimate: MATTE_PIP_ESTIMATE_BYTES })
+      tracker.done('matte-packages', gpu ? `onnxruntime na placa ${gpu.name}` : 'onnxruntime (processador)')
+      if (signal.aborted) throw cancelledError()
+
+      // 6. modelo do recorte (107 MB)
+      current = 'matte-model'
+      tracker.begin('matte-model', 'Baixando o modelo do recorte do fundo…')
+      await fetchModel(MATTE_MODEL, mattePath(tools), tracker, signal, 'matte-model')
+      tracker.done('matte-model', 'RVM conferido')
+
+      // 7. conferência do onnxruntime
+      current = 'matte-check'
+      tracker.begin('matte-check', 'Conferindo o recorte do fundo…')
+      const matteInfo = await runCheck(signal)
+      if (!matteInfo.onnxruntime) throw new Error(`O onnxruntime não abriu neste computador (${matteInfo.onnxruntimeError ?? 'motivo desconhecido'}). Tente de novo.`)
+      const marker: Marker = { ...faceMarker, onnxruntime: matteInfo.onnxruntime, providers: matteInfo.providers ?? [], gpu: gpu?.name ?? null, completedAt: now().toISOString() }
       await writeFileAtomic(markerFile(tools), `${JSON.stringify(marker, null, 2)}\n`)
-      tracker.done('check', `OpenCV ${marker.opencv}`)
-      logger.info(`Análise da câmera preparada (OpenCV ${marker.opencv}, PyAV ${marker.av}).`)
+      tracker.done('matte-check', matteInfo.providers?.includes('CUDAExecutionProvider') ? 'onnxruntime na placa de vídeo' : 'onnxruntime no processador')
+      logger.info(`Recorte do fundo preparado (onnxruntime ${marker.onnxruntime}, ${marker.providers?.join(', ') || 'sem provedores'}).`)
     } catch (err) {
       if (signal.aborted) {
         tracker.cancelled()

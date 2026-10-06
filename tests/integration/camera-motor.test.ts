@@ -9,7 +9,7 @@
  * Exige o motor preparado (`npm run preparar:camera`, pela fila): sem ele o teste FALHA dizendo isso (nada de pular).
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -150,12 +150,45 @@ describe('a grade de instantes da máscara (SlotWriter, no script do app)', () =
     expect(run(60, 0, [[0, 'a'], [0.0167, 'b'], [0.0333, 'c'], [0.0667, 'd'], [0.0834, 'e']])).toEqual(['a', 'b', 'c', 'c', 'd', 'e'])
   })
 
-  it('dois quadros no mesmo instante: vale o último', () => {
-    expect(run(60, 0, [[0, 'a'], [0.005, 'b'], [0.0167, 'c']])).toEqual(['b', 'c'])
+  it('dois quadros no mesmo instante da grade: vale o último', () => {
+    expect(run(60, 0, [[0, 'a'], [0.0167, 'b'], [0.0167, 'c']])).toEqual(['a', 'c'])
+  })
+
+  it('um quadro que chega ENTRE dois instantes só vale no instante seguinte: a máscara não anda na frente da câmera', () => {
+    // 30 qps: o quadro "b" começa aos 40 ms, a câmera ainda mostra o "a" no instante de 33,3 ms. Arredondar (o defeito) punha o "b" ali
+    expect(run(30, 0, [[0, 'a'], [0.04, 'b'], [0.08, 'c']])).toEqual(['a', 'a', 'b', 'c'])
+    // e o "c" (aos 80 ms) só entra aos 100 ms, não aos 66,7 ms
+    expect(run(30, 0, [[0, 'a'], [0.04, 'b'], [0.08, 'c'], [0.12, 'd']])).toEqual(['a', 'a', 'b', 'c', 'd'])
   })
 
   it('a grade começa no início da câmera (deslocamento) e segura o quadro em buracos de vários instantes', () => {
     expect(run(30, 2, [[2, 'a'], [2.0333, 'b'], [2.1, 'c']])).toEqual(['a', 'b', 'b', 'c'])
+  })
+
+  it('PROPRIEDADE, quadro a quadro, em taxa variável: em cada instante k/rate da grade vale o último quadro cuja apresentação JÁ COMEÇOU', () => {
+    // uma webcam de ~56 qps com jitter (pts em ms inteiros, como o relógio de um mp4) numa grade de 60: quadros que faltam e quadros que
+    // chegam entre dois instantes. Cada quadro leva o próprio índice como carga: o teste lê QUAL quadro vale em cada instante.
+    const rate = 60
+    const pts: number[] = []
+    let t = 0
+    let seed = 7
+    const rnd = (): number => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)
+    for (let i = 0; i < 400; i++) {
+      pts.push(Math.round(t * 1000) / 1000)
+      t += 1 / 56 + (rnd() - 0.5) * 0.006 // 56 qps ± 3 ms
+    }
+    const out = run(rate, 0, pts.map((p, i) => [p, String(i)]))
+    const eps = 0.02 / rate // a tolerância declarada do script (0,02 instante)
+    for (let k = 0; k < out.length; k++) {
+      const at = k / rate
+      const chosen = Number(out[k])
+      // nunca um quadro que ainda NÃO começou (a máscara na frente da câmera)
+      expect(pts[chosen]! - at, `instante ${k}: o quadro ${chosen} só começa em ${pts[chosen]} s`).toBeLessThanOrEqual(eps + 1e-9)
+      // e nenhum quadro mais novo que JÁ tinha começado ficou de fora (a máscara atrás da câmera)
+      const next = pts[chosen + 1]
+      if (next !== undefined) expect(next - at, `instante ${k}: o quadro ${chosen + 1} já tinha começado (${next} s)`).toBeGreaterThan(eps - 1e-9)
+    }
+    expect(out.length).toBeGreaterThan(300) // a grade foi até o fim
   })
 })
 
@@ -201,6 +234,16 @@ describe('recorte do fundo (RVM na placa) num trecho da gravação real', () => 
     }
     console.log(`instantes: ${camT.length} quadros da câmera (${src.avg_frame_rate} de média), ${matT.length} da máscara; pior diferença ${(worst * 1000).toFixed(1)} ms`)
     expect(worst).toBeLessThanOrEqual(half)
+    // a linha do tempo da máscara é a GRADE exata da câmera (o instante k fica em k/60), e a máscara de cada quadro da câmera entra no
+    // primeiro instante em que ele já está na tela: nunca antes dele (o de proximidade acima não distingue "antes" de "depois")
+    const grid = 1 / 60
+    for (let k = 0; k < matT.length; k++) expect(Math.abs(matT[k]! - k * grid), `instante ${k} da máscara fora da grade`).toBeLessThan(1e-4)
+    for (const p of camT) {
+      const slot = Math.ceil(p / grid - 0.02)
+      if (slot >= matT.length) continue // o último quadro pode cair depois do fim da máscara
+      expect(matT[slot]! - p, `a máscara do quadro de ${p.toFixed(4)} s entrou ${((p - matT[slot]!) * 1000).toFixed(1)} ms ANTES dele`).toBeGreaterThanOrEqual(-0.02 * grid - 1e-4)
+      expect(matT[slot]! - p, 'a máscara atrasou mais que um instante da grade').toBeLessThan(grid + 1e-4)
+    }
 
     // a pessoa (o centro-baixo do quadro, onde ela fica na gravação) é clara; o canto de cima, que é o quarto, é escuro
     const f = grayFrame(out, 3)
@@ -215,13 +258,24 @@ describe('recorte do fundo (RVM na placa) num trecho da gravação real', () => 
     expect(Math.max(...progress)).toBe(1)
   })
 
-  it('cancelar no meio interrompe o recorte com o motivo (quem descarta o arquivo parcial é o serviço, testado em camera-recorte)', async () => {
+  it('cancelar no meio interrompe o recorte com o motivo E o ffmpeg que gravava o parcial morre junto (o arquivo se apaga na hora)', async () => {
     const dir = tmp()
     const out = join(dir, 'camera-matte.mp4')
     const ctl = new AbortController()
     const run = engine.makeMatte({ video: REAL, out, durationMs: 28_672, signal: ctl.signal })
-    setTimeout(() => ctl.abort(), 2500)
-    await expect(run).rejects.toThrow(/Cancelado/)
+    const settled = run.then(
+      () => null,
+      (err: unknown) => err
+    )
+    // cancela quando o ffmpeg já abriu o arquivo de saída (é o que o Python faz antes do primeiro quadro)
+    const limit = Date.now() + 60_000
+    while (!existsSync(out) && Date.now() < limit) await new Promise((r) => setTimeout(r, 40))
+    expect(existsSync(out), 'o ffmpeg nem chegou a abrir o arquivo de saída').toBe(true)
+    await new Promise((r) => setTimeout(r, 500))
+    ctl.abort()
+    expect(String(await settled)).toMatch(/Cancelado/)
+    // o Windows não apaga um arquivo que um programa ainda tem aberto: se o ffmpeg tivesse sobrevivido ao Python, isto falharia
+    expect(() => rmSync(out), 'o ffmpeg seguiu com o parcial aberto depois do cancelamento').not.toThrow()
   })
 
   it('caminho que não é absoluto (ou que vira opção) é recusado antes de rodar qualquer coisa', async () => {
