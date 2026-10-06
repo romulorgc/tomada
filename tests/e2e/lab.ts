@@ -74,6 +74,8 @@ export type StillOptions = {
   faceUrl?: string | null
   /** A URL do recorte do fundo (a máscara), para o layout Apresentador (ver `writeMatte`). */
   matteUrl?: string | null
+  /** Usa o mapa de conteúdo da tela da pasta do projeto (`events/content-map.jsonl`), que enquadra a janela quadrada do 9:16. */
+  contentMap?: boolean
 }
 
 /** Renderiza os instantes pedidos e devolve os PNGs. */
@@ -93,7 +95,8 @@ export async function renderStills(lab: Page, o: StillOptions): Promise<Buffer[]
     eventUrls: {
       cursor: mediaUrl(folder, EVENT_FILES.cursor),
       clicks: mediaUrl(folder, EVENT_FILES.clicks),
-      keys: mediaUrl(folder, EVENT_FILES.keys)
+      keys: mediaUrl(folder, EVENT_FILES.keys),
+      ...(o.contentMap ? { contentMap: mediaUrl(folder, EVENT_FILES.contentMap) } : {})
     }
   }
   const base64s = await lab.evaluate((r) => (window as unknown as { tomadaExport: { renderStills(x: unknown): Promise<string[]> } }).tomadaExport.renderStills(r), req)

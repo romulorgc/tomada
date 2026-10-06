@@ -105,7 +105,7 @@ export type ProjectDetail = {
     camera: MediaFile | null
   }
   /** URLs dos arquivos de eventos (null = o arquivo não existe, ex.: gravação só de câmera). */
-  events: { cursor: string | null; clicks: string | null; keys: string | null; /** A página do navegador medida (C1); null = não foi medida. */ contentRect: string | null }
+  events: { cursor: string | null; clicks: string | null; keys: string | null; /** A página do navegador medida (C1); null = não foi medida. */ contentRect: string | null; /** O mapa de conteúdo da imagem (enquadramento do 9:16); null = não foi medido. */ contentMap?: string | null }
   /** Resultados da análise da câmera (M4c) que já existem na pasta do projeto, com a versão do arquivo na URL (null = ainda não existe). */
   analysis: { face: string | null; matte: string | null }
 }
@@ -316,7 +316,7 @@ export type ExportJob = {
   screenUrl: string | null
   cameraUrl: string | null
   /** URLs dos eventos. */
-  eventUrls: { cursor: string | null; clicks: string | null; keys: string | null; contentRect: string | null }
+  eventUrls: { cursor: string | null; clicks: string | null; keys: string | null; contentRect: string | null; contentMap?: string | null }
   /** A análise do rosto na câmera (enquadramento), ou null se ainda não existe. */
   faceUrl: string | null
   /** O recorte do fundo da câmera (vídeo da máscara) que vale para a câmera de agora, ou null se não existe. O apresentador recortado precisa dele. */

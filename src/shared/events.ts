@@ -4,6 +4,7 @@
  */
 import type { ClickEvent, ContentRectSample, CursorSample, KeyEvent } from './types'
 import type { EventsData } from './scene'
+import { CONTENT_MAP_FILE, contentSampleFromLine, type ContentSample } from './content-map'
 
 /**
  * Texto JSON Lines → lista. Linha vazia é ignorada. Uma linha inválida no MEIO é erro (arquivo
@@ -35,12 +36,16 @@ export function parseJsonLines<T>(text: string, label = 'arquivo'): T[] {
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
 /** Textos dos arquivos → eventos limpos (só os que têm os números certos). `contentRect` (C1) é opcional: a página do navegador. */
-export function eventsFromText(text: { cursor?: string; clicks?: string; keys?: string; contentRect?: string }): EventsData {
+export function eventsFromText(text: { cursor?: string; clicks?: string; keys?: string; contentRect?: string; contentMap?: string }): EventsData {
   const cursor = parseJsonLines<CursorSample>(text.cursor ?? '', 'cursor.jsonl').filter((s) => num(s.t) && num(s.x) && num(s.y))
   const clicks = parseJsonLines<ClickEvent>(text.clicks ?? '', 'clicks.jsonl').filter((c) => num(c.t) && num(c.x) && num(c.y))
   const keys = parseJsonLines<KeyEvent>(text.keys ?? '', 'keys.jsonl').filter((k) => num(k.t))
   const contentRects = parseJsonLines<ContentRectSample>(text.contentRect ?? '', 'content-rect.jsonl').filter((r) => num(r.t) && num(r.x) && num(r.y) && num(r.w) && num(r.h))
-  return { cursor, clicks, keys, contentRects }
+  const contentMap = parseJsonLines<unknown>(text.contentMap ?? '', CONTENT_MAP_FILE)
+    .map(contentSampleFromLine)
+    .filter((s): s is ContentSample => s !== null)
+    .sort((a, b) => a.t - b.t)
+  return { cursor, clicks, keys, contentRects, contentMap }
 }
 
 /** Caminhos relativos dos eventos dentro da pasta do projeto. */
@@ -50,5 +55,7 @@ export const EVENT_FILES = {
   clicks: 'events/clicks.jsonl',
   keys: 'events/keys.jsonl',
   /** A página do navegador (C1): só existe se foi medida. */
-  contentRect: `events/${CONTENT_RECT_FILE}`
+  contentRect: `events/${CONTENT_RECT_FILE}`,
+  /** Onde está o conteúdo da imagem da tela (a janela quadrada do 9:16 se enquadra por ele): só existe se foi medido. */
+  contentMap: `events/${CONTENT_MAP_FILE}`
 } as const

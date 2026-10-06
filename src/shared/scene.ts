@@ -39,6 +39,7 @@ import { ZOOM_SCALE_SPRING } from './spring'
 import { computeCameraPath, sampleCameraPath, visibleRect, type CameraPath } from './zoom'
 import { fitRect } from './geometry'
 import { FOCUS_SPRING, actionFocusAt, buildActionFocus } from './action-focus'
+import { createContentTrack, type ContentMap } from './content-map'
 import { activeBlurRegions } from './blur'
 import type { BlurRegion } from './types'
 
@@ -75,6 +76,8 @@ export type EventsData = {
   keys: KeyEvent[]
   /** A página do navegador medida (C1), na tela gravada. */
   contentRects?: ContentRectSample[]
+  /** Onde está o conteúdo da imagem da tela (densidade de bordas por célula, uma amostra por mudança): enquadra a janela do 9:16. */
+  contentMap?: ContentMap
 }
 
 /** Eventos já processados (independem do estilo e dos zooms: reaproveitáveis entre edições). */
@@ -87,6 +90,8 @@ export type CursorData = {
   durationMs: number
   /** A página do navegador medida (C1), na tela gravada, para o recorte automático. */
   contentRects: ContentRectSample[]
+  /** O mapa de conteúdo da imagem, na tela gravada inteira (o recorte é aplicado ao montar o enquadramento). */
+  contentMap: ContentMap
   /**
    * O recorte aplicado (C1): cursor e cliques JÁ estão no espaço dele (0..1 dentro do recorte; o que caiu fora é `out`).
    * `null` = a tela inteira.
@@ -107,6 +112,7 @@ function buildData(events: EventsData, durationMs: number, crop: CropTimeline | 
     keys: [...events.keys].sort((a, b) => a.t - b.t),
     durationMs,
     contentRects: events.contentRects ?? [],
+    contentMap: events.contentMap ?? [],
     crop,
     events
   }
@@ -153,7 +159,7 @@ export function applyScreenCrop(data: CursorData, project: Pick<Project, 'screen
       if (k.out || c.out) next.out = true
       return next
     })
-    out = { ...buildData({ cursor, clicks, keys: events.keys, contentRects: events.contentRects }, origin.durationMs, crop), origin, events: origin.events }
+    out = { ...buildData({ cursor, clicks, keys: events.keys, contentRects: events.contentRects, contentMap: events.contentMap }, origin.durationMs, crop), origin, events: origin.events }
   }
   byOrigin.set(sig, out)
   return out
@@ -294,7 +300,7 @@ export function deriveProject(project: Project, rawData: CursorData, format: For
         const source = f.view.h * baseSize.h
         const oneToOne = dest && source > 0 ? Math.max(1, source / Math.min(dest.w, dest.h)) : 1
         max = Math.min(CENTER_ZOOM_MAX, oneToOne)
-        const steps = buildActionFocus({ clicks: data.clicks, keys: data.keys, cursor: data.grid, view: f.view })
+        const steps = buildActionFocus({ clicks: data.clicks, keys: data.keys, cursor: data.grid, view: f.view, content: createContentTrack(data.contentMap, crop) })
         // sem nenhuma ação (só passeio do cursor) a janela segue o cursor, como o V-A
         if (steps) focus = { focusAt: (t) => actionFocusAt(steps, t), spring: FOCUS_SPRING }
       }

@@ -699,7 +699,8 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
             cursor: await eventUrl(request.projectId, dir, EVENT_FILES.cursor),
             clicks: await eventUrl(request.projectId, dir, EVENT_FILES.clicks),
             keys: await eventUrl(request.projectId, dir, EVENT_FILES.keys),
-            contentRect: await eventUrl(request.projectId, dir, EVENT_FILES.contentRect)
+            contentRect: await eventUrl(request.projectId, dir, EVENT_FILES.contentRect),
+            contentMap: await eventUrl(request.projectId, dir, EVENT_FILES.contentMap)
           },
           // a análise do rosto (enquadramento da câmera): o exportador enquadra como a prévia
           faceUrl: await eventUrl(request.projectId, dir, FACE_FILE),

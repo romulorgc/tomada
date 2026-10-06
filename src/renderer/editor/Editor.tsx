@@ -234,13 +234,14 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
     let alive = true
     void (async () => {
       try {
-        const [cursor, clicks, keys, contentRect] = await Promise.all([
+        const [cursor, clicks, keys, contentRect, contentMap] = await Promise.all([
           fetchText(detail.events.cursor),
           fetchText(detail.events.clicks),
           fetchText(detail.events.keys),
-          fetchText(detail.events.contentRect)
+          fetchText(detail.events.contentRect),
+          fetchText(detail.events.contentMap ?? null)
         ])
-        if (alive) setRawData(prepareEvents(eventsFromText({ cursor, clicks, keys, contentRect }), durationMs))
+        if (alive) setRawData(prepareEvents(eventsFromText({ cursor, clicks, keys, contentRect, contentMap }), durationMs))
       } catch (err) {
         window.tomada.log({ level: 'error', message: 'Falha ao ler os eventos do projeto', detail: messageOf(err) })
         if (alive) {
