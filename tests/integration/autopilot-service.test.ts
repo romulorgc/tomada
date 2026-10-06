@@ -37,7 +37,7 @@ function addClip(doc: Project): void {
   doc.clips = [{ id: 'clip-1', title: 'Agenda', hook: 'Organize agora', ranges: [{ start: 0, end: 20_000 }], score: 80, reason: 'Demonstração sintética', format: 'vertical', layoutV: 'auto', source: 'manual' }]
 }
 
-async function world(initial: Project, options: { gate?: Promise<void> } = {}) {
+async function world(initial: Project, options: { gate?: Promise<void>; transcript?: Transcript; camera?: ReturnType<typeof makeCamera> } = {}) {
   const dir = tmp()
   await Promise.all(['media', 'events', 'exports'].map((folder) => mkdir(join(dir, folder), { recursive: true })))
   let stored = structuredClone(initial)
@@ -62,7 +62,7 @@ async function world(initial: Project, options: { gate?: Promise<void> } = {}) {
     return { exportId }
   })
   const exporter = { start, idle: vi.fn(async () => { if (options.gate && exportCount === 1) await options.gate }), status: () => exportState } satisfies Pick<ExportService, 'start' | 'idle' | 'status'>
-  const transcription = { getTranscript: vi.fn(async () => structuredClone(transcript)), idle: vi.fn(async () => undefined), start: vi.fn(async () => undefined) } satisfies Pick<TranscriptionService, 'getTranscript' | 'idle' | 'start'>
+  const transcription = { getTranscript: vi.fn(async () => structuredClone(options.transcript ?? transcript)), idle: vi.fn(async () => undefined), start: vi.fn(async () => undefined) } satisfies Pick<TranscriptionService, 'getTranscript' | 'idle' | 'start'>
   const prefs = structuredClone(DEFAULT_AUTOPILOT)
   const ready = vi.fn()
   const service = createAutopilot({
@@ -71,9 +71,10 @@ async function world(initial: Project, options: { gate?: Promise<void> } = {}) {
     transcription: transcription as unknown as TranscriptionService,
     derived: { levels: async () => null, peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, idle: async () => undefined, shutdown: () => undefined },
     llm: { provider: () => null } as unknown as LlmManager,
+    ...(options.camera ? { camera: options.camera as unknown as NonNullable<Parameters<typeof createAutopilot>[0]['camera']> } : {}),
     logger: createMemoryLogger(), prefs: () => prefs, emit: vi.fn(), ready
   })
-  return { service, dir, start, rendered, ready, prefs, read, write, project: () => structuredClone(stored) }
+  return { service, dir, start, rendered, ready, prefs, read, write, camera: options.camera, project: () => structuredClone(stored) }
 }
 
 describe('integração dos ajustes e da retomada do piloto automático', () => {
@@ -374,5 +375,71 @@ describe('consertos da revisão independente da M4d', () => {
     expect(new Set(cuts.map((cut) => cut.id)).size).toBe(cuts.length)
     expect(cuts.filter((cut) => cut.origin === 'auto').length).toBeGreaterThan(0)
     expect(cuts.find((cut) => cut.id === 'cut-1')).toMatchObject({ start: 10_000, end: 11_000, origin: 'manual', reason: 'manual' })
+  })
+})
+
+/** O serviço da câmera (M4c) como o piloto o enxerga: espera da fila, o recorte que já vale e o pedido de análise. */
+function makeCamera(matte: boolean, hold?: Promise<void>) {
+  return {
+    idle: vi.fn(async () => { await hold }),
+    result: vi.fn(async (_id: string, kind: string) => (matte && kind === 'matte' ? 'tomada-media://p/media/camera-matte.mp4' : null)),
+    analyze: vi.fn(async () => ({ id: 'trabalho' }))
+  }
+}
+
+describe('piloto automático × câmera da M4c (quadro ao lado e apresentador recortado)', () => {
+  const withCamera = (doc: Project): Project => {
+    doc.sources.camera = { path: 'media/camera.mp4', w: 1280, h: 720, fps: 30, durationMs: 20_000 }
+    return doc
+  }
+  /** Fala corrida de 1 s a 12 s, sem nada acontecendo na tela: o automático escolhe o layout com a câmera. */
+  const talk: Transcript = { ...transcript, words: Array.from({ length: 36 }, (_, i) => ({ i, text: `p${i}`, start: 1000 + i * 300, end: 1000 + i * 300 + 280, prob: 1, kind: 'word' as const })), vad: [{ start: 1000, end: 12_000 }] }
+
+  it('sem o recorte do fundo, a fala sem atividade vira lado a lado no 16:9 e V-B no vertical', async () => {
+    const doc = withCamera(baseProject())
+    finishedPipeline(doc)
+    const w = await world(doc, { transcript: talk, camera: makeCamera(false) })
+    await w.service.retry(id, 'layouts')
+    const stored = w.project()
+    expect(stored.layouts.length).toBeGreaterThan(0)
+    expect(stored.layouts.every((l) => l.layout === 'side-by-side')).toBe(true)
+    expect(stored.vertical!.layouts.length).toBeGreaterThan(0)
+    expect(stored.vertical!.layouts.every((l) => l.layout === 'stack')).toBe(true)
+  })
+  it('com o recorte do fundo pronto, o automático escolhe o Apresentador (16:9) e o V-D (9:16) onde a câmera aparece', async () => {
+    const doc = withCamera(baseProject())
+    finishedPipeline(doc)
+    const w = await world(doc, { transcript: talk, camera: makeCamera(true) })
+    await w.service.retry(id, 'layouts')
+    const stored = w.project()
+    expect(stored.layouts.length).toBeGreaterThan(0)
+    expect(stored.layouts.every((l) => l.layout === 'presenter')).toBe(true)
+    expect(stored.vertical!.layouts.length).toBeGreaterThan(0)
+    expect(stored.vertical!.layouts.every((l) => l.layout === 'presenter')).toBe(true)
+  })
+  it('a Revisão aceita escolher o Apresentador por item e pede o recorte do fundo ao serviço da câmera', async () => {
+    const doc = withCamera(baseProject())
+    addClip(doc)
+    const w = await world(doc, { camera: makeCamera(false) })
+    const handlers = createHandlers({ autopilot: w.service } as HandlerDeps)
+    await handlers['review:update'](id, 'clip-1', { layout: 'presenter' }, false)
+    expect(itemOf(w.project(), 'clip-1').layout).toBe('presenter')
+    expect(w.camera!.analyze).toHaveBeenCalledWith(id, 'matte')
+    w.camera!.analyze.mockClear()
+    await handlers['review:update'](id, 'clip-1', { layout: 'stack' }, false)
+    expect(w.camera!.analyze).not.toHaveBeenCalled()
+  })
+  it('a exportação do piloto espera a análise da câmera (rosto e recorte) terminar antes de começar', async () => {
+    const doc = withCamera(baseProject())
+    finishedPipeline(doc)
+    let release!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    const w = await world(doc, { camera: makeCamera(false, hold) })
+    const exporting = w.service.reexport(id, 'youtube')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(w.start).not.toHaveBeenCalled()
+    release()
+    await exporting
+    expect(w.start).toHaveBeenCalledOnce()
   })
 })

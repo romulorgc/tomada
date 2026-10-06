@@ -216,8 +216,9 @@ async function main(): Promise<void> {
       if (!processingStarted.has(snap.sessionId)) processingStarted.set(snap.sessionId,Date.now())
       if (snap.status === 'done' && !autoStarted.has(snap.sessionId)) {
         autoStarted.add(snap.sessionId)
-        void autopilot?.start(snap.folder,processingStarted.get(snap.sessionId))
+        // o rosto entra na fila da câmera ANTES do piloto: as exportações dele esperam essa fila terminar
         void autoAnalyzeFace(snap.folder)
+        void autopilot?.start(snap.folder,processingStarted.get(snap.sessionId))
       }
     }
   }
@@ -287,7 +288,7 @@ async function main(): Promise<void> {
   })
 
   autopilot = createAutopilot({
-    store, transcription, derived, exporter, llm, logger,
+    store, transcription, derived, exporter, llm, logger, camera,
     prefs: () => {const settings = state.settings();return { ...DEFAULT_AUTOPILOT,...settings.autopilot,steps:{...(settings.transcription?.auto === undefined ? {} : {transcribe:settings.transcription.auto}),...(settings.transcription?.autoClean === undefined ? {} : {clean:settings.transcription.autoClean}),...settings.autopilot?.steps}}},
     ownerStyle: () => state.settings().ownerStyle,
     ownerBackground: async () => { const asset = state.settings().ownerStyleAsset; return asset ? resolveProjectFile(userData,asset) : undefined },

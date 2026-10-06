@@ -17,6 +17,7 @@ import type { Project, ProjectSummary, Transcript } from '@shared/types'
 import { autoVerticalLayouts, defaultVerticalEdit, speechRanges } from '@shared/vertical'
 import { generateAutoZooms, zoomPresetFor } from '@shared/zoom'
 import { deriveRetakeCuts } from '@shared/retake-marker'
+import type { CameraService } from './camera/service'
 import type { DerivedMedia } from './derived-media'
 import type { ExportService } from './export-service'
 import { pathExists, writeFileAtomic } from './fs-utils'
@@ -48,6 +49,8 @@ export type AutopilotDeps = {
   store: ProjectStore; transcription: TranscriptionService; derived: DerivedMedia; exporter: ExportService; llm: LlmManager; logger: Logger
   prefs(): AutopilotPrefs; ownerStyle?(): Project['style'] | undefined
   ownerBackground?(): Promise<string | undefined>
+  /** O serviço da câmera (M4c): o piloto espera a análise do rosto e do recorte do fundo e escolhe o Apresentador quando o recorte já existe. */
+  camera?: Pick<CameraService, 'idle' | 'result' | 'analyze'>
   emit(state: PipelineState): void; ready(id: string, clips: number,youtube?:boolean): void
 }
 /** Saída que o app gravou em exports/postar, com o que ele viu ao gravar (para provar depois que continua intacta). */
@@ -125,6 +128,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     try {
       // Transcrição e exportação compartilham GPU; também esperamos a exportação manual que já estiver em voo.
       await deps.transcription.idle()
+      // O enquadramento do rosto e o recorte do fundo (M4c) entram no vídeo: a exportação só começa com a análise pronta.
+      await deps.camera?.idle()
       await deps.exporter.idle()
       const { exportId } = await deps.exporter.start({ projectId: id, format: itemId === 'youtube' ? 'horizontal' : 'vertical', resolution: '1080p', fps: 30, ...(itemId === 'youtube' ? {} : { clipId: itemId }) })
       await deps.exporter.idle()
@@ -190,11 +195,13 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       case 'layouts': {
         const t = await deps.transcription.getTranscript(id)
         const e = await events(dir, duration)
-        const automatic = autoVerticalLayouts({ durationMs: duration, hasCamera: !!project.sources.camera && !project.style.camera.hidden, clicks: e.clicks, keys: e.keys, cursor: e.grid, speech: speechRanges(t?.words), kept: keptRanges(duration, project.cuts) })
+        // Com o recorte do fundo já pronto (M4c), a fala sem atividade vira Apresentador (16:9) e V-D (9:16) em vez de lado a lado e V-B.
+        const hasMatte = Boolean(await deps.camera?.result(id, 'matte').catch(() => null))
+        const automatic = autoVerticalLayouts({ ...(hasMatte ? { hasMatte } : {}), durationMs: duration, hasCamera: !!project.sources.camera && !project.style.camera.hidden, clicks: e.clicks, keys: e.keys, cursor: e.grid, speech: speechRanges(t?.words), kept: keptRanges(duration, project.cuts) })
         await regenerate(id, (p) => {
           const v = p.vertical ?? defaultVerticalEdit()
           const fit = (generated: typeof automatic, manual: typeof automatic) => [...manual, ...generated.filter((a) => !manual.some((m) => m.start < a.end && m.end > a.start)).map((s) => ({ ...s, origin: 'auto' as const }))].sort((a,b) => a.start-b.start)
-          const h = automatic.map((s) => ({ ...s, id: `h-${s.id}`, layout: s.layout === 'stack' && p.sources.camera ? 'side-by-side' as const : 'bubble' as const }))
+          const h = automatic.map((s) => ({ ...s, id: `h-${s.id}`, layout: s.layout === 'presenter' ? 'presenter' as const : s.layout === 'stack' && p.sources.camera ? 'side-by-side' as const : 'bubble' as const }))
           return { ...p, layouts: fit(h.filter((s) => !p.autoExclusions?.layouts?.includes(s.id)), p.layouts.filter((s) => s.origin !== 'auto')), vertical: { ...v, layouts: fit(automatic.filter((s) => !v.autoExclusions?.layouts?.includes(s.id)), v.layouts.filter((s) => s.origin !== 'auto')) } }
         })
         return 'Layouts escolhidos pela atividade da tela nos dois formatos.'
@@ -356,6 +363,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       }
       const result = await change(id,(p) => updateReviewItem(p,itemId,{ ...patch, ...(reexport ? { phase: 'queued', revision: (itemOf(p,itemId).revision ?? 0) + 1 } : {}) }))
       if (Object.hasOwn(patch,'text')) { const {dir} = await deps.store.read(id); const path = itemOf(result,itemId).textPath; if(path) await writeFileAtomic(await resolveProjectFile(dir,path),textOf(result,itemId,(await deps.transcription.getTranscript(id))?.words ?? null)) }
+      // Escolher o Apresentador pede o recorte do fundo (o editor também pede); sem motor preparado a exportação diz o motivo.
+      if (patch.layout === 'presenter' && deps.camera) await deps.camera.analyze(id, 'matte').catch((err) => deps.logger.warn('Piloto automático: não consegui pedir o recorte do fundo para o Apresentador.', err))
       if (reexport) void enqueue(() => exportItem(id,itemId))
       return result
     },
