@@ -38,13 +38,20 @@ def mfcc(audio, sample_rate=16000):
     return cepstra.astype(np.float32)
 
 
-def measure_embeddings(image, sound, shift=7):
-    """Mesmo custo euclidiano do SyncNet; bordas sem padding e mínimo subquadro."""
+def measure_embeddings(image, sound, shift=7, active=None):
+    """Mesmo custo euclidiano do SyncNet; bordas sem padding e mínimo subquadro.
+
+    `active` (um booleano por embedding) restringe a média aos instantes COM fala: o SyncNet foi treinado com
+    fala contínua, e quadros de silêncio só somam distância ao acaso e diluem a confiança.
+    """
     count = min(len(image), len(sound))
     if count <= 2 * shift + 10:
         return {"offsetMs": 0., "confidence": 0.}
     video = image[shift:count - shift]
-    distances = np.array([np.linalg.norm(video - sound[shift + k:count - shift + k], axis=1).mean()
+    chosen = np.ones(len(video), dtype=bool) if active is None else np.asarray(active, dtype=bool)[shift:count - shift]
+    if chosen.sum() < 20:   # menos de 0,8 s de fala: não há o que medir
+        return {"offsetMs": 0., "confidence": 0.}
+    distances = np.array([np.linalg.norm(video - sound[shift + k:count - shift + k], axis=1)[chosen].mean()
                           for k in range(-shift, shift + 1)])
     best = int(distances.argmin())
     correction = 0.
@@ -91,25 +98,50 @@ def video_frames(request, start, duration, fps=25):
     return np.frombuffer(data, dtype=np.uint8).reshape(-1, 360, 640, 3)
 
 
-def speaking_windows(audio):
-    """Até quatro janelas de 6 s de maior atividade, sem medir longos silêncios."""
-    duration = len(audio) / 16000
-    if duration < 2:
+def speech_activity(audio):
+    """Quadros de 40 ms com fala, medidos no nível ORIGINAL do arquivo (RMS em unidades de int16).
+
+    Decidir depois de normalizar o volume não barra nada: o ruído de um microfone mudo, ampliado mil vezes,
+    vira "fala". Piso absoluto de 25 (cerca de -62 dBFS) e 4x o piso de ruído da própria gravação.
+    """
+    samples = np.asarray(audio, dtype=float)
+    count = len(samples) // 640
+    if not count:
+        return np.zeros(0, dtype=bool)
+    envelope = np.sqrt((samples[:count * 640].reshape(count, 640) ** 2).mean(axis=1))
+    low, high = float(np.percentile(envelope, 10)), float(np.percentile(envelope, 95))
+    if high < 4 * max(low, 1.):   # sem sílabas e pausas (12 dB entre o forte e o fraco): chiado estacionário, não fala
+        return np.zeros(count, dtype=bool)
+    return envelope > max(4 * min(low, .1 * high), 25.)
+
+
+def speaking_windows(active, length=6., limit=4):
+    """Até quatro janelas de `length` s com a MAIOR FRAÇÃO de fala (não o maior volume: cliques de mouse
+    e de teclado têm volume e nenhuma boca). Janela com menos de 25% de fala não entra."""
+    if len(active) < 2.5 * 25:
         return []
-    length = min(6., duration)
+    size = min(round(length * 25), len(active))
     candidates = []
-    for start in np.arange(0, max(.01, duration - length + .01), .5):
-        clip = audio[round(start * 16000):round((start + length) * 16000)].astype(float)
-        rms = np.sqrt(np.mean(clip ** 2))
-        if rms >= 12:
-            candidates.append((rms, float(start), length))
+    for first in range(0, len(active) - size + 1, 12):
+        fraction = float(active[first:first + size].mean())
+        if fraction >= .25 and fraction * size * .04 >= 1.2:
+            candidates.append((fraction, first / 25, size / 25))
     windows = []
-    for _, start, length in sorted(candidates, reverse=True):
-        if all(abs(start - s) >= length * .8 for s, _ in windows):
-            windows.append((start, length))
-        if len(windows) == 4:
+    for _, start, span in sorted(candidates, reverse=True):
+        if all(abs(start - other) >= span * .8 for other, _ in windows):
+            windows.append((start, span))
+        if len(windows) == limit:
             break
     return sorted(windows)
+
+
+def speech_gain(audio, active):
+    """Ganho que leva o RMS dos quadros com fala a ~3000 (nível do exemplo oficial); nunca por pico, porque
+    um clique de teclado a -24 dBFS num microfone com fala a -50 dBFS é quem manda no pico."""
+    samples = np.asarray(audio, dtype=float)
+    count = min(len(active), len(samples) // 640)
+    spoken = samples[:count * 640].reshape(count, 640)[np.asarray(active[:count], dtype=bool)]
+    return 3000. / max(float(np.sqrt(np.mean(spoken ** 2))), 1.) if spoken.size else 1.
 
 
 def face_crops(frames, model=None):
@@ -163,19 +195,29 @@ def sessions(model):
     return lip, aud, handles
 
 
+def few_speech(seconds):
+    """Por que a medição não teve confiança: quase sempre falta fala (o exemplo oficial tem mais de 12 s)."""
+    if seconds < 12:
+        return (f"Só encontrei {seconds:.0f} s de fala nesta gravação, pouco para medir a sincronia pela boca "
+                "(o ideal é a partir de 12 s, de frente para a câmera, com boa luz e o microfone mais perto).")
+    return "Sem dois trechos de rosto falando com confiança suficiente."
+
+
 def lip_sync(request):
-    full = audio_samples(request, duration=1800)
-    # Microfone muito baixo altera o coeficiente de energia do MFCC. Normalizar a amplitude,
-    # sem mudar uma única amostra no tempo, evita confundir volume com dessincronia.
-    peak = float(np.max(np.abs(full.astype(float)))) if len(full) else 0.
-    if peak > 0:
-        full = full.astype(float) * (28000 / peak)
+    full = audio_samples(request, duration=1800).astype(float)
+    # Fala e silêncio se decidem no nível ORIGINAL da gravação; o volume só é ajustado por janela, depois.
+    active = speech_activity(full)
     if "startMs" in request:
         windows = [(max(0., float(request["startMs"]) / 1000), min(12., float(request.get("durationMs", 6000)) / 1000))]
+        if request.get("preCropped"):
+            active = np.ones(len(active), dtype=bool)   # o exemplo oficial é fala contínua, recortada à mão
     else:
-        windows = speaking_windows(full)
+        windows = speaking_windows(active)
     if not windows:
-        return {"detector": "syncnet", "segments": [], "offsetMs": None, "confidence": 0, "reason": "Sem fala suficiente para medir a sincronia."}
+        silent = len(full) == 0 or float(np.max(np.abs(full))) < 100
+        reason = ("Esta gravação não tem voz: o microfone gravou silêncio. Confira se o microfone certo estava ligado e sem mudo."
+                  if silent else "Há pouca fala nesta gravação para medir a sincronia (menos de uns 2 segundos juntos, de frente para a câmera).")
+        return {"detector": "syncnet", "segments": [], "offsetMs": None, "confidence": 0, "reason": reason}
     lip, aud, handles = sessions(absolute(request["model"]))
     segments = []
     for start, duration in windows:
@@ -189,6 +231,9 @@ def lip_sync(request):
         if crops is None:
             continue
         audio = full[round(start * 16000):round((start + duration) * 16000)]
+        spoken = active[round(start * 25):round(start * 25) + len(audio) // 640]
+        # Microfone baixo altera o coeficiente de energia do MFCC: leva a fala a um nível comum, sem mexer no tempo.
+        audio = audio * speech_gain(audio, spoken)
         shift_samples = round(float(request.get("audioShiftMs", 0)) * 16)
         if shift_samples > 0:
             audio = np.pad(audio, (shift_samples, 0))[:len(audio)]
@@ -205,7 +250,10 @@ def lip_sync(request):
             acoustic.append(aud.run(None, {"input": sounds})[0])
         if not visual:
             continue
-        result = measure_embeddings(np.concatenate(visual), np.concatenate(acoustic))
+        # O embedding t cobre 0,2 s (5 quadros de 40 ms): conta como fala se ao menos 3 deles têm fala.
+        padded = np.append(spoken, np.zeros(5, dtype=bool))
+        speaking = np.array([padded[t:t + 5].sum() >= 3 for t in range(count)])
+        result = measure_embeddings(np.concatenate(visual), np.concatenate(acoustic), active=speaking)
         segments.append({"startMs": round(start * 1000), "durationMs": round(duration * 1000), **result})
     accepted = [s for s in segments if s["confidence"] >= 3]
     center = float(np.median([s["offsetMs"] for s in accepted])) if accepted else 0.
@@ -214,7 +262,8 @@ def lip_sync(request):
     return {"detector": "syncnet", "provider": lip.get_providers()[0], "segments": segments,
             "offsetMs": round(float(np.median([s["offsetMs"] for s in accepted])), 2) if valid else None,
             "confidence": round(float(np.median([s["confidence"] for s in accepted])), 4) if valid else 0,
-            **({} if valid else {"reason": "Sem dois trechos de rosto falando com confiança suficiente."})}
+            "speechSeconds": round(float(active.sum()) * .04, 1),
+            **({} if valid else {"reason": few_speech(float(active.sum()) * .04)})}
 
 
 def single_clap_time(audio):
@@ -494,8 +543,10 @@ def clap_sync(request):
         return {"offsetMs": None, "confidence": 0, "reason": "Não encontrei uma única palma curta. Grave de novo em silêncio e bata só uma palma."}
     frames, times = native_frames(request)
     model = absolute(request["faceModel"]) if request.get("faceModel") else None
+    if model and not os.path.isfile(model):   # pedido com modelo de rosto que não existe: nunca cair numa zona fixa
+        raise RuntimeError("Falta o modelo de rosto da sincronia (yunet.onnx). Prepare a sincronia neste computador.")
     face = face_box(frames, times, audio_time, model)
-    if face is None and model and os.path.isfile(model):
+    if face is None and model:
         return {"offsetMs": None, "confidence": 0, "reason": CLAP_REASONS["face"]}
     found = hand_contact(frames, times, audio_time, face)
     if "time" not in found:

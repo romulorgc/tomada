@@ -61,10 +61,10 @@ describe('SyncNet real, validado antes de confiar na estimativa', () => {
     }
   }, 180_000)
 
-  it('as contas de MFCC e de sinal do offset passam em quatro gabaritos sem mídia pessoal', async () => {
+  it('as contas de MFCC, de sinal e de fala passam em nove gabaritos sem mídia pessoal', async () => {
     const base = ensureToolsDir()
     const result = await runProcess(join(base, 'python', 'Scripts', 'python.exe'), [join(ROOT, 'tests', 'helpers', 'lip_sync_checks.py')], { env: { PYTHONUTF8: '1' }, timeoutMs: 60_000 })
-    expect(result.stderr).toContain('Ran 4 tests')
+    expect(result.stderr).toContain('Ran 9 tests')
     expect(result.stderr).toContain('OK')
   })
 
@@ -74,6 +74,37 @@ describe('SyncNet real, validado antes de confiar na estimativa', () => {
     expect(result.stderr).toContain(`Ran ${helper === 'lip_sync_clap_checks.py' ? 12 : 4} tests`)
     expect(result.stderr).toContain('OK')
   })
+  it('microfone mudo ou só ruído: diz que não há voz em vez de medir ruído amplificado', async () => {
+    const base = ensureToolsDir()
+    const ff = createFfmpeg(locateFfmpeg()!)
+    const temporary = join(base, 'tmp', 's1-sem-voz')
+    await mkdir(temporary, { recursive: true })
+    const measure = async (path: string) => {
+      const run = await runProcess(join(base, 'python', 'Scripts', 'python.exe'), ['-I', join(ROOT, 'resources', 'lip_sync.py')], {
+        stdin: JSON.stringify({ video: path, ffmpeg: ff.paths.ffmpeg, model: join(base, 'lip-sync', 'syncnet_v2.model') }), env: { PYTHONUTF8: '1' }, timeoutMs: 60_000
+      })
+      return JSON.parse(run.stdout) as { offsetMs: number | null; confidence: number; segments: unknown[]; reason?: string }
+    }
+    try {
+      // 12 s de ruído com pico de uns 6 (int16): o microfone gravou silêncio (como a gravação 12-59-14 do usuário, pico -62,7 dBFS).
+      const muted = join(temporary, 'mudo.wav')
+      await ff.run(['-f', 'lavfi', '-i', 'anoisesrc=d=12:c=white:a=0.0002:r=16000', '-ac', '1', '-c:a', 'pcm_s16le', muted])
+      const silent = await measure(muted)
+      expect(silent.offsetMs).toBeNull()
+      expect(silent.segments).toEqual([])
+      expect(silent.reason).toContain('não tem voz')
+      // Ruído estacionário mais alto, mas sem fala: pouca fala, outro motivo (e também nenhuma janela).
+      const hiss = join(temporary, 'chiado.wav')
+      await ff.run(['-f', 'lavfi', '-i', 'anoisesrc=d=12:c=white:a=0.02:r=16000', '-ac', '1', '-c:a', 'pcm_s16le', hiss])
+      const noisy = await measure(hiss)
+      expect(noisy.offsetMs).toBeNull()
+      expect(noisy.segments).toEqual([])
+      expect(noisy.reason).toContain('pouca fala')
+    } finally {
+      await rm(temporary, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('palma localizada mede 0 e ±80 ms, mantém início WebM, vale com parede cor de pele de 15 a 60 qps e rejeita movimento alheio', async () => {
     const base = ensureToolsDir()
     const ff = createFfmpeg(locateFfmpeg()!)
