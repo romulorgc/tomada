@@ -9,18 +9,23 @@ export class PcmRecorder {
   private disposed = false
   private clockTimer: number | null = null
   private state: 'ready' | 'recording' | 'paused' | 'stopped' = 'ready'
-  private constructor(private ctx: AudioContext, private node: AudioWorkletNode, private source: MediaStreamAudioSourceNode, private chunk: (data: ArrayBuffer) => Promise<void>, private onError: (err: Error) => void) {}
+  private constructor(private ctx: AudioContext, private node: AudioWorkletNode, private source: AudioNode, private chunk: (data: ArrayBuffer) => Promise<void>, private onError: (err: Error) => void) {}
 
-  static async open(stream: MediaStream, chunk: (data: ArrayBuffer) => Promise<void>, onError: (err: Error) => void): Promise<PcmRecorder> {
+  /**
+   * `makeSource` (só para provas): em vez do microfone do `stream`, usa o nó que a função devolve dentro do mesmo AudioContext do gravador.
+   * Serve para provar o worklet e os pedaços sem o Chromium no meio, com o relógio de um contexto só.
+   */
+  static async open(stream: MediaStream | null, chunk: (data: ArrayBuffer) => Promise<void>, onError: (err: Error) => void, makeSource?: (context: AudioContext) => AudioNode): Promise<PcmRecorder> {
     const ctx = new AudioContext({ sampleRate: PCM_SAMPLE_RATE, latencyHint: 'interactive' })
     try {
       if (ctx.sampleRate !== PCM_SAMPLE_RATE) throw new Error('O microfone não pôde ser gravado em PCM a 48 kHz.')
       await ctx.audioWorklet.addModule(workletUrl)
-      const source = ctx.createMediaStreamSource(new MediaStream(stream.getAudioTracks()))
+      if (!stream && !makeSource) throw new Error('O gravador PCM precisa de um microfone.')
+      const input = makeSource ? makeSource(ctx) : ctx.createMediaStreamSource(new MediaStream(stream!.getAudioTracks()))
       // Sem saída, é um nó de leitura automática (APN): continua processando sem áudio audível.
       // Um nó com saída zerada trocava para temporizador virtual após 30 s e perdia o relógio.
       const node = new AudioWorkletNode(ctx, 'tomada-pcm', { numberOfInputs: 1, numberOfOutputs: 0 })
-      const recorder = new PcmRecorder(ctx, node, source, chunk, onError)
+      const recorder = new PcmRecorder(ctx, node, input, chunk, onError)
       await new Promise<void>((resolve, reject) => {
         const timer = window.setTimeout(() => reject(new Error('O gravador PCM não entregou amostras em 5 s.')), 5000)
         node.port.onmessage = ({ data }: MessageEvent<{ type: string; samples?: Float32Array; frames?: number }>) => {
@@ -30,7 +35,7 @@ export class PcmRecorder {
           else if (data.type === 'gap' && data.frames) recorder.onError(new Error(`O áudio do microfone perdeu ${(data.frames / PCM_SAMPLE_RATE * 1000).toFixed(1)} ms. A gravação vai parar para preservar os trechos recebidos; confira a voz antes de publicar.`))
         }
         node.onprocessorerror = () => { const err = new Error('O gravador PCM do microfone parou de entregar amostras.'); recorder.fail(err); reject(err); window.clearTimeout(timer); recorder.stopResolve?.() }
-        source.connect(node)
+        input.connect(node)
         void ctx.resume().catch(reject)
       })
       return recorder

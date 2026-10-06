@@ -46,4 +46,16 @@ describe('método de medição da prova de áudio', () => {
     output.set(input.map(x => x * .5), delay)
     expect(exactLag(output, input, 20_000)).toBe(delay)
   })
+
+  it.each([1038, 13_969, 4_800 + 17, 960 * 13 + 3])('acha o atraso de %i amostras mesmo com zumbido de 50 Hz dominante e só ruído no primeiro segundo', delay => {
+    const input = reference(48_000 * 8)
+    for (let i = 0; i < input.length; i++) {
+      // fala (envelope que muda) só depois de 1,2 s; zumbido de 50 Hz forte o tempo todo
+      const speech = i > 57_600 ? Math.sin(i / 3_000) ** 2 * 0.5 : 0.05
+      input[i] = input[i]! * speech + 0.2 * Math.sin(2 * Math.PI * 50 * i / 48_000)
+    }
+    const output = new Float32Array(input.length + 40_000)
+    output.set(input, delay)
+    expect(exactLag(output, input, 96_000)).toBe(delay)
+  })
 })

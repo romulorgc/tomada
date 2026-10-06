@@ -186,23 +186,35 @@ export function loudness(file: string): { lufs: number; truePeakDbtp: number; lr
   const data = JSON.parse(json) as Record<string, string>
   return { lufs: Number(data.input_i), truePeakDbtp: Number(data.input_tp), lra: Number(data.input_lra) }
 }
-/** Atraso inteiro (amostras) de `observed` em relação a `reference`, buscado em [0, maxLag]. Grosso em 1 ms, fino amostra a amostra. */
+/**
+ * Atraso inteiro (amostras) de `observed` em relação a `reference`, buscado em [0, maxLag]. Grosso pelo ENVELOPE (média de |x[i]-x[i-1]| a
+ * cada 1 ms) e fino amostra a amostra sobre a diferença primeira. A diferença primeira tira o zumbido de 50 Hz: periódico, ele produz
+ * picos de correlação iguais a cada 20 ms e já fez a busca cair em um deles; ruído branco e fala têm um pico só.
+ */
 export function exactLag(observed: Float32Array, reference: Float32Array, maxLag = SR * 2): number {
-  const hop = 48, blocks = Math.min(Math.floor(reference.length / hop), 20_000)
-  const mean = (values: Float32Array, from: number): number => { let sum = 0; for (let k = 0; k < hop; k++) sum += values[from + k] ?? 0; return sum / hop }
+  const hop = 48, blocks = Math.min(Math.floor(reference.length / hop), 6000), total = blocks + Math.ceil(maxLag / hop) + 2
+  const envelope = (values: Float32Array, count: number): Float64Array => {
+    const out = new Float64Array(count)
+    for (let k = 0; k < count; k++) { let sum = 0; for (let j = 0; j < hop; j++) { const i = k * hop + j; sum += Math.abs((values[i] ?? 0) - (values[i - 1] ?? 0)) } out[k] = sum / hop }
+    return out
+  }
+  const want = envelope(reference, blocks), seen = envelope(observed, total)
+  const centered = (values: Float64Array, from: number, count: number): number[] => { let mean = 0; for (let k = 0; k < count; k++) mean += values[from + k] ?? 0; mean /= count; return Array.from({ length: count }, (_, k) => (values[from + k] ?? 0) - mean) }
+  const target = centered(want, 0, blocks)
   let best = -Infinity, coarse = 0
-  for (let lag = 0; lag <= maxLag; lag += hop) {
+  for (let lag = 0; lag <= Math.ceil(maxLag / hop); lag++) {
+    const window = centered(seen, lag, blocks)
     let xy = 0, xx = 0, yy = 0
-    for (let i = 0; i < blocks; i += 2) { const x = mean(reference, i * hop), y = mean(observed, i * hop + lag); xy += x * y; xx += x * x; yy += y * y }
+    for (let k = 0; k < blocks; k++) { xy += target[k]! * window[k]!; xx += target[k]! ** 2; yy += window[k]! ** 2 }
     const score = xx && yy ? xy / Math.sqrt(xx * yy) : 0
-    if (score > best) { best = score; coarse = lag }
+    if (score > best) { best = score; coarse = lag * hop }
   }
   best = -Infinity
   let fine = coarse
-  const count = Math.min(reference.length, SR * 6)
+  const count = Math.min(reference.length - 1, SR * 4)
   for (let lag = Math.max(0, coarse - hop * 2); lag <= coarse + hop * 2; lag++) {
     let xy = 0, xx = 0, yy = 0
-    for (let i = 0; i < count; i++) { const x = reference[i]!, y = observed[i + lag] ?? 0; xy += x * y; xx += x * x; yy += y * y }
+    for (let i = 1; i < count; i++) { const x = reference[i]! - reference[i - 1]!, y = (observed[i + lag] ?? 0) - (observed[i + lag - 1] ?? 0); xy += x * y; xx += x * x; yy += y * y }
     const score = xx && yy ? xy / Math.sqrt(xx * yy) : 0
     if (score > best) { best = score; fine = lag }
   }
