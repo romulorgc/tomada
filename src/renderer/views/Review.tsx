@@ -44,7 +44,7 @@ export function Review({ id }: { id: string }) {
   const categories: CutReason[] = ['silence','filler','retake']
   return <div className="review" data-testid="review-view" data-status={running ? 'running' : 'done'}>
     <header className="review-head">
-      <div><button className="btn btn-ghost" onClick={() => go({name:'library'})}>{t.nav.library}</button><p className="review-eyebrow">{T.review}</p><h1>{doc.title}</h1><p className="text-muted" role="status">{running ? T.running : doc.autopilot?.steps.some((s) => s.status === 'error') ? T.hasErrors : T.ready}</p>{doc.autopilot?.notice ? <p className="text-muted" role="alert" data-testid="pilot-notice">{doc.autopilot.notice}</p> : null}</div>
+      <div><button className="btn btn-ghost" onClick={() => go({name:'library'})}>{t.nav.library}</button><p className="review-eyebrow">{T.review}</p><h1>{doc.title}</h1><p className="text-muted" role="status">{running ? T.running : doc.autopilot?.steps.some((s) => s.status === 'error') ? T.hasErrors : T.ready}</p>{doc.autopilot?.notice ? <p className="text-muted" role="alert" data-testid="pilot-notice">{doc.autopilot.notice}</p> : null}{doc.cameraCapture?.warning ? <p className="text-muted" role="alert" data-testid="camera-capture-warning">{doc.cameraCapture.warning}</p> : null}</div>
       <div className="review-head-actions"><button className="btn" onClick={() => go({name:'project',id})} data-testid="review-editor">{T.editor}</button><button className="btn btn-rec" data-testid="review-post" onClick={() => void action(() => window.tomada.review.post(id))}>{T.post}</button><p className="text-muted text-xs">{T.postHelp}</p></div>
     </header>
     {error ? <p role="alert">{error}</p> : null}

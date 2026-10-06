@@ -6,6 +6,7 @@
  */
 import type { AiEditResult, EditFormat } from './ai-edit'
 import type { CameraCalibration } from './camera-sync'
+import type { CameraCaptureInfo } from './camera-quality'
 import type { AutopilotPrefs, PipelineState, PipelineStepId } from './autopilot'
 import type { ReviewItem } from './review'
 import type { ExportDefaults, OnboardingPrefs, OwnerEditingDefaults } from './settings-defaults'
@@ -173,6 +174,8 @@ export type StartedInfo = {
   cameraHasVideo: boolean
   cameraHasAudio: boolean
   cameraSize: Size | null
+  /** O que a abertura da câmera decidiu (degrau 4K/1080p, qps medidos): o aviso de poucos qps fala disto. */
+  cameraCapture?: CameraCaptureInfo
 }
 
 export type StopReason = 'user' | 'source-ended' | 'write-error' | 'error'

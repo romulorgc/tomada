@@ -29,7 +29,6 @@ import type {
 import {
   elapsedMs,
   screenBitrate,
-  cameraBitrate,
   normalizeIntervals,
   recordingFolderName,
   defaultRecordingTitle,
@@ -39,6 +38,7 @@ import {
   type RawEvents,
   type RecordRequest
 } from '@shared/recording'
+import { cameraCaptureInfoSchema, cameraRecordBitrate } from '@shared/camera-quality'
 import type { Rect, Size } from '@shared/types'
 import { isPhysicalDeviceId } from '@shared/capture-devices'
 import { markRecordingTime, type RetakeMark } from '@shared/retake-marker'
@@ -452,10 +452,10 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     const source = request.mode === 'camera' ? null : await deps.sources.resolve(request.sourceId!)
     const estimatedBytes = estimateRecordingBytes({ durationMs,
       screenBitrate: source ? screenBitrate(source.nativeSize, request.fps) : 0,
-      cameraBitrate: request.mode !== 'screen' && request.cameraId ? cameraBitrate({ w: 1920, h: 1080 }, 30) : 0,
+      cameraBitrate: request.mode !== 'screen' && request.cameraId ? (request.cameraQuality === 'high' ? cameraRecordBitrate({ w: 1920, h: 1080 }, 60) : cameraRecordBitrate({ w: 3840, h: 2160 }, 30)) : 0,
       audioTracks: Number(Boolean(request.micId)) + Number(request.systemAudio)
     })
-    return checkDiskSpace(deps.projectsRoot(), estimatedBytes, durationMs, 'Estimativa para a gravação, a mídia normalizada e os arquivos temporários; a câmera usa até 1080p. O tamanho real depende da atividade da tela.')
+    return checkDiskSpace(deps.projectsRoot(), estimatedBytes, durationMs, `Estimativa para a gravação, a mídia normalizada e os arquivos temporários; a câmera usa até ${request.cameraQuality === 'high' ? '1080p' : '4K'}. O tamanho real depende da atividade da tela.`)
   }
 
   async function recoveryAction<T>(action: () => Promise<T>): Promise<T> {
@@ -718,6 +718,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
         s.manifest.camera.size = info.cameraSize
         s.manifest.camera.hasVideo = info.cameraHasVideo
         s.manifest.camera.hasAudio = info.cameraHasAudio
+        if (info.cameraCapture && cameraCaptureInfoSchema.safeParse(info.cameraCapture).success) s.manifest.camera.capture = info.cameraCapture
         // Só áudio: o arquivo bruto não é "camera".
         s.manifest.camera.file = info.cameraHasVideo ? RAW_CAMERA : RAW_MIC
       }

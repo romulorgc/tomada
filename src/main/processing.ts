@@ -15,6 +15,8 @@ import { CONTENT_RECT_FILE } from '@shared/events'
 import { buildEvents, toJsonLines, type BuiltEvents, type RawEvents } from '@shared/recording'
 import type { CaptureInfo, Project, Src } from '@shared/types'
 import { calibrationForPair, type CameraCalibration } from '@shared/camera-sync'
+import { cameraCaptureReport } from '@shared/camera-quality'
+import { measureVideoFps } from './camera-fps'
 import type { LipSyncDetector } from './lip-sync'
 import { writeFileAtomic } from './fs-utils'
 import type { Ffmpeg } from './ffmpeg'
@@ -175,6 +177,13 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
 
     async camera(step) {
       const cam = manifest.camera!
+      // O normalizador repete quadros para fazer fps constante e esconderia uma câmera que entregou 15 qps: mede no bruto.
+      const gravado = await measureVideoFps(deps.ff, rawPath(cam.file)).catch((err: unknown) => { logger.warn('Não consegui medir os quadros por segundo da câmera gravada.', err); return null })
+      if (gravado) {
+        cam.measured = { fps: gravado.fps, width: gravado.width, height: gravado.height }
+        const aviso = cameraCaptureReport(gravado, cam.capture ?? null).warning
+        if (aviso) note(aviso)
+      }
       const result = await produce('media/camera.mp4', (out) =>
         normalizeVideo(deps.ff, {
           input: rawPath(cam.file),
@@ -251,6 +260,7 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
       project.style.cursor.mode = saved.capture.cursorHidden ? 'synthetic' : 'real'
       // Janela de navegador com a página medida: o vídeo já sai só com a página. (Em gravação de tela o recorte é uma oferta do editor.)
       if (saved.capture.kind === 'window' && saved.capture.browser?.contentRect) project.screenCrop = { mode: 'auto' }
+      if (manifest.camera?.measured) project.cameraCapture = cameraCaptureReport(manifest.camera.measured, manifest.camera.capture ?? null)
       if (project.sources.camera && project.sources.voice) {
         const measured = await deps.lipSync?.detect(dir, project)
         const calibration = calibrationForPair(deps.calibrations?.() ?? [], manifest.cameraId, manifest.micId)

@@ -1037,6 +1037,16 @@ export const ptBR = {
   bubble: { label: 'Bolha da câmera', error: 'Câmera indisponível' },
 
   settings: {
+    cameraQuality: {
+      title: 'Qualidade da câmera',
+      help: 'Quanto da câmera o arquivo gravado guarda. O rosto é ampliado nos layouts Apresentador e lado a lado, e em 4K ele continua nítido.',
+      max: 'Máxima',
+      high: 'Alta (1080p)',
+      help2: {
+        max: 'Grava em 4K quando a câmera consegue 30 quadros por segundo com a luz de agora; senão grava em 1080p e avisa. O arquivo da câmera fica bem maior (cerca de 340 MB por minuto em 4K).',
+        high: 'Grava sempre em 1080p (cerca de 120 MB por minuto): menos disco e menos esforço do computador.'
+      }
+    },
     cameraStyle: {
       title: 'Estilo da câmera',
       help: 'O estilo que a tela Gravar usa quando você grava a tela com a câmera. Você escolhe de novo a cada gravação.'

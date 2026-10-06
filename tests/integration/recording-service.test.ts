@@ -533,3 +533,53 @@ describe('a página do navegador na gravação (C1)', () => {
     expect(project.capture.browser).toBeUndefined()
   }, 120_000)
 })
+
+describe('câmera: o que a abertura decidiu e quantos quadros por segundo saíram no arquivo', () => {
+  const decided: NonNullable<StartedInfo['cameraCapture']> = { quality: 'max', profile: 'uhd', width: 640, height: 360, probeFps: 30, attempts: [{ profile: 'uhd', width: 640, height: 360, fps: 30, accepted: true }] }
+
+  it('o manifesto guarda a decisão; a câmera a ~30 qps não gera aviso e o projeto leva a medida', async () => {
+    const { world, root } = newWorld()
+    const { prepared } = await record(world, baseRequest, { info: { cameraCapture: decided } })
+    const snap = await waitDone(world)
+    expect(snap.status, snap.error?.message).toBe('done')
+    const dir = join(root, prepared.folder)
+    const manifest = JSON.parse(readFileSync(join(dir, 'raw/recording.json'), 'utf8')) as { camera: { capture: unknown; measured: { fps: number } } }
+    expect(manifest.camera.capture).toEqual(decided)
+    const project = parseProject(readFileSync(join(dir, 'project.json'), 'utf8'))
+    expect(project.cameraCapture).toMatchObject({ quality: 'max', profile: 'uhd', width: 640, height: 360, probeFps: 30 })
+    expect(project.cameraCapture!.fps).toBeGreaterThan(24)
+    expect(project.cameraCapture!.warning).toBeUndefined()
+    expect(snap.notes.filter((n) => n.includes('qps'))).toEqual([])
+  }, 120_000)
+
+  it('câmera que gravou a 15 qps: aviso VISÍVEL com o número, o motivo e o que fazer, no processamento e no projeto (a Revisão mostra)', async () => {
+    const dir0 = tmp()
+    mkdirSync(dir0, { recursive: true })
+    // Mesma câmera sintética, a 15 qps (como a EMEET entregava): o normalizador repetiria quadros e esconderia a queda.
+    await ff.run(['-i', FIX.camera, '-t', '2.8', '-vf', 'fps=15', '-c:v', 'libvpx', '-deadline', 'realtime', '-b:v', '1M', '-c:a', 'copy', join(dir0, 'camera15.webm')])
+    const slow = readFileSync(join(dir0, 'camera15.webm'))
+    const { world, root } = newWorld()
+    const { prepared } = await record(world, baseRequest, { files: { screen: rawScreen, camera: slow }, info: { cameraCapture: { ...decided, probeFps: 15 } } })
+    const snap = await waitDone(world)
+    expect(snap.status, snap.error?.message).toBe('done')
+    const aviso = snap.notes.find((n) => n.includes('qps'))
+    expect(aviso, `avisos: ${snap.notes.join(' | ')}`).toBeTruthy()
+    expect(aviso).toMatch(/1[45],\d qps/)
+    expect(aviso).toContain('640×360')
+    expect(aviso).toContain('acenda uma luz')
+    const project = parseProject(readFileSync(join(root, prepared.folder, 'project.json'), 'utf8'))
+    expect(project.cameraCapture!.fps).toBeLessThan(16)
+    expect(project.cameraCapture!.warning).toBe(aviso)
+  }, 120_000)
+
+  it('gravação antiga, sem a decisão da abertura, também é medida (sem inventar o que não sabe)', async () => {
+    const { world, root } = newWorld()
+    const { prepared } = await record(world, baseRequest)
+    expect((await waitDone(world)).status).toBe('done')
+    const dir = join(root, prepared.folder)
+    const manifest = JSON.parse(readFileSync(join(dir, 'raw/recording.json'), 'utf8')) as { camera: { capture?: unknown } }
+    expect(manifest.camera.capture).toBeUndefined()
+    const project = parseProject(readFileSync(join(dir, 'project.json'), 'utf8'))
+    expect(project.cameraCapture).toMatchObject({ quality: 'max', profile: 'fhd', probeFps: 0 })
+  }, 120_000)
+})

@@ -3,7 +3,7 @@ import { deviceCaptureConstraints, physicalDeviceId } from '@shared/capture-devi
 import { calibrationForPair } from '@shared/camera-sync'
 
 it('calibração e gravação pedem exatamente o mesmo modo de captura', () => {
-  expect(deviceCaptureConstraints('cam', 'mic', { echoCancellation: true, noiseSuppression: true })).toEqual({ video: { deviceId: { exact: 'cam' }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } }, audio: { deviceId: { exact: 'mic' }, autoGainControl: false, echoCancellation: true, noiseSuppression: true } })
+  expect(deviceCaptureConstraints('cam', 'mic', { echoCancellation: true, noiseSuppression: true })).toEqual({ video: { deviceId: { exact: 'cam' }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } }, audio: { deviceId: { exact: 'mic' }, autoGainControl: false, echoCancellation: true, noiseSuppression: true } })
 })
 it('resolve o padrão pelo grupo físico e nunca reaproveita calibração ao mudar o microfone padrão', () => {
   const devices = [{ kind: 'audioinput', deviceId: 'mic-A', groupId: 'A' }, { kind: 'audioinput', deviceId: 'mic-B', groupId: 'B' }]

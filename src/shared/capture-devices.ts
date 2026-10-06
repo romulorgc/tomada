@@ -1,7 +1,13 @@
-/** Mesmas restrições para gravação e calibração: o modo da câmera e os filtros mudam a latência. */
-export function deviceCaptureConstraints(cameraId: string | null, micId: string | null, prefs: { echoCancellation: boolean; noiseSuppression: boolean }) {
+import { CAMERA_PROFILES, cameraVideoConstraints, type CameraProfile } from './camera-quality'
+
+/**
+ * Mesmas restrições para gravação e calibração: o modo da câmera e os filtros mudam a latência. Sem `profile`,
+ * o degrau seguro (1080p pedindo o modo de 60 qps, que em pouca luz entrega ~30 em vez dos 15 do modo de 30:
+ * ver `@shared/camera-quality`). A gravação passa o degrau que a sondagem da abertura escolheu.
+ */
+export function deviceCaptureConstraints(cameraId: string | null, micId: string | null, prefs: { echoCancellation: boolean; noiseSuppression: boolean }, profile: CameraProfile = CAMERA_PROFILES.fhd) {
   return {
-    video: cameraId ? { deviceId: { exact: cameraId }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } } : false,
+    video: cameraId ? { deviceId: { exact: cameraId }, ...cameraVideoConstraints(profile) } : false,
     audio: micId ? { deviceId: { exact: micId }, autoGainControl: false, echoCancellation: prefs.echoCancellation, noiseSuppression: prefs.noiseSuppression } : false
   }
 }

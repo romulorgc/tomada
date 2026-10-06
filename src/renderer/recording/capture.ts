@@ -9,7 +9,6 @@
  */
 import type { ChunkKind, PrepareResult, StartedInfo, StopInfo, StopReason } from '@shared/ipc'
 import {
-  cameraBitrate,
   estimateClockOffset,
   levelToMeter,
   peakFromBytes,
@@ -23,6 +22,8 @@ import {
 import type { Size } from '@shared/types'
 import { explainMediaError } from './media-errors'
 import { deviceCaptureConstraints, physicalDeviceId } from '@shared/capture-devices'
+import { cameraRecordBitrate, DEFAULT_CAMERA_QUALITY, type CameraCaptureInfo, type CameraProfile } from '@shared/camera-quality'
+import { selectCameraProfile } from './camera-probe'
 
 export const nowMs = (): number => performance.timeOrigin + performance.now()
 
@@ -103,7 +104,8 @@ export class CaptureEngine {
   private constructor(
     private readonly params: EngineParams,
     private readonly screenStream: MediaStream | null,
-    private readonly deviceStream: MediaStream | null
+    private readonly deviceStream: MediaStream | null,
+    private readonly cameraSelection: { profile: CameraProfile; info: CameraCaptureInfo } | null = null
   ) {}
 
   /** Abre a tela e os dispositivos. Lança `Error` com mensagem pronta para mostrar. */
@@ -114,8 +116,11 @@ export class CaptureEngine {
     try {
       const wantVideo = request.mode !== 'screen' && Boolean(request.cameraId)
       const wantAudio = Boolean(request.micId)
+      // Câmera no máximo que a luz de agora sustenta: 4K só se a trilha provar 30 qps (ver `@shared/camera-quality`).
+      const selection = wantVideo ? await selectCameraProfile(request.cameraId!, request.cameraQuality ?? DEFAULT_CAMERA_QUALITY).catch((err: unknown) => { throw new Error(explainMediaError(err, 'camera')) }) : null
+      if (selection) api().log({ level: 'info', message: `Câmera: degrau ${selection.info.profile} (${selection.info.width}×${selection.info.height}), ${selection.info.probeFps.toFixed(1)} qps medidos na abertura`, detail: JSON.stringify(selection.info.attempts) })
       if (wantVideo || wantAudio) {
-        const constraints: MediaStreamConstraints = deviceCaptureConstraints(wantVideo ? request.cameraId : null, request.micId, prefs)
+        const constraints: MediaStreamConstraints = deviceCaptureConstraints(wantVideo ? request.cameraId : null, request.micId, prefs, selection?.profile)
         try {
           deviceStream = await navigator.mediaDevices.getUserMedia(constraints)
         } catch (err) {
@@ -156,7 +161,7 @@ export class CaptureEngine {
         if (track) track.contentHint = 'detail' // texto nítido vale mais que fluidez
       }
 
-      const engine = new CaptureEngine(params, screenStream, deviceStream)
+      const engine = new CaptureEngine(params, screenStream, deviceStream, selection)
       if (screenStream) engine.probe = await openProbe(screenStream)
       engine.attachTrackListeners()
       engine.startLevelMeter()
@@ -287,7 +292,7 @@ export class CaptureEngine {
       if (!cameraMime) throw new Error('Este computador não tem um formato de gravação de câmera compatível.')
       this.slots.push(
         this.makeSlot(this.deviceStream.getVideoTracks().length > 0 ? 'camera' : 'mic', this.deviceStream, cameraMime, {
-          ...(camVideo ? { video: cameraBitrate(cameraSize ?? { w: 1280, h: 720 }, 30) } : {}),
+          ...(camVideo ? { video: cameraRecordBitrate(cameraSize ?? { w: 1280, h: 720 }, this.cameraSelection?.profile.requestFps ?? 30) } : {}),
           ...(camAudio ? { audio: 128_000 } : {})
         })
       )
@@ -339,7 +344,8 @@ export class CaptureEngine {
       cameraHasAudio: Boolean(camAudio),
       cameraSize,
       cameraDeviceId,
-      micDeviceId
+      micDeviceId,
+      ...(this.cameraSelection ? { cameraCapture: { ...this.cameraSelection.info, width: cameraSize?.w ?? this.cameraSelection.info.width, height: cameraSize?.h ?? this.cameraSelection.info.height } } : {})
     }
     this.startedInfo = info
     return info
