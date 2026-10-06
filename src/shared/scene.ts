@@ -34,7 +34,7 @@ import {
 import { keptRanges, outputDuration, sourceToOutput } from './timeline'
 import type { Background, ClickEvent, ContentRectSample, CursorSample, KeyEvent, LayoutKind, Point, Project, Range, Rect, Size, Style, Word } from './types'
 import { GRID_HZ } from './cursor'
-import { CENTER_BOX, CENTER_ZOOM_MAX, HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
+import { CENTER_BOX, CENTER_ZOOM_MAX, HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, hookPlacement, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
 import { ZOOM_SCALE_SPRING } from './spring'
 import { computeCameraPath, sampleCameraPath, visibleRect, type CameraPath } from './zoom'
 import { fitRect } from './geometry'
@@ -843,12 +843,22 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
   const hookText = vertical ? (project.vertical?.hook ?? '').trim() : ''
   if (derived.captions || hookText !== '') {
     const outT = sourceToOutput(sourceT, derived.kept)
+    // O gancho tem lugar próprio em cada layout (nunca cobre a página nem a boca) e, no V-B de câmera embaixo, empurra a legenda para baixo
+    // dele enquanto está na tela; o fade do gancho conduz as duas coisas, então não há salto.
+    const hookAlpha = hookText !== '' && outT < HOOK_MS ? Math.min(clamp01(outT / 150), clamp01((HOOK_MS - outT) / 300)) : 0
+    const hookOpts = { cameraTop: style.stackCameraTop === true, presenter: style.presenter }
+    const hookPrev = hookPlacement(prevKey, hookOpts)
+    const hookCur = hookPlacement(curKey, hookOpts)
     if (derived.captions) {
       const m = captionAt(derived.captions, outT)
       if (m) {
         // no vertical a posição padrão vem do layout (V-B: a emenda tela/câmera; tela na largura: 71%; senão 70%) e acompanha a
         // troca de layout, para a legenda não dar um salto no meio de uma página
-        const autoY = vertical ? lerp(verticalCaptionY(prevKey, style.presenter), verticalCaptionY(curKey, style.presenter), e) : undefined
+        const captionOf = (key: LayoutKind, place: ReturnType<typeof hookPlacement>): number => {
+          const normal = verticalCaptionY(key, style.presenter)
+          return lerp(normal, place.captionY ?? normal, hookAlpha)
+        }
+        const autoY = vertical ? lerp(captionOf(prevKey, hookPrev), captionOf(curKey, hookCur), e) : undefined
         const rs = resolveCaptionStyle(project.captions, format, autoY)
         captions = {
           key: `${derived.captions.id}:${m.page.id}`,
@@ -862,8 +872,8 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
       }
     }
     if (hookText !== '' && outT < HOOK_MS) {
-      const alpha = Math.min(clamp01(outT / 150), clamp01((HOOK_MS - outT) / 300))
-      hook = { text: hookText, alpha, style: resolveHookStyle(format, HOOK_BAND) }
+      const band = { top: lerp(hookPrev.band.top, hookCur.band.top, e), bottom: lerp(hookPrev.band.bottom, hookCur.band.bottom, e) }
+      hook = { text: hookText, alpha: hookAlpha, style: resolveHookStyle(format, band) }
     }
   }
 

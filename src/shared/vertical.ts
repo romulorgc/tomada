@@ -5,7 +5,8 @@
  */
 import type { CursorData, FormatSpec } from './scene'
 import type { CursorGrid } from './cursor'
-import { PRESENTER, resolvePresenter } from './styles'
+import { PRESENTER_TARGET } from './face'
+import { PRESENTER, presenterWindow, resolvePresenter } from './styles'
 import { keptRanges } from './timeline'
 import { generateAutoZooms, zoomPresetFor, DEFAULT_VERTICAL_ZOOM_PRESET } from './zoom'
 import type { CaptionStyle, ClickEvent, Corner, KeyEvent, LayoutKind, LayoutSeg, PresenterStyle, Project, Range, Size, VerticalEdit, Word } from './types'
@@ -69,6 +70,50 @@ export const HOOK_BAND = { top: HOOK_CENTER_Y - 60, bottom: HOOK_CENTER_Y + 60 }
 export const HOOK_MS = 4000
 /** Enquanto o gancho está na tela a bolha da câmera fica abaixo dele (os dois nunca se sobrepõem). */
 export const HOOK_CLEAR_Y = HOOK_BAND.bottom + 16
+
+/** Altura da faixa do gancho: duas linhas de Anton de 54 px (a mesma de `HOOK_BAND`). */
+export const HOOK_BAND_H = HOOK_BAND.bottom - HOOK_BAND.top
+/** V-B com a câmera embaixo: a faixa do gancho começa a esta distância abaixo da emenda, no espaço acima da cabeça (a página não é tocada). */
+const HOOK_SEAM_GAP = 6
+/** V-B com a câmera em cima: a faixa termina a esta distância acima da emenda, sobre o tronco (abaixo do queixo, sem tocar a página). */
+const HOOK_ABOVE_SEAM = 70
+/** V-D: a faixa começa a esta distância abaixo do queixo, sobre o tronco da pessoa (a boca nunca é coberta). */
+const HOOK_BELOW_CHIN = 24
+/** No V-B de câmera embaixo a legenda desce para logo abaixo do gancho enquanto ele está na tela: folga e meia altura da legenda (46 px + contorno). */
+const HOOK_CAPTION_GAP = 8
+const HOOK_CAPTION_HALF = 40
+
+export type HookOptions = { cameraTop?: boolean; presenter?: PresenterStyle }
+/** Onde o gancho fica (faixa em px de 1080×1920) e, quando precisa sair do lugar, o centro da legenda (fração da altura) enquanto ele está na tela. */
+export type HookPlacement = { band: { top: number; bottom: number }; captionY: number | null }
+
+/**
+ * Regra do gancho no vertical: nunca cobre o conteúdo da página nem a boca de quem fala (o gancho do começo, em y 15%, cobria o título da
+ * página no V-B e no V-D). Nos layouts de tela o lugar continua sendo a faixa de y 15%, acima da página.
+ *  - V-B (câmera embaixo): na EMENDA entre a tela e o rosto, já sobre a câmera, no espaço acima da cabeça. A legenda, que mora na emenda,
+ *    desce para logo abaixo do gancho enquanto ele está na tela (os dois não se sobrepõem) e volta quando ele sai;
+ *  - V-B (câmera em cima): sobre o tronco, acima da emenda; a legenda segue na emenda, abaixo dele;
+ *  - V-D: na área do apresentador, abaixo do queixo (a pessoa é recortada, então o tronco é só ela); a legenda segue acima da cabeça.
+ */
+export function hookPlacement(layout: LayoutKind, o: HookOptions = {}): HookPlacement {
+  if (layout === 'stack') {
+    if (o.cameraTop) {
+      const bottom = STACK_SPLIT - HOOK_ABOVE_SEAM
+      return { band: { top: bottom - HOOK_BAND_H, bottom }, captionY: null }
+    }
+    const top = STACK_SPLIT + HOOK_SEAM_GAP
+    const bottom = top + HOOK_BAND_H
+    return { band: { top, bottom }, captionY: (bottom + HOOK_CAPTION_GAP + HOOK_CAPTION_HALF) / VERTICAL_H }
+  }
+  if (layout === 'presenter') {
+    const win = presenterWindow(resolvePresenter(o.presenter), { w: VERTICAL_W, h: VERTICAL_H }, true)
+    const chin = win.y + (PRESENTER_TARGET.headroomY + PRESENTER_TARGET.targetH / 2) * win.h
+    // o quadro de baixo é da interface das plataformas: a faixa nunca desce além de 120 px da borda
+    const top = Math.min(chin + HOOK_BELOW_CHIN, VERTICAL_H - 120 - HOOK_BAND_H)
+    return { band: { top, bottom: top + HOOK_BAND_H }, captionY: null }
+  }
+  return { band: { top: HOOK_BAND.top, bottom: HOOK_BAND.bottom }, captionY: null }
+}
 
 /** O V-B usa agora a altura inteira da fonte no quadrado; não amplia mais a faixa estreita de 2×. */
 export const STACK_VIEW_HEIGHT = 1
