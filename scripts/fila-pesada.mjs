@@ -4,7 +4,7 @@
 //   node scripts/fila-pesada.mjs npm run test:e2e
 // Espera a vez (trava em C:\tmp\tomada-pesado.lock), roda o comando, solta a trava. Também espera enquanto
 // houver uma bateria Playwright rodando de quem não usa a fila.
-import { spawn, execSync } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -24,13 +24,24 @@ const vivo = pid => {
   }
 }
 
-// Playwright de outra cópia rodando sem a fila (conta processos de teste que não são filhos deste).
+// Bateria Playwright de quem não usa a fila. ⚠️ A consulta NÃO pode se contar: o próprio processo do
+// PowerShell tem 'playwright' e ' test' na linha de comando (05/10: com isso a fila nunca liberava ninguém).
+// Conta só cópias de trabalho de teste de verdade e ignora o servidor MCP do Playwright das outras sessões.
 function outraBateria() {
+  const ps = [
+    '$n = @(Get-CimInstance Win32_Process | Where-Object {',
+    '$_.ProcessId -ne $PID -and $_.CommandLine -and',
+    "$_.CommandLine -notmatch 'Get-CimInstance' -and",
+    "$_.CommandLine -notmatch 'playwright-mcp|@playwright[\\\\/]mcp' -and",
+    "$_.CommandLine -match '@playwright[\\\\/]test[\\\\/]cli|playwright(\\.cmd)?.? test'",
+    '}).Count; $n'
+  ].join(' ')
   try {
-    const out = execSync(
-      'powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match \'playwright\' -and $_.CommandLine -match \' test\' }).Count"',
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000 }
-    )
+    const out = execFileSync('powershell', ['-NoProfile', '-Command', ps], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 20000
+    })
     return Number(out.trim()) > 0
   } catch {
     return false
