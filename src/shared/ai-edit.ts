@@ -30,7 +30,7 @@ export const EDIT_INSTRUCTION_MAX = 1000
 export type EditFormat = 'horizontal' | 'vertical'
 
 export const HORIZONTAL_LAYOUT_VALUES: readonly LayoutKind[] = ['bubble', 'side-by-side', 'screen', 'camera']
-export const VERTICAL_LAYOUT_VALUES: readonly LayoutKind[] = ['screen-focus', 'stack', 'screen-wide', 'camera']
+export const VERTICAL_LAYOUT_VALUES: readonly LayoutKind[] = ['screen-center', 'screen-focus', 'stack', 'screen-wide', 'camera']
 /** Layouts que mostram a câmera (sem câmera no projeto, não valem). */
 const NEEDS_CAMERA = new Set<LayoutKind>(['side-by-side', 'camera', 'stack'])
 
@@ -76,6 +76,7 @@ export function editSystem(format: EditFormat, hasCamera: boolean): string {
     screen: 'só a tela',
     camera: 'só a câmera',
     'screen-focus': 'tela em foco que segue o cursor',
+    'screen-center': 'quadrado da tela ao centro, seguindo o cursor com zoom de até 1,35×',
     stack: 'tela e câmera empilhadas, de ponta a ponta',
     'screen-wide': 'tela inteira na largura'
   }

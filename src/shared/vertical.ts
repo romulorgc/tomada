@@ -5,7 +5,7 @@
  */
 import type { CursorData, FormatSpec } from './scene'
 import type { CursorGrid } from './cursor'
-import { PRESENTER, presenterScreenHeightV, resolvePresenter } from './styles'
+import { PRESENTER, resolvePresenter } from './styles'
 import { keptRanges } from './timeline'
 import { generateAutoZooms, zoomPresetFor, DEFAULT_VERTICAL_ZOOM_PRESET } from './zoom'
 import type { CaptionStyle, ClickEvent, Corner, KeyEvent, LayoutKind, LayoutSeg, PresenterStyle, Project, Range, Size, VerticalEdit, Word } from './types'
@@ -54,6 +54,9 @@ export function stackRects(cameraTop = false): { screen: { x: number; y: number;
 }
 /** V-C "Tela na largura": o vídeo 16:9 com 94% da largura e centro em y 50% (1016×572, y 674-1246). */
 export const WIDE_BOX = { x: 32, y: 674, w: 1016, h: 572 } as const
+/** Quadrado entre o gancho (y 15%) e a legenda (y 70%): 900 px de destino, 1080 px de fonte em 1080p. */
+export const CENTER_BOX = { x: 90, y: 384, w: 900, h: 900 } as const
+export const CENTER_ZOOM_MAX = 1.35
 /** Bolha da câmera no vertical: 250 px (220-280) no canto da caixa segura. */
 export const VERTICAL_BUBBLE_SIZE = 250 / 1080
 export const VERTICAL_BUBBLE_CORNER: Corner = 'top-left'
@@ -67,8 +70,8 @@ export const HOOK_MS = 4000
 /** Enquanto o gancho está na tela a bolha da câmera fica abaixo dele (os dois nunca se sobrepõem). */
 export const HOOK_CLEAR_Y = HOOK_BAND.bottom + 16
 
-/** O V-B mostra, com escala 1, esta fração da ALTURA da tela (2× numa tela de 1080 px). */
-export const STACK_VIEW_HEIGHT = STACK_SCREEN.h / 2 / 1080
+/** O V-B usa agora a altura inteira da fonte no quadrado; não amplia mais a faixa estreita de 2×. */
+export const STACK_VIEW_HEIGHT = 1
 
 /** Centro vertical padrão da legenda no vertical: y 70% (E1: 70,3% [58,7-77,9]); na tela na largura, 71%. */
 export const CAPTION_Y_VERTICAL = 0.7
@@ -90,7 +93,7 @@ export function verticalCaptionY(layout: LayoutKind, presenter?: PresenterStyle)
 }
 
 /** Layouts verticais (os que o formato 9:16 entende). `presenter` (V-D) só vale com o recorte do fundo pronto. */
-export const VERTICAL_LAYOUTS: readonly LayoutKind[] = ['screen-focus', 'stack', 'screen-wide', 'presenter', 'camera']
+export const VERTICAL_LAYOUTS: readonly LayoutKind[] = ['screen-center', 'screen-focus', 'stack', 'screen-wide', 'presenter', 'camera']
 
 // ---------------------------------------------------------------------------
 // O recorte de cada layout
@@ -113,24 +116,22 @@ export function cropView(destAspect: number, screen: Size | null, heightFrac = 1
  * O recorte padrão de um layout e quanto dos zooms ele aceita.
  *  - horizontal: a tela toda; zooms inteiros;
  *  - V-A: a altura inteira (preenche o quadro 9:16); zooms inteiros;
- *  - V-B: faixa larga de ~2×; metade da força do zoom (a base já é grande);
+ *  - Tela ao centro, V-B e V-D: quadrado da fonte; cliques limitados a 1,35× na cena (V-B mantém metade da força);
  *  - V-C: a tela inteira, sem seguir nada nem dar zoom (serve a interface grande).
  */
 export function layoutFollow(
   layout: LayoutKind,
   format: Pick<FormatSpec, 'kind' | 'w' | 'h'>,
   screen: Size | null,
-  presenter?: PresenterStyle
+  _presenter?: PresenterStyle
 ): { view: View; gain: number } {
   if (format.kind === 'horizontal') return { view: { w: 1, h: 1 }, gain: 1 }
   switch (layout) {
-    case 'presenter': {
-      // V-D: o recorte da tela ocupa só a faixa de cima (a pessoa fica por baixo): mais largo que o V-A e segue o cursor do mesmo jeito
-      const topH = presenterScreenHeightV(resolvePresenter(presenter))
-      return { view: cropView(format.w / (format.h * topH), screen, 1), gain: 1 }
-    }
+    case 'screen-center':
+    case 'presenter':
+      return { view: cropView(1, screen), gain: 1 }
     case 'stack':
-      return { view: cropView(STACK_SCREEN.w / STACK_SCREEN.h, screen, STACK_VIEW_HEIGHT), gain: 0.5 }
+      return { view: cropView(1, screen), gain: 0.5 }
     case 'screen-wide':
       return { view: { w: 1, h: 1 }, gain: 0 }
     default:
@@ -158,7 +159,7 @@ export const VERTICAL_CAPTION_DEFAULTS: Required<Pick<CaptionStyle, 'enabled' | 
 export const FORMAT_CAPTION_KEYS = ['enabled', 'style', 'wordsPerLine', 'position', 'box', 'size', 'positionY', 'uppercase', 'highlightWord', 'highlightColor', 'textColor'] as const
 
 export function defaultVerticalEdit(): VerticalEdit {
-  return { layout: 'screen-focus', layouts: [], zooms: [] }
+  return { layout: 'screen-center', layouts: [], zooms: [] }
 }
 
 function perFormatCaptions(captions: Partial<CaptionStyle> | undefined): Partial<CaptionStyle> {
@@ -189,7 +190,7 @@ export function projectForFormat(doc: Project, kind: FormatSpec['kind']): Projec
     layouts: v?.layouts ?? [],
     style: {
       ...doc.style,
-      defaultLayout: v?.layout ?? 'screen-focus',
+      defaultLayout: v?.layout ?? 'screen-center',
       camera: { ...doc.style.camera, corner: v?.camera?.corner ?? VERTICAL_BUBBLE_CORNER, size: v?.camera?.size ?? VERTICAL_BUBBLE_SIZE },
       // "câmera em cima" é do vertical: o 16:9 nunca a vê (o `mergeFormatView` a devolve ao `project.vertical`)
       ...(v?.cameraTop ? { stackCameraTop: true } : {})
@@ -370,8 +371,8 @@ export function enforceMinDwell(runs: readonly LayoutRun[], minMs: number, kept?
 }
 
 /**
- * Trechos de layout próprios do vertical: fala SEM atividade de tela por ≥ 3 s → V-B (tela + câmera); atividade → V-A (o layout
- * padrão, sem trecho). Nenhum layout fica menos de 6 s na tela (`MIN_DWELL_MS`, no tempo de saída). Sem câmera não há V-B:
+ * Trechos de layout próprios do vertical: fala SEM atividade de tela por ≥ 3 s → V-B (tela + câmera); atividade → layout
+ * padrão (Tela ao centro, sem trecho). Nenhum layout fica menos de 6 s na tela (`MIN_DWELL_MS`, no tempo de saída). Sem câmera não há V-B:
  * devolve vazio.
  */
 export function autoVerticalLayouts(input: ActivityInput): LayoutSeg[] {
@@ -435,5 +436,5 @@ export function ensureVertical(
     kept: keptRanges(opts.durationMs, project.cuts),
     ...(opts.hasMatte ? { hasMatte: true } : {})
   })
-  return { ...project, vertical: { ...v, layout: v?.layout ?? 'screen-focus', layouts, zooms, ...(hasEvents ? { zoomPreset: DEFAULT_VERTICAL_ZOOM_PRESET } : {}) } }
+  return { ...project, vertical: { ...v, layout: v?.layout ?? 'screen-center', layouts, zooms, ...(hasEvents ? { zoomPreset: DEFAULT_VERTICAL_ZOOM_PRESET } : {}) } }
 }

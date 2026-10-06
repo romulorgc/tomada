@@ -390,6 +390,7 @@ export const ptBR = {
         screen: 'Só a tela',
         camera: 'Só a câmera',
         'screen-focus': 'Cursor',
+        'screen-center': 'Tela ao centro',
         stack: 'Câmera + tela',
         'screen-wide': 'Tela na largura',
         presenter: 'Apresentador'
@@ -397,6 +398,7 @@ export const ptBR = {
       optionHints: {
         'side-by-side': 'A câmera num quadro ao lado da tela, com a imagem normal da webcam. Lado, formato e largura ficam na aba Câmera.',
         'screen-focus': 'A tela recortada em tela cheia, seguindo o cursor, com a câmera numa bolha.',
+        'screen-center': 'Um quadrado da tela segue o cursor, entre o gancho e a legenda. Zoom suave de até 1,35×.',
         stack: 'A tela em cima e a câmera embaixo, metade e metade, de ponta a ponta. A tela segue o cursor.',
         'screen-wide': 'A tela inteira na largura, com o mesmo vídeo desfocado ao fundo. Para telas de letra grande.',
         camera: 'Só a câmera, em tela cheia.',
@@ -516,7 +518,7 @@ export const ptBR = {
         hookCount: (n: number, max: number): string => `${n} de ${max} palavras`,
         hookTooLong: 'O gancho passa de 8 palavras: o vídeo mostra todas, mas fica mais fraco.',
         layout: 'Layout',
-        layouts: { auto: 'Automático', 'screen-focus': 'Cursor', stack: 'Câmera + tela', presenter: 'Apresentador', 'screen-wide': 'Tela larga', camera: 'Só câmera' },
+        layouts: { auto: 'Automático', 'screen-center': 'Tela ao centro', 'screen-focus': 'Cursor', stack: 'Câmera + tela', presenter: 'Apresentador', 'screen-wide': 'Tela larga', camera: 'Só câmera' },
         layoutHint: 'Automático escolhe pela atividade da tela; os outros valem o corte todo.',
         captions: 'Legenda',
         captionsInherit: 'Como no vertical',

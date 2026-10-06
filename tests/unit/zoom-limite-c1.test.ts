@@ -27,7 +27,7 @@ it('zoom, volta da escala e transição de layout ficam dentro da página C1, am
   p.zooms = [{ id:'borda',start:200,end:1600,scale:2,focus:{x:1,y:0},origin:'manual' }]
   const data = prepareEvents({cursor:[{t:0,x:0.99,y:0.01},{t:3000,x:0.01,y:0.99}],clicks:[],keys:[]},4000)
   for (const format of [HORIZONTAL_1080,VERTICAL_1080]) {
-    for (const layout of ['screen','screen-focus','stack','screen-wide','presenter'] as LayoutKind[]) {
+    for (const layout of ['screen','screen-focus','screen-center','stack','screen-wide','presenter'] as LayoutKind[]) {
       p.style.defaultLayout = layout
       p.layouts = [{id:'troca',start:1800,end:4000,layout:'screen-focus'}]
       const d = deriveProject(p,data,format)

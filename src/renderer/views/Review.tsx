@@ -129,7 +129,7 @@ function ReviewCard({ id,itemId,doc,transcript,change,action }: { id:string; ite
     await change(itemId,{title:p.title,hook:p.vertical?.hook ?? item.hook,edits:{cuts:p.cuts,zooms:p.zooms,layouts:p.layouts,captions:p.captions,style:p.style,wordFixes:p.wordFixes ?? {},mutes:p.mutes ?? [],meta:p.meta ?? {},zoomPreset:p.zoomPreset,autoExclusions:p.autoExclusions}})
     setPlan(null); setInstruction('')
   }
-  const layoutOptions: LayoutKind[] = clip ? ['screen-focus','stack','screen-wide','presenter','camera'] : ['bubble','side-by-side','presenter','screen','camera']
+  const layoutOptions: LayoutKind[] = clip ? ['screen-center','screen-focus','stack','screen-wide','presenter','camera'] : ['bubble','side-by-side','presenter','screen','camera']
   return <article className={['review-card',clip ? 'review-vertical' : 'review-horizontal'].join(' ')} data-testid={`review-item-${itemId}`} data-phase={item.phase ?? 'empty'} data-decision={item.decision}>
     <div className="review-card-heading"><span>{clip ? T.vertical : T.youtube}</span><span>{clip ? T.note(clip.score) : formatDuration(outputMs)}</span></div>
     <div className="review-player">{item.exportPath ? <video ref={video} controls preload="metadata" src={window.tomada.mediaUrl(id,item.exportPath)} data-testid={`review-${itemId}-player`} /> : <div className="review-player-empty">{item.phase === 'exporting' || item.phase === 'queued' ? T.exporting : T.noExport}</div>}</div>

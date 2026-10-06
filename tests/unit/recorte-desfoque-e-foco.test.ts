@@ -54,7 +54,8 @@ const CASES: Array<{ name: string; layout: LayoutKind; format: FormatSpec }> = [
   { name: 'bolha (16:9)', layout: 'bubble', format: H },
   { name: 'Apresentador 16:9', layout: 'presenter', format: H },
   { name: 'V-B (tela e câmera empilhadas)', layout: 'side-by-side', format: V },
-  { name: 'V-D (Apresentador vertical)', layout: 'presenter', format: V }
+  { name: 'V-D (Apresentador vertical)', layout: 'presenter', format: V },
+  { name: 'Tela ao centro vertical', layout: 'screen-center', format: V }
 ]
 const sceneOf = (p: Project, f: FormatSpec, t = 1100) => evaluateScene(p, deriveProject(p, data, f), t, f)
 const pageOf = (s: { dest: Rect; bar?: { h: number } }, fx: number, fy: number) => {

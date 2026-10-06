@@ -63,6 +63,7 @@ export type LayoutKind =
   | 'camera' // só câmera
   | 'stack' // vertical V-B: tela em cima, câmera embaixo (ou o contrário, com `VerticalEdit.cameraTop`)
   | 'screen-focus' // vertical V-A: recorte da tela ocupa tudo (segue o cursor), câmera em bolha
+  | 'screen-center' // vertical: quadrado da tela entre gancho e legenda, seguindo o cursor sem ampliar na base
   | 'screen-wide' // vertical V-C: a tela inteira na largura, fundo = o mesmo vídeo desfocado e escurecido
   | 'presenter' // M4c: o apresentador RECORTADO (sem o fundo da webcam) na frente da tela. 16:9: no canto de baixo; 9:16 (V-D): tela em cima, você embaixo
 
@@ -230,7 +231,7 @@ export type CameraStyleChoice = 'side-by-side' | 'presenter'
 
 export type ClipFormat = 'vertical' | 'horizontal'
 /** O layout de um corte vertical: `auto` segue a escolha por atividade do projeto; os outros fixam o layout no corte todo. */
-export type VerticalLayout = 'auto' | 'stack' | 'screen-focus' | 'screen-wide' | 'camera' | 'presenter'
+export type VerticalLayout = 'auto' | 'stack' | 'screen-focus' | 'screen-center' | 'screen-wide' | 'camera' | 'presenter'
 
 /**
  * Edição PRÓPRIA do vertical 9:16 (M4a). Zooms, trechos de layout, câmera e legenda do vertical são independentes
@@ -239,7 +240,7 @@ export type VerticalLayout = 'auto' | 'stack' | 'screen-focus' | 'screen-wide' |
  */
 export type VerticalEdit = {
   autoExclusions?: { zooms?:string[]; layouts?:string[] }
-  /** Layout padrão do vertical (V-A `screen-focus`). */
+  /** Layout padrão do vertical (`screen-center`, Tela ao centro; V-A continua disponível manualmente). */
   layout: LayoutKind
   /** Trechos de layout próprios (a escolha automática por atividade os gera). */
   layouts: LayoutSeg[]

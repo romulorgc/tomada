@@ -76,7 +76,7 @@ describe('proteção de região da tela de origem', () => {
     expect(st.getState().doc.blurRegions).toEqual(p.blurRegions)
     st.getState().dispose()
   })
-  it('coordenadas seguem zoom e recorte; ultrawide ocupa mais de 90% da largura no 16:9 e o V-A enche o quadro', () => {
+  it('coordenadas seguem zoom e recorte; ultrawide ocupa mais de 90% da largura no 16:9 e o vertical padrão mostra o quadrado', () => {
     const p = createBlurRegion(project(), { x: .4, y: .3, w: .2, h: .1 }, 0, 60000, 60000)!
     const data = prepareEvents({ cursor: [{ t: 0, x: .5, y: .5 }], clicks: [], keys: [] }, 60000)
     for (const f of [HORIZONTAL_1080, VERTICAL_1080]) {
@@ -88,7 +88,7 @@ describe('proteção de região da tela de origem', () => {
       if (f.kind === 'horizontal') {
         expect(s.screen!.dest.w).toBeGreaterThan(1920 * .9)
         expect(s.screen!.dest.h).toBeGreaterThan(700)
-      } else expect(s.screen!.dest).toEqual({ x: 0, y: 0, w: 1080, h: 1920 })
+      } else expect(s.screen!.dest).toEqual({ x: 90, y: 384, w: 900, h: 900 })
     }
   })
   it('o retângulo acompanha o mesmo recorte de um zoom manual nos dois formatos', () => {

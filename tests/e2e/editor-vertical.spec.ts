@@ -84,9 +84,13 @@ test('alternar 9:16: o canvas fica em pé, o vertical ganha edição PRÓPRIA (z
 
   // layouts do vertical: V-A, V-B, V-C e só a câmera
   await page.getByTestId('tab-layout').click()
-  for (const id of ['screen-focus', 'stack', 'screen-wide', 'camera']) await expect(page.getByTestId(`layout-${id}`)).toBeVisible()
+  for (const id of ['screen-center', 'screen-focus', 'stack', 'screen-wide', 'camera']) await expect(page.getByTestId(`layout-${id}`)).toBeVisible()
   await expect(page.getByTestId('layout-bubble')).toHaveCount(0)
-  await expect(page.getByTestId('layout-screen-focus')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('layout-screen-center')).toHaveAttribute('aria-pressed', 'true')
+  await page.getByTestId('layout-screen-focus').click()
+  await expect.poll(() => readSaved(s!).vertical?.layout).toBe('screen-focus')
+  await page.getByTestId('undo').click()
+  await expect(page.getByTestId('layout-screen-center')).toHaveAttribute('aria-pressed', 'true')
   await page.getByTestId('layout-stack').click()
   await expect(page.getByTestId('layout-stack')).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => readSaved(s!).vertical?.layout, { timeout: 10_000 }).toBe('stack')
@@ -95,8 +99,8 @@ test('alternar 9:16: o canvas fica em pé, o vertical ganha edição PRÓPRIA (z
 
   // desfazer volta o layout do vertical (e só ele)
   await page.getByTestId('undo').click()
-  await expect(page.getByTestId('layout-screen-focus')).toHaveAttribute('aria-pressed', 'true')
-  await expect.poll(() => readSaved(s!).vertical?.layout, { timeout: 10_000 }).toBe('screen-focus')
+  await expect(page.getByTestId('layout-screen-center')).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(() => readSaved(s!).vertical?.layout, { timeout: 10_000 }).toBe('screen-center')
 
   // voltar ao 16:9: os layouts e os zooms são os do 16:9
   await page.getByTestId('ratio-16-9').click()
