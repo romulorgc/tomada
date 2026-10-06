@@ -8,6 +8,7 @@ import { formatSpan, formatTimecode } from '@shared/format'
 import { zoomCounts } from '@shared/edits'
 import { moveLayoutSeg, moveZoom, resizeLayoutSeg, resizeZoom } from '@shared/edits'
 import { keptRanges } from '@shared/timeline'
+import { resolveLayout } from '@shared/scene'
 import { moveBlurRegion, resizeBlurRegion } from '@shared/blur'
 import { MAX_PX_PER_MS, clampPxPerMs, contentWidthPx, createTimeMap, fitPxPerMs, rulerTicks, scrollToReveal, visibleDisplayRange, zoomAround } from '@shared/timeline-view'
 import type { LayoutKind } from '@shared/types'
@@ -25,8 +26,8 @@ const ZOOM_SLIDER_STEPS = 1000
 
 /** Ao criar um trecho de layout arrastando: o primeiro layout diferente do padrão que o projeto comporta. */
 function pickNewLayout(base: LayoutKind, hasScreen: boolean, hasCamera: boolean, vertical = false): LayoutKind {
-  const order: LayoutKind[] = vertical ? ['stack', 'screen-wide', 'screen-focus', 'camera'] : ['screen', 'camera', 'side-by-side', 'bubble']
-  const ok = (l: LayoutKind): boolean => (l === 'camera' ? hasCamera : l === 'screen' || l === 'screen-focus' || l === 'screen-wide' ? hasScreen : hasCamera && hasScreen)
+  const order: LayoutKind[] = vertical ? ['stack', 'screen-wide', 'screen-center', 'screen-focus', 'camera'] : ['screen', 'camera', 'side-by-side', 'bubble']
+  const ok = (l: LayoutKind): boolean => (l === 'camera' ? hasCamera : l === 'screen' || l === 'screen-focus' || l === 'screen-center' || l === 'screen-wide' ? hasScreen : hasCamera && hasScreen)
   return order.find((l) => l !== base && ok(l)) ?? base
 }
 
@@ -262,21 +263,28 @@ export function Timeline() {
   )
 
   const layoutLane: LaneApi = useMemo(
-    () => ({
-      kind: 'layout',
-      empty: t.editor.timeline.layoutEmpty(LAYOUT_NAMES[defaultLayout]),
-      items: layouts.map<LaneItem>((l) => ({
-        id: l.id,
-        start: l.start,
-        end: l.end,
-        label: <b>{LAYOUT_NAMES[l.layout]}</b>,
-        title: t.editor.timeline.layoutSeg(LAYOUT_NAMES[l.layout]),
-        aria: t.editor.timeline.layoutSeg(LAYOUT_NAMES[l.layout])
-      })),
-      move: (base, id, delta) => moveLayoutSeg(base, id, delta, durationMs),
-      resize: (base, id, edge, to) => resizeLayoutSeg(base, id, edge, to, durationMs),
-      create: (a, b) => ops.createLayout(a, b, pickNewLayout(defaultLayout, hasScreen, hasCamera, isVertical))
-    }),
+    () => {
+      // A trilha descreve o mesmo layout que a cena resolve para as fontes disponíveis.
+      const nameOf = (layout: LayoutKind): string => LAYOUT_NAMES[resolveLayout(layout, hasScreen, hasCamera, isVertical ? 'vertical' : 'horizontal')]
+      return {
+        kind: 'layout',
+        empty: t.editor.timeline.layoutEmpty(nameOf(defaultLayout)),
+        items: layouts.map<LaneItem>((l) => {
+          const name = nameOf(l.layout)
+          return {
+            id: l.id,
+            start: l.start,
+            end: l.end,
+            label: <b>{name}</b>,
+            title: t.editor.timeline.layoutSeg(name),
+            aria: t.editor.timeline.layoutSeg(name)
+          }
+        }),
+        move: (base, id, delta) => moveLayoutSeg(base, id, delta, durationMs),
+        resize: (base, id, edge, to) => resizeLayoutSeg(base, id, edge, to, durationMs),
+        create: (a, b) => ops.createLayout(a, b, pickNewLayout(defaultLayout, hasScreen, hasCamera, isVertical))
+      }
+    },
     [layouts, defaultLayout, durationMs, ops, hasScreen, hasCamera, isVertical]
   )
 
