@@ -1055,7 +1055,7 @@ export const ptBR = {
       unresolvedDevice: 'Não consegui identificar o aparelho físico. Escolha a câmera e o microfone pelo nome, em vez do dispositivo padrão, e tente novamente.',
       title: 'Calibrar sincronia',
       help: 'Compensa a latência da imagem para este par de câmera e microfone nas próximas gravações.',
-      instructions: 'Grave 5 segundos e bata UMA palma no meio da gravação. Mostre as duas mãos abaixo do rosto: aproxime, encoste e afaste. Fique em silêncio antes e depois da palma.',
+      instructions: 'Grave 5 segundos e bata UMA palma no meio da gravação. De frente para a câmera, com o rosto à mostra, mostre as duas mãos abaixo do rosto: aproxime, encoste e afaste. Só as mãos se mexem. Fique em silêncio antes e depois da palma.',
       camera: 'Câmera', mic: 'Microfone',
       cameraName: (i: number): string => `Câmera ${i}`, micName: (i: number): string => `Microfone ${i}`,
       start: 'Calibrar sincronia', retry: 'Tentar novamente',
