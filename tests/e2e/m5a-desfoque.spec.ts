@@ -255,7 +255,9 @@ test('desfoque criado no editor da Revisão permanece no documento comum e nas r
     const control = sharpEdges(plain!,r)
     expect(control).toBeGreaterThan(1000)
     const png = exportPng(join(s.projects,FOLDER,after.review!.items[item]!.exportPath!))
-    expect(sharpEdges(png,r)).toBeLessThan(control*.01)
+    // o YouTube do piloto sai em 1440p por padrão: a região (em pixels de 1080p) é a mesma, só que ampliada pela razão das larguras
+    const k = PNG.sync.read(png).width / f.w
+    expect(sharpEdges(png,{x:r.x*k,y:r.y*k,w:r.w*k,h:r.h*k})).toBeLessThan(control*k*k*.01)
     saveScreen(`m5a-desfoque-revisao-${item}`,png)
   }
 })

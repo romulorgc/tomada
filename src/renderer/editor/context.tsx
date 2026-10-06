@@ -23,6 +23,8 @@ export type AssetState<T> = { status: 'loading' | 'ready' | 'error' | 'none'; da
 
 export type EditorCtx = {
   detail: ProjectDetail
+  /** Item da Revisão: restaurar uma palavra precisa sobrepor a grafia comum explicitamente. */
+  itemId?: string
   store: EditorStore
   playback: PlaybackStore
   engineRef: MutableRefObject<PreviewEngine | null>

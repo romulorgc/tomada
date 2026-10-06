@@ -45,7 +45,7 @@ test('depois de gravar a transcrição começa sozinha: chip na biblioteca, tran
   test.setTimeout(180_000)
   s = await launchTomada({ seed: false, autopilot:true, env: { ...AUTO, TOMADA_TEST_TRANSCRIBE_DELAY_MS: '7000' } })
   const { page } = s
-  await page.evaluate(() => window.tomada.settings.update({autopilot:{mode:'prepare',steps:{},captionsHorizontal:false,captionsVertical:false,maxClips:3,minScore:70}}))
+  await page.evaluate(() => window.tomada.settings.update({autopilot:{mode:'prepare',steps:{},captionsHorizontal:false,captionsVertical:false,maxClips:3,minScore:70,youtubeResolution:'1440p'}}))
   await recordShort(s,true)
   const dir = projectDir(s)
 

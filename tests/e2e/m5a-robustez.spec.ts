@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from '
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { createProject, serializeProject } from '../../src/shared/project'
-import { launchTomada, shot, type Session } from './helpers'
+import { E2E_HIDDEN, launchTomada, shot, type Session } from './helpers'
 import { FIXTURES_DIR } from '../helpers/fs'
 import type { ExportReport } from '../../src/shared/ipc'
 import { warmedRenderingSamples } from '../helpers/export-memory'
@@ -99,6 +99,7 @@ test('na próxima abertura oferece recuperar o bruto, pede descarte explícito e
 })
 
 test('uma hora: editor abre em menos de 3 s, Texto/linha do tempo fluidos e exportação mantém memória limitada', async () => {
+  test.skip(E2E_HIDDEN, 'Mede abertura, rolagem e 12.000 quadros exportados de um projeto de uma hora com GPU; por software (janelas ocultas) estoura os 6 min do teste. Rodar com TOMADA_E2E_HIDDEN=0.')
   const full = process.env.TOMADA_LONG_EXPORT_FULL === '1'
   const cpuCanvas = process.env.TOMADA_LONG_DIAG_CPU_CANVAS === '1'
   const softwareEncoder = process.env.TOMADA_LONG_DIAG_SOFTWARE === '1'

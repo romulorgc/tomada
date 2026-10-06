@@ -27,11 +27,23 @@ export async function openLab(app: ElectronApplication): Promise<Page> {
     ({ BrowserWindow }, { preload, file }) => {
       const win = new BrowserWindow({
         show: false,
+        skipTaskbar: true,
+        paintWhenInitiallyHidden: true,
         width: 1280,
         height: 720,
-        webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false }
+        webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, offscreen: process.env.TOMADA_E2E_HIDDEN === '1' }
       })
+      // Electron exige referência forte ao BrowserWindow; só o handle do Page
+      // no Playwright não impede a coleta durante carregamento/render assíncrono.
+      const globals = globalThis as typeof globalThis & { __tomadaTestLabWindows?: Map<number, InstanceType<typeof BrowserWindow>> }
+      const windows = globals.__tomadaTestLabWindows ??= new Map()
+      const id = win.id
+      const keepPainting = (globalThis as { __tomadaE2eKeepPainting?: (window: InstanceType<typeof BrowserWindow>) => void }).__tomadaE2eKeepPainting
+      keepPainting?.(win)
+      windows.set(id, win)
+      win.once('closed', () => windows.delete(id))
       void win.loadFile(file, { hash: 'export-lab' })
+      return id
     },
     { preload: join(ROOT, 'out', 'preload', 'index.js'), file: join(ROOT, 'out', 'renderer', 'index.html') }
   )
@@ -130,17 +142,29 @@ export function writeMatte(session: Session, o: { durationS?: number; cx?: numbe
 
 export type GoldenResult = { name: string; mismatched: number; ratio: number; created: boolean }
 
+/** Referências próprias do compositor por software (janelas ocultas): só onde o desenho legitimamente difere da GPU. */
+export const GOLDENS_SOFTWARE_DIR = join(GOLDENS_DIR, 'software')
+
 /**
  * Compara com `tests/goldens/<name>.png` (pixelmatch). Sem o golden (ou com UPDATE_GOLDENS=1) grava o
  * PNG novo para conferência a olho. Tolerância: 0,4% dos pixels diferentes (variação de GPU).
+ *
+ * Nas janelas ocultas (TOMADA_E2E_HIDDEN=1) o Chromium desenha por software: o desfoque e o serrilhado de bordas diferem da GPU
+ * além da tolerância sem que nada tenha quebrado. Se existir `tests/goldens/software/<name>.png`, ele é a referência desse modo;
+ * UPDATE_GOLDENS=1 nesse modo só cria a variante dos goldens que fogem da tolerância e nunca sobrescreve o golden da GPU.
+ * Com TOMADA_E2E_GPU=1 (janelas ocultas, mas GPU ligada) o desenho é o da GPU: vale o golden da GPU, e UPDATE_GOLDENS=1 o regrava.
  */
 export function compareGolden(name: string, png: Buffer, opts: { maxRatio?: number; threshold?: number } = {}): GoldenResult {
   mkdirSync(GOLDENS_DIR, { recursive: true })
-  const file = join(GOLDENS_DIR, `${name}.png`)
-  if (!existsSync(file) || process.env.UPDATE_GOLDENS === '1') {
-    writeFileSync(file, png)
+  const hidden = process.env.TOMADA_E2E_HIDDEN === '1' && process.env.TOMADA_E2E_GPU !== '1'
+  const update = process.env.UPDATE_GOLDENS === '1'
+  const gpuFile = join(GOLDENS_DIR, `${name}.png`)
+  const softwareFile = join(GOLDENS_SOFTWARE_DIR, `${name}.png`)
+  if (!existsSync(gpuFile) || (update && !hidden)) {
+    writeFileSync(gpuFile, png)
     return { name, mismatched: 0, ratio: 0, created: true }
   }
+  const file = hidden && existsSync(softwareFile) ? softwareFile : gpuFile
   const a = PNG.sync.read(readFileSync(file))
   const b = PNG.sync.read(png)
   if (a.width !== b.width || a.height !== b.height) {
@@ -150,6 +174,11 @@ export function compareGolden(name: string, png: Buffer, opts: { maxRatio?: numb
   const mismatched = pixelmatch(a.data, b.data, diff.data, a.width, a.height, { threshold: opts.threshold ?? 0.1 })
   const ratio = mismatched / (a.width * a.height)
   if (ratio > (opts.maxRatio ?? 0.004)) {
+    if (hidden && update) {
+      mkdirSync(GOLDENS_SOFTWARE_DIR, { recursive: true })
+      writeFileSync(softwareFile, png)
+      return { name, mismatched: 0, ratio: 0, created: true }
+    }
     mkdirSync(GOLDENS_DIFF_DIR, { recursive: true })
     writeFileSync(join(GOLDENS_DIFF_DIR, `${name}.diff.png`), PNG.sync.write(diff))
     writeFileSync(join(GOLDENS_DIFF_DIR, `${name}.atual.png`), png)

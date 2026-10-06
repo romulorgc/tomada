@@ -7,6 +7,7 @@ import { itemOf, reviewDocument, type ReviewItem } from '@shared/review'
 import { keptRanges, outputDuration, sourceToOutput } from '@shared/timeline'
 import type { Project, Transcript, CutReason, LayoutKind, CaptionStyleId } from '@shared/types'
 import { projectForFormat } from '@shared/vertical'
+import { correctedTranscriptWords, undoDictionaryCorrection } from '@shared/dictionary-corrections'
 import { ErrorPanel } from '../components/Feedback'
 import { AudioQualityNotice } from '../components/AudioQualityNotice'
 import { CheckIcon, AlertIcon } from '../components/Icons'
@@ -37,6 +38,15 @@ export function Review({ id }: { id: string }) {
   },[id,load])
   const action = async (fn: () => Promise<unknown>) => { try { await fn(); await load() } catch(e) { notify({ kind: 'error',text: T.error,detail: messageOf(e) }) } }
   const change = async (itemId: string,patch: Partial<ReviewItem>,reexport = true) => action(async () => { setDoc(await window.tomada.review.update(id,itemId,patch,reexport)) })
+  const undoCorrection = async (i: number) => action(async () => {
+    if (!doc) return
+    const saved = await window.tomada.projects.save(id, undoDictionaryCorrection(doc, i), doc)
+    setDoc(saved)
+    for (const itemId of ['youtube', ...saved.clips.map((c) => c.id)]) {
+      const item = itemOf(saved, itemId)
+      if (item.decision !== 'discarded' && (item.exportPath || item.phase === 'exporting' || item.phase === 'queued')) await window.tomada.review.update(id, itemId, {}, true)
+    }
+  })
   if (!doc) return error ? <ErrorPanel title={T.review} detail={error} onRetry={() => void load()} /> : <div className="p-10" aria-busy="true">{t.common.loading}</div>
   const running = doc.autopilot?.status === 'running'
   const items = ['youtube',...doc.clips.map((c) => c.id)]
@@ -53,6 +63,7 @@ export function Review({ id }: { id: string }) {
     <div className="review-layout">
       <aside className="review-summary" aria-label={T.summary}>
         <h2>{T.summary}</h2>
+        {doc.review?.dictionaryCorrections?.length ? <section className="review-dictionary" data-testid="review-dictionary-corrections"><h3>{T.dictionaryCorrections}</h3>{doc.review.dictionaryCorrections.map((c) => <div key={c.i} className="review-decision"><span>{c.before} → {c.after}</span>{c.undone ? <span>{T.correctionUndone}</span> : <button className="link" data-testid={`review-dictionary-undo-${c.i}`} onClick={() => void undoCorrection(c.i)}>{T.undoCorrection}</button>}</div>)}</section> : null}
         {categories.map((reason) => { const found = automatic.filter((c) => c.reason === reason && c.enabled); return <button key={reason} className="review-summary-link" aria-pressed={category === reason} onClick={() => setCategory(reason)} data-testid={`review-summary-${reason}`}>{T.cutsCount(found.length,T.reasons[reason],formatDuration(found.reduce((n,c) => n+c.end-c.start,0)))} <span>{T.view} →</span></button> })}
         <button className="review-summary-link" aria-pressed={category === 'zooms'} onClick={() => setCategory('zooms')}>{T.zoomCount(youtubeView.zooms.filter((z) => z.origin === 'auto').length)} <span>{T.view} →</span></button>
         <button className="review-summary-link" aria-pressed={category === 'layouts'} onClick={() => setCategory('layouts')}>{T.layoutCount(youtubeView.layouts.filter((l) => l.origin === 'auto').length)} <span>{T.view} →</span></button>
@@ -117,14 +128,14 @@ function ReviewCard({ id,itemId,doc,transcript,change,action }: { id:string; ite
   const apply = async () => {
     if (!plan?.changed) return
     const p = plan.project
-    await change(itemId,{title:p.title,hook:p.vertical?.hook ?? item.hook,edits:{cuts:p.cuts,zooms:p.zooms,layouts:p.layouts,captions:p.captions,style:p.style,wordFixes:p.wordFixes ?? {},mutes:p.mutes ?? [],meta:p.meta ?? {},zoomPreset:p.zoomPreset,autoExclusions:p.autoExclusions}})
+    await change(itemId,{title:p.title,hook:p.vertical?.hook ?? item.hook,edits:{cuts:p.cuts,zooms:p.zooms,layouts:p.layouts,captions:p.captions,style:p.style,wordFixes:p.wordFixes ?? {},dictionaryCorrections:p.review?.dictionaryCorrections,mutes:p.mutes ?? [],meta:p.meta ?? {},zoomPreset:p.zoomPreset,autoExclusions:p.autoExclusions}})
     setPlan(null); setInstruction('')
   }
-  const layoutOptions: LayoutKind[] = clip ? ['screen-focus','stack','screen-wide','presenter','camera'] : ['bubble','side-by-side','presenter','screen','camera']
+  const layoutOptions: LayoutKind[] = clip ? ['screen-center','screen-focus','stack','screen-wide','presenter','camera'] : ['bubble','side-by-side','presenter','screen','camera']
   return <article className={['review-card',clip ? 'review-vertical' : 'review-horizontal'].join(' ')} data-testid={`review-item-${itemId}`} data-phase={item.phase ?? 'empty'} data-decision={item.decision}>
     <div className="review-card-heading"><span>{clip ? T.vertical : T.youtube}</span><span>{clip ? T.note(clip.score) : formatDuration(outputMs)}</span></div>
     <div className="review-player">{item.exportPath ? <video ref={video} controls preload="metadata" src={window.tomada.mediaUrl(id,item.exportPath)} data-testid={`review-${itemId}-player`} /> : <div className="review-player-empty">{item.phase === 'exporting' || item.phase === 'queued' ? T.exporting : T.noExport}</div>}</div>
-    <div className="review-card-body"><h2>{title}</h2><p className="text-muted text-xs">{T.duration}: {formatSpan(outputMs)} {clip ? `· ${clip.reason}` : ''}</p>
+    <div className="review-card-body"><h2>{title}</h2>{item.lowScore ? <p role="alert" className="text-danger" data-testid={`review-${itemId}-low-score`}>{T.lowScore}</p> : null}<p className="text-muted text-xs">{T.duration}: {formatSpan(outputMs)} {clip ? `· ${clip.reason}` : ''}</p>
       <div className="review-actions"><button className="btn" data-testid={`review-${itemId}-approve`} aria-pressed={item.decision === 'approved'} onClick={() => void change(itemId,{decision:'approved'},false)}>{item.decision === 'approved' ? T.approved : T.approve}</button><button className="btn btn-ghost" data-testid={`review-${itemId}-discard`} onClick={() => void change(itemId,{decision:item.decision === 'discarded' ? 'pending' : 'discarded'},false)}>{item.decision === 'discarded' ? T.pending : T.discard}</button><button className="btn btn-ghost" onClick={() => useApp.getState().go({name:'project',id,itemId})}>{T.editor}</button></div>
       {item.error ? <p role="alert" className="text-danger">{item.error}</p> : null}
       {item.phase === 'exporting' || item.phase === 'queued' ? <p role="status">{T.exporting}</p> : null}
@@ -133,7 +144,7 @@ function ReviewCard({ id,itemId,doc,transcript,change,action }: { id:string; ite
         <label><input type="checkbox" checked={view.captions.enabled} data-testid={`review-${itemId}-captions`} onChange={(e) => void change(itemId,{captionsEnabled:e.target.checked})} /> {T.captions}</label>
         <label>{T.start} · {formatSpan(trim.start)}<input type="range" min={0} max={Math.max(0,trim.end-100)} step={100} value={trim.start} aria-label={T.start} onChange={(e) => setTrim({...trim,start:Number(e.target.value)})} onPointerUp={commitTrim} onKeyUp={commitTrim} /></label>
         <label>{T.end} · {formatSpan(trim.end)}<input type="range" min={trim.start+100} max={duration} step={100} value={trim.end} aria-label={T.end} onChange={(e) => setTrim({...trim,end:Number(e.target.value)})} onPointerUp={commitTrim} onKeyUp={commitTrim} /></label>
-        <div className="review-transcript" data-testid={`review-${itemId}-transcript`}>{transcript?.words.filter((w) => w.start >= trim.start && w.end <= trim.end).map((w) => <button key={w.i} title={formatSpan(w.start)} className={project.cuts.some((c) => c.enabled && w.start >= c.start && w.end <= c.end) ? 'cut' : ''} onClick={() => { if(video.current) video.current.currentTime = sourceToOutput(w.start,keptRanges(duration,project.cuts))/1000 }}>{w.text} </button>)}</div>
+        <div className="review-transcript" data-testid={`review-${itemId}-transcript`}>{correctedTranscriptWords(transcript?.words ?? [], project.wordFixes, project.review?.dictionaryCorrections).filter((w) => w.start >= trim.start && w.end <= trim.end).map((w) => <button key={w.i} title={formatSpan(w.start)} className={project.cuts.some((c) => c.enabled && w.start >= c.start && w.end <= c.end) ? 'cut' : ''} onClick={() => { if(video.current) video.current.currentTime = sourceToOutput(w.start,keptRanges(duration,project.cuts))/1000 }}>{w.text} </button>)}</div>
         <label>{T.layout}<select value={item.layout ?? view.style.defaultLayout} onChange={(e) => void change(itemId,{layout:e.target.value as LayoutKind})}>{layoutOptions.map((l) => <option key={l} value={l}>{t.editor.layout.options[l]}</option>)}</select></label>
         <label>{T.captionStyle}<select value={view.captions.style} onChange={(e) => void change(itemId,{captionStyle:e.target.value as CaptionStyleId})}>{(['natural','highlight','clean','karaoke'] as const).map((s) => <option value={s} key={s}>{t.editor.captions.styles[s].name}</option>)}</select></label>
         <label>{T.zoom}<select value={item.zoom ?? 'auto'} onChange={(e) => void change(itemId,{zoom:e.target.value as ReviewItem['zoom']})}><option value="auto">{T.auto}</option><option value="softer">{T.softer}</option><option value="stronger">{T.stronger}</option><option value="off">{T.off}</option></select></label>

@@ -3,12 +3,15 @@ export { reviewItemSchema } from './review-schema'
 import { clipDocument, complementRanges, withClipLayout } from './clips'
 import { projectDurationMs } from './project'
 import { captionStyleDefaults } from './caption-style'
+import type { DictionaryCorrection } from './dictionary-corrections'
 import type { CaptionStyle, Cut, CutReason, LayoutKind, LayoutSeg, Project, Range, Style, Zoom } from './types'
 import { defaultVerticalEdit, mergeFormatView, projectForFormat } from './vertical'
 
 export type ReviewItem = {
   decision: 'pending' | 'approved' | 'discarded'; origin: 'auto' | 'manual'
   phase?: 'queued' | 'exporting' | 'ready' | 'error'; exportPath?: string; textPath?: string; error?: string
+  /** Corte entregue abaixo da nota configurada: revisão explícita antes de publicar. */
+  lowScore?: boolean
   captionsEnabled?: boolean; captionStyle?: CaptionStyle['style']; layout?: LayoutKind
   zoom?: 'softer' | 'stronger' | 'off' | 'auto'; trim?: Range; disabledReasons?: CutReason[]; keepFillers?: string[]
   disabledCutIds?: string[]; disabledZoomIds?: string[]; disabledLayoutIds?: string[]; keptFillerCutIds?: string[]
@@ -17,9 +20,9 @@ export type ReviewItem = {
   /** Revisão da edição que pede exportação: sobe a cada ajuste que reexporta; uma exportação só encerra a revisão em que nasceu. */
   revision?: number
   title?: string; hook?: string; text?: string
-  edits?: { cuts: Cut[]; zooms: Zoom[]; layouts: LayoutSeg[]; captions: CaptionStyle; style: Style; wordFixes?: Project['wordFixes']; mutes?: Project['mutes']; meta?: Project['meta']; zoomPreset?: Project['zoomPreset']; autoExclusions?:Project['autoExclusions'] }
+  edits?: { cuts: Cut[]; zooms: Zoom[]; layouts: LayoutSeg[]; captions: CaptionStyle; style: Style; wordFixes?: Project['wordFixes']; dictionaryCorrections?: DictionaryCorrection[]; mutes?: Project['mutes']; meta?: Project['meta']; zoomPreset?: Project['zoomPreset']; autoExclusions?:Project['autoExclusions'] }
 }
-export type ReviewState = { items: Record<string, ReviewItem>; metaOrigin?: 'auto' | 'manual'; titleOrigin?: 'auto' | 'manual' }
+export type ReviewState = { items: Record<string, ReviewItem>; metaOrigin?: 'auto' | 'manual'; titleOrigin?: 'auto' | 'manual'; dictionaryCorrections?: DictionaryCorrection[] }
 export function itemOf(doc: Project, id: string): ReviewItem { return doc.review?.items[id] ?? { decision: 'pending', origin: 'auto' } }
 export function updateReviewItem(doc: Project, id: string, patch: Partial<ReviewItem>, manual = true): Project {
   if(patch.disabledReasons) {
@@ -36,8 +39,15 @@ export function reviewDocument(doc: Project, id: string): Project {
   let p = clip ? withClipLayout(clipDocument(doc, clip), clip.layoutV) : doc
   const original = p
   if (item.edits) {
-    if (clip) p = mergeFormatView(p,{...projectForFormat(p,'vertical'),...item.edits},'vertical')
-    else p = { ...p, ...item.edits }
+    const { dictionaryCorrections, ...edits } = item.edits
+    if (clip) p = mergeFormatView(p,{...projectForFormat(p,'vertical'),...edits},'vertical')
+    else p = { ...p, ...edits }
+    p = { ...p, wordFixes: { ...original.wordFixes, ...item.edits.wordFixes } }
+    if (dictionaryCorrections) p = { ...p, review: { ...p.review, items: p.review?.items ?? {}, dictionaryCorrections: original.review?.dictionaryCorrections?.map((c) => {
+      const manual = dictionaryCorrections.find((m) => m.i === c.i)
+      // O histórico e o desfazer são comuns; a decisão manual de agrupar vale só para este item.
+      return manual?.manualSpan !== undefined ? { ...c, manualSpan: manual.manualSpan } : c
+    }) } }
   }
   const restore = <T extends {start:number;end:number;origin?:'auto'|'manual'}>(current:T[],base:T[]):T[] => {
     const manual = current.filter((s) => s.origin === 'manual')

@@ -124,10 +124,11 @@ describe('V-D (9:16): o recorte da tela em cima e o apresentador embaixo, na lar
     expect(cam.w).toBe(1080)
     expect(cam.y + cam.h).toBe(VERTICAL_H)
     expect((cam.h * PRESENTER.personFrac) / VERTICAL_H).toBeCloseTo(0.45, 2)
-    expect(scr).toEqual({ x: 0, y: 0, w: 1080, h: Math.round(presenterScreenHeightV(resolvePresenter(undefined)) * VERTICAL_H) })
+    const bandH=presenterScreenHeightV(resolvePresenter(undefined))*VERTICAL_H
+    expect(scr).toEqual({ x: 0, y: Math.round((bandH-1080)/2), w: 1080, h: 1080 })
     const headTop = (1 - 0.45) * VERTICAL_H
     expect(scr.h).toBeGreaterThan(headTop) // a cabeça e as mãos invadem a tela
-    expect(scr.h - headTop).toBeLessThan(0.1 * VERTICAL_H)
+    expect(scr.y+scr.h - headTop).toBeLessThan(0.1 * VERTICAL_H)
   })
 
   it('a legenda fica 4 pontos acima da cabeça e dentro da caixa segura, em toda a faixa de altura', () => {
@@ -149,7 +150,7 @@ describe('V-D (9:16): o recorte da tela em cima e o apresentador embaixo, na lar
     expect(vd.gain).toBe(1)
     expect(vd.view.h).toBe(1)
     expect(vd.view.w).toBeGreaterThan(va.view.w)
-    expect(vd.view.w).toBeCloseTo(1080 / (VERTICAL_H * presenterScreenHeightV(resolvePresenter(undefined))) / (SCREEN.w / SCREEN.h), 3)
+    expect(vd.view.w).toBeCloseTo(SCREEN.h / SCREEN.w, 3)
     expect(layoutFollow('presenter', H, SCREEN)).toEqual({ view: { w: 1, h: 1 }, gain: 1 })
   })
 

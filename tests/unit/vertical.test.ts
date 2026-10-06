@@ -186,7 +186,7 @@ describe('recorte (view) de cada layout vertical', () => {
     const b = layoutFollow('stack', VERTICAL_1080, SCREEN)
     expect(b.gain).toBe(0.5)
     expect(b.view.h).toBeCloseTo(STACK_VIEW_HEIGHT, 6)
-    expect((b.view.w * SCREEN.w) / (b.view.h * SCREEN.h)).toBeCloseTo(STACK_SCREEN.w / STACK_SCREEN.h, 4)
+    expect((b.view.w * SCREEN.w) / (b.view.h * SCREEN.h)).toBeCloseTo(1, 4)
     expect(layoutFollow('screen-wide', VERTICAL_1080, SCREEN)).toEqual({ view: { w: 1, h: 1 }, gain: 0 })
     expect(layoutFollow('camera', VERTICAL_1080, SCREEN).gain).toBe(1)
   })
@@ -206,7 +206,7 @@ describe('V-B sem barras: as duas metades', () => {
       expect(r.camera.w).toBe(1080)
     }
     // o recorte da tela mostra 2× a tela inteira: a mesma fração da altura nos dois
-    expect(STACK_VIEW_HEIGHT).toBeCloseTo(960 / 2 / 1080, 9)
+    expect(STACK_VIEW_HEIGHT).toBe(1)
   })
 })
 
@@ -245,7 +245,7 @@ describe('geometria vertical: tudo dentro da caixa segura', () => {
 
     it(`V-B (${label}) SEM barras: tela em cima (y 0–960) e câmera embaixo (y 960–1920), de ponta a ponta`, () => {
       const g = layoutGeometry('stack', style, format, sources)
-      expect(g.screen).toEqual({ x: 0, y: 0, w: 1080 * k, h: STACK_SCREEN.h * k })
+      expect(g.screen).toEqual({ x: 60 * k, y: 0, w: 960 * k, h: STACK_SCREEN.h * k })
       expect(g.camera!.rect).toEqual({ x: 0, y: STACK_CAMERA.y * k, w: 1080 * k, h: STACK_CAMERA.h * k })
       expect(g.screen!.y).toBe(0) // começa na borda de cima: sem barra
       expect(g.screen!.y + g.screen!.h).toBe(g.camera!.rect.y) // sem fresta nem sobreposição
@@ -261,7 +261,7 @@ describe('geometria vertical: tudo dentro da caixa segura', () => {
     it(`V-B (${label}) com "câmera em cima": as duas metades trocam de lugar, também sem barras`, () => {
       const g = layoutGeometry('stack', { ...style, stackCameraTop: true }, format, sources)
       expect(g.camera!.rect).toEqual({ x: 0, y: 0, w: 1080 * k, h: STACK_CAMERA.h * k })
-      expect(g.screen).toEqual({ x: 0, y: STACK_SPLIT * k, w: 1080 * k, h: STACK_SCREEN.h * k })
+      expect(g.screen).toEqual({ x: 60 * k, y: STACK_SPLIT * k, w: 960 * k, h: STACK_SCREEN.h * k })
       expect(g.camera!.rect.y + g.camera!.rect.h).toBe(g.screen!.y)
       expect(g.screen!.y + g.screen!.h).toBe(format.h)
     })

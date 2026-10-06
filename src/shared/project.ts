@@ -14,6 +14,7 @@ import { retakeMarkSchema } from './retake-marker'
 import { pipelineSchema } from './autopilot'
 import { cameraCaptureReportSchema } from './camera-quality'
 import { reviewItemSchema } from './review-schema'
+import { dictionaryCorrectionSchema } from './dictionary-corrections'
 import type { CaptionStyle, CaptionStyleId, CaptureInfo, Project, Src, Style } from './types'
 
 export const CURRENT_PROJECT_VERSION = 2
@@ -70,7 +71,7 @@ const C = defaultCaptions()
 const rectSchema = z.looseObject({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
 const rangeSchema = z.looseObject({ start: z.number(), end: z.number() })
 
-const layoutKind = z.enum(['bubble', 'side-by-side', 'screen', 'camera', 'stack', 'screen-focus', 'screen-wide', 'presenter'])
+const layoutKind = z.enum(['bubble', 'side-by-side', 'screen', 'camera', 'stack', 'screen-focus', 'screen-center', 'screen-wide', 'presenter'])
 
 const srcSchema = z.looseObject({
   path: z.string().min(1),
@@ -210,7 +211,7 @@ const captionStyleSchema = z.looseObject({
 const autoExclusionsSchema = z.object({zooms:z.array(z.string()).optional(),layouts:z.array(z.string()).optional()})
 const verticalSchema = z.looseObject({
   autoExclusions:autoExclusionsSchema.optional(),
-  layout: layoutKind.default('screen-focus'),
+  layout: layoutKind.default('screen-center'),
   layouts: z.array(layoutSegSchema).default([]),
   zooms: z.array(zoomSchema).default([]),
   zoomPreset: z.enum(['subtle', 'moderate', 'intense', 'off']).optional(),
@@ -243,7 +244,7 @@ const clipSchema = z.looseObject({
   notes: z.looseObject({ hook: z.number(), flow: z.number(), value: z.number() }).optional(),
   reason: z.string().default(''),
   format: z.enum(['vertical', 'horizontal']).default('vertical'),
-  layoutV: z.enum(['auto', 'stack', 'screen-focus', 'screen-wide', 'camera', 'presenter']).default('auto'),
+  layoutV: z.enum(['auto', 'stack', 'screen-focus', 'screen-center', 'screen-wide', 'camera', 'presenter']).default('auto'),
   captionStyle: captionStyleId.optional(),
   captionsEnabled: z.boolean().optional(),
   source: z.enum(['ai', 'heuristic', 'manual']).optional()
@@ -323,7 +324,7 @@ export const projectSchema = z.looseObject({
   wordFixes: z.record(z.string(), z.string()).optional(),
   autoCleaned: z.boolean().optional(),
   autopilot: pipelineSchema.optional(),
-  review: z.looseObject({ items: z.record(z.string(), reviewItemSchema.extend({ edits: z.object({ cuts: z.array(cutSchema), zooms: z.array(zoomSchema), layouts: z.array(layoutSegSchema), captions: captionStyleSchema, style: styleSchema, autoExclusions:autoExclusionsSchema.optional(), wordFixes:z.record(z.string(),z.string()).optional(), mutes:z.array(muteSchema).optional(), meta:metaSchema.optional(), zoomPreset:z.enum(['subtle','moderate','intense','off']).optional() }).optional() })), metaOrigin: z.enum(['auto','manual']).optional(), titleOrigin: z.enum(['auto','manual']).optional() }).optional(),
+  review: z.looseObject({ items: z.record(z.string(), reviewItemSchema.extend({ edits: z.object({ cuts: z.array(cutSchema), zooms: z.array(zoomSchema), layouts: z.array(layoutSegSchema), captions: captionStyleSchema, style: styleSchema, autoExclusions:autoExclusionsSchema.optional(), wordFixes:z.record(z.string(),z.string()).optional(), dictionaryCorrections:z.array(dictionaryCorrectionSchema).max(10000).optional(), mutes:z.array(muteSchema).optional(), meta:metaSchema.optional(), zoomPreset:z.enum(['subtle','moderate','intense','off']).optional() }).optional() })), metaOrigin: z.enum(['auto','manual']).optional(), titleOrigin: z.enum(['auto','manual']).optional(), dictionaryCorrections: z.array(dictionaryCorrectionSchema).max(10000).optional() }).optional(),
   meta: metaSchema.optional(),
   script: videoScriptSchema.optional(),
   retakeMarks: z.array(retakeMarkSchema).optional(),

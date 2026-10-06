@@ -816,8 +816,8 @@ function drawBackdrop(ctx: Ctx2D, cache: RenderCache, b: SceneBackdrop, frame: F
  * pixels da região são substituídos antes de desenhar a tela ou o fundo do V-C. É uma operação
  * muitos-para-um, sem camada original ou metadado de desfoque no arquivo codificado.
  */
-export function protectScreen(cache: RenderCache, frame: FrameSource | null | undefined, regions: readonly BlurRegion[]): FrameSource | null | undefined {
-  if (!frame || regions.length === 0) return frame
+export function protectScreen(cache: RenderCache, frame: FrameSource | null | undefined, regions: readonly BlurRegion[], rasterize = false): FrameSource | null | undefined {
+  if (!frame || (regions.length === 0 && !rasterize)) return frame
   const canvas = layerFor(cache, 'protected-screen', frame.w, frame.h)
   const ctx = ctxOf(canvas)
   ctx.save()
@@ -885,7 +885,9 @@ export function renderFrame(ctx: Ctx2D, scene: Scene, frames: FrameSet, cache: R
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
 
-  const protectedScreen = protectScreen(cache, frames.screen, scene.blurRegions ?? [])
+  // Fundo com e sem proteção passa pela mesma rasterização 1:1. Chromium reduz VideoFrame e canvas de forma diferente;
+  // ligar a tarja não pode alterar a interpolação de marcadores distantes da região protegida.
+  const protectedScreen = protectScreen(cache, frames.screen, scene.blurRegions ?? [], Boolean(scene.backdrop))
 
   ctx.drawImage(backgroundBitmap(cache, scene.background, w, h), 0, 0)
   if (scene.backdrop) drawBackdrop(ctx, cache, scene.backdrop, protectedScreen, w, h)

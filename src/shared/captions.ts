@@ -8,6 +8,7 @@
  * convenção de legenda (até 2 linhas de 42 caracteres, 1 a 6 s).
  */
 import { struckWords } from './text-edit'
+import { correctedTranscriptWords, type DictionaryCorrection } from './dictionary-corrections'
 import { keptRanges, sourceToOutput } from './timeline'
 import type { CaptionStyle, CaptionStyleId, Cut, Mute, Project, Range, Word } from './types'
 
@@ -28,6 +29,7 @@ export type CaptionSource = {
   cuts: readonly Pick<Cut, 'start' | 'end' | 'enabled'>[]
   mutes?: readonly Pick<Mute, 'start' | 'end' | 'enabled'>[] | undefined
   wordFixes?: Readonly<Record<string, string>> | undefined
+  dictionaryCorrections?: readonly DictionaryCorrection[]
   /** Duração da gravação (ms de origem). */
   durationMs: number
 }
@@ -38,6 +40,7 @@ export type CaptionSource = {
  */
 export function captionWords(words: readonly Word[] | null | undefined, src: CaptionSource): CaptionWord[] {
   if (!words || words.length === 0) return []
+  words = correctedTranscriptWords(words, src.wordFixes, src.dictionaryCorrections)
   const kept = keptRanges(src.durationMs, src.cuts)
   if (kept.length === 0) return []
   const struck = struckWords(words, src.cuts)
@@ -232,10 +235,10 @@ export function buildCaptionPages(words: readonly CaptionWord[], opts: CaptionPa
 }
 
 /** A trilha de legendas de um projeto no formato (a visão do formato: `captions` já é a do 16:9 ou a do vertical). */
-export function buildCaptionTrack(words: readonly Word[] | null | undefined, project: Pick<Project, 'cuts' | 'mutes' | 'wordFixes' | 'captions'>, durationMs: number): CaptionTrack | null {
+export function buildCaptionTrack(words: readonly Word[] | null | undefined, project: Pick<Project, 'cuts' | 'mutes' | 'wordFixes' | 'captions' | 'review'>, durationMs: number): CaptionTrack | null {
   const cs = project.captions
   if (!cs.enabled) return null
-  const cw = captionWords(words, { cuts: project.cuts, mutes: project.mutes, wordFixes: project.wordFixes, durationMs })
+  const cw = captionWords(words, { cuts: project.cuts, mutes: project.mutes, wordFixes: project.wordFixes, dictionaryCorrections: project.review?.dictionaryCorrections, durationMs })
   if (cw.length === 0) return null
   return { id: `t${++trackCounter}`, style: cs.style, pages: buildCaptionPages(cw, { style: cs.style, wordsPerLine: cs.wordsPerLine }) }
 }
@@ -394,8 +397,8 @@ export function toVtt(cues: readonly Cue[]): string {
 }
 
 /** Trechos mantidos do projeto (atalho para quem monta legendas de arquivo fora da cena). */
-export function captionSourceOf(project: Pick<Project, 'cuts' | 'mutes' | 'wordFixes'>, durationMs: number): CaptionSource {
-  return { cuts: project.cuts, mutes: project.mutes, wordFixes: project.wordFixes, durationMs }
+export function captionSourceOf(project: Pick<Project, 'cuts' | 'mutes' | 'wordFixes' | 'review'>, durationMs: number): CaptionSource {
+  return { cuts: project.cuts, mutes: project.mutes, wordFixes: project.wordFixes, dictionaryCorrections: project.review?.dictionaryCorrections, durationMs }
 }
 
 export type { CaptionStyle, Range }

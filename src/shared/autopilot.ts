@@ -1,7 +1,7 @@
 /** Piloto automático persistente. A fila do main injeta os serviços, este núcleo decide ordem e retomada. */
 import { z } from 'zod'
 
-export const PIPELINE_STEPS = ['transcribe', 'clean', 'zooms', 'layouts', 'captions', 'youtube', 'clips', 'clipExports', 'publish', 'notify'] as const
+export const PIPELINE_STEPS = ['transcribe', 'dictionary', 'clean', 'zooms', 'layouts', 'captions', 'youtube', 'clips', 'clipExports', 'publish', 'notify'] as const
 export type PipelineStepId = typeof PIPELINE_STEPS[number]
 export type PipelineStep = { id: PipelineStepId; status: 'pending' | 'running' | 'done' | 'error' | 'skipped'; detail?: string; elapsedMs?: number }
 export type PipelineState = {
@@ -15,10 +15,12 @@ export const autopilotPrefsSchema = z.object({
   captionsHorizontal: z.boolean().default(false),
   captionsVertical: z.boolean().default(true),
   maxClips: z.number().int().min(3).max(5).default(3),
-  minScore: z.number().min(0).max(100).default(70)
+  minScore: z.number().min(0).max(100).default(70),
+  /** Resolução do YouTube que o piloto exporta: 1440p por padrão (o YouTube dá um codec melhor a envios de 1440p ou mais). */
+  youtubeResolution: z.enum(['1080p', '1440p']).default('1440p')
 })
 export type AutopilotPrefs = Omit<z.infer<typeof autopilotPrefsSchema>, 'steps'> & { steps: Partial<Record<PipelineStepId, boolean>> }
-export const DEFAULT_AUTOPILOT: AutopilotPrefs = { mode: 'everything', steps: {}, captionsHorizontal: false, captionsVertical: true, maxClips: 3, minScore: 70 }
+export const DEFAULT_AUTOPILOT: AutopilotPrefs = { mode: 'everything', steps: {}, captionsHorizontal: false, captionsVertical: true, maxClips: 3, minScore: 70, youtubeResolution: '1440p' }
 export const pipelineSchema = z.looseObject({
   projectId: z.string(), status: z.enum(['running', 'done']), startedAt: z.number(), elapsedMs: z.number(), notice: z.string().optional(),
   steps: z.array(z.looseObject({ id: z.enum(PIPELINE_STEPS), status: z.enum(['pending', 'running', 'done', 'error', 'skipped']), detail: z.string().optional(), elapsedMs: z.number().optional() }))
@@ -30,6 +32,8 @@ export async function runPipeline(state: PipelineState, deps: {
   run(id: PipelineStepId): Promise<string | void>; save(state: PipelineState): Promise<void>; enabled(id: PipelineStepId): boolean; now?(): number; stopped?(): boolean
 }): Promise<void> {
   const now = deps.now ?? Date.now
+  // Uma versão nova pode acrescentar etapa; a retomada conserva os estados já gravados e insere só a ausente.
+  state.steps = PIPELINE_STEPS.map((id) => state.steps.find((s) => s.id === id) ?? { id, status: 'pending' })
   state.status = 'running'
   for (const step of state.steps) {
     if (deps.stopped?.()) return

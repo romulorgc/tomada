@@ -6,6 +6,7 @@
 import { BrowserWindow } from 'electron'
 import type { ExporterWindow } from './export-service'
 import type { Logger } from './logger'
+import { e2eWindowOptions, keepE2ePainting } from './window-visibility'
 
 export type ExporterWindowDeps = {
   preload: string
@@ -16,7 +17,7 @@ export type ExporterWindowDeps = {
 
 export function createExporterWindowFactory(deps: ExporterWindowDeps) {
   return (exportId: string, hooks: { onGone(reason: string): void }): ExporterWindow => {
-    const win = new BrowserWindow({
+    const win = new BrowserWindow(e2eWindowOptions({
       show: false,
       width: 1280,
       height: 720,
@@ -30,7 +31,8 @@ export function createExporterWindowFactory(deps: ExporterWindowDeps) {
         // sem isto o Chromium freia timers de página oculta e a exportação rasteja
         backgroundThrottling: false
       }
-    })
+    }))
+    keepE2ePainting(win)
     const hash = `export:${exportId}`
     let intentional = false
     win.webContents.on('render-process-gone', (_e, details) => hooks.onGone(`o processo caiu: ${details.reason}`))

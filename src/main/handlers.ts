@@ -412,7 +412,7 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
       const words = await requireWords(projectId)
       const provider = requireProvider()
       logger.info(`IA: textos de publicação de ${projectId}.`)
-      return generatePublish({ provider, project, words, durationMs: projectDurationMs(project), clips: project.clips })
+      return generatePublish({ provider, project, words, durationMs: projectDurationMs(project), clips: project.clips, dictionary: state.dictionary() })
     },
     'ai:script': (topic) => generateScript(requireProvider(), topic),
     'exporter:job': async (exportId) => exporter.job(exportId),

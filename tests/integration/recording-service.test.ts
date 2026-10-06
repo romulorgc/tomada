@@ -508,15 +508,31 @@ describe('a página do navegador na gravação (C1)', () => {
     expect(snap.notes.join(' ')).not.toMatch(/Firefox|navegador/)
   }, 120_000)
 
-  it('captura de TELA: a página do navegador em primeiro plano é registrada, mas o recorte NÃO liga sozinho (ambíguo)', async () => {
+  const screenRequest: RecordRequest = { ...baseRequest, mode: 'screen', cameraId: null }
+  const pageOnMonitor = { x: SCREEN_SOURCE.rectPx.x + 100, y: SCREEN_SOURCE.rectPx.y + 150, w: 1400, h: 800 }
+
+  it('captura de TELA com o navegador à frente a maior parte do tempo: o recorte da página nasce AUTOMÁTICO e o resto volta à tela inteira', async () => {
     const raw = rawEvents('screen')
-    const monitor = SCREEN_SOURCE.rectPx
     raw.pages = [
       { t: T0 - 60, rect: null },
-      { t: T0 + 600, rect: { x: monitor.x + 100, y: monitor.y + 150, w: 1400, h: 800 }, exe: 'chrome.exe' },
-      { t: T0 + 2000, rect: null }
+      { t: T0 + 300, rect: pageOnMonitor, exe: 'chrome.exe' },
+      { t: T0 + 2500, rect: null }
     ]
-    const { dir, project } = await run({ source: SCREEN_SOURCE, raw, request: { ...baseRequest, mode: 'screen', cameraId: null }, info: { frame: { w: 1920, h: 1080 } } })
+    const { dir, project } = await run({ source: SCREEN_SOURCE, raw, request: screenRequest, info: { frame: { w: 1920, h: 1080 } } })
+    const rects = lines(join(dir, 'events/content-rect.jsonl'))
+    expect(rects.map((r) => r.w)).toEqual([1, expect.closeTo(1400 / 1920, 4), 1])
+    expect(project.screenCrop).toEqual({ mode: 'auto' })
+    expect(project.capture.browser).toEqual({ exe: 'chrome.exe', engine: 'chromium', contentRect: true })
+  }, 120_000)
+
+  it('captura de TELA com o navegador só de passagem (menos da metade): a página é registrada, mas a tela inteira continua sendo a base', async () => {
+    const raw = rawEvents('screen')
+    raw.pages = [
+      { t: T0 - 60, rect: null },
+      { t: T0 + 600, rect: pageOnMonitor, exe: 'chrome.exe' },
+      { t: T0 + 1400, rect: null }
+    ]
+    const { dir, project } = await run({ source: SCREEN_SOURCE, raw, request: screenRequest, info: { frame: { w: 1920, h: 1080 } } })
     const rects = lines(join(dir, 'events/content-rect.jsonl'))
     expect(rects.map((r) => r.w)).toEqual([1, expect.closeTo(1400 / 1920, 4), 1])
     expect(rects[1]!.x).toBeCloseTo(100 / 1920, 4)

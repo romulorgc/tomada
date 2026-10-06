@@ -144,10 +144,10 @@ export function sentenceLine(s: Sentence): string {
 export type ClipPrompt = { prompt: string; sentences: number }
 
 /** Os pedidos (um por janela de frases). `outputMs` é a duração do vídeo depois dos cortes de agora. */
-export function buildClipPrompts(sentences: readonly Sentence[], opts: { durationMs: number; outputMs: number }): ClipPrompt[] {
+export function buildClipPrompts(sentences: readonly Sentence[], opts: { durationMs: number; outputMs: number; count?: number }): ClipPrompt[] {
   const prompts: ClipPrompt[] = []
   if (sentences.length === 0) return prompts
-  const total = clipCountRange(opts.outputMs)
+  const total = opts.count === undefined ? clipCountRange(opts.outputMs) : { min: opts.count, max: opts.count }
   let from = 0
   while (from < sentences.length) {
     let to = from

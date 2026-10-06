@@ -17,7 +17,7 @@ describe('piloto automático', () => {
     const state = newPipeline('gravação', 100)
     state.steps[0]!.status = 'done'
     state.steps[1]!.status = 'running'
-    state.steps[2]!.status = 'error'
+    state.steps.find((s) => s.id === 'zooms')!.status = 'error'
     const calls: string[] = []
     await runPipeline(state, { save: async () => {}, run: async (id) => { calls.push(id) }, enabled: () => true, now: () => 300 })
     expect(calls).toEqual(PIPELINE_STEPS.slice(1).filter((s) => s !== 'zooms'))
@@ -29,5 +29,14 @@ describe('piloto automático', () => {
     await runPipeline(state, { save: async () => {}, run: async (id) => { calls.push(id) }, enabled: (id) => id !== 'youtube' && id !== 'clipExports' })
     expect(calls).not.toContain('youtube')
     expect(state.steps.find((s) => s.id === 'youtube')?.status).toBe('skipped')
+  })
+
+  it('retomada do documento anterior insere a conferência de nomes sem repetir etapas prontas', async () => {
+    const state = newPipeline('antigo')
+    state.steps = state.steps.filter((s) => s.id !== 'dictionary').map((s) => ({ ...s, status: 'done' }))
+    const calls: string[] = []
+    await runPipeline(state, { save: async () => {}, run: async (id) => { calls.push(id) }, enabled: () => true })
+    expect(calls).toEqual(['dictionary'])
+    expect(state.steps[1]).toMatchObject({ id: 'dictionary', status: 'done' })
   })
 })

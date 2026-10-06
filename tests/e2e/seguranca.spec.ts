@@ -174,7 +174,9 @@ test('só as páginas do app falam com o processo principal, e a rede é cortada
   const foreign = await s.app.evaluate(
     async ({ BrowserWindow }, args) => {
       // uma janela com a mesma ponte, mas numa página que NÃO é a do app (e sem CSP)
-      const win = new BrowserWindow({ show: false, webPreferences: { preload: args.preload, contextIsolation: true, sandbox: true } })
+      const win = new BrowserWindow({ show: false, skipTaskbar: true, paintWhenInitiallyHidden: true, webPreferences: { preload: args.preload, contextIsolation: true, sandbox: true, backgroundThrottling: false, offscreen: process.env.TOMADA_E2E_HIDDEN === '1' } })
+      const globals = globalThis as { __tomadaE2eKeepPainting?: (window: InstanceType<typeof BrowserWindow>) => void }
+      globals.__tomadaE2eKeepPainting?.(win)
       await win.loadURL('data:text/html,<p>pagina de fora</p>')
       const run = (code: string): Promise<string> => win.webContents.executeJavaScript(code)
       const ipc = await run(`window.tomada.app.info().then(() => 'respondeu', (e) => e.message)`)

@@ -17,6 +17,7 @@ import { itemOf, updateReviewItem, reviewDocument, refreshReviewSnapshots, type 
 import { keptRanges, outputDuration } from '@shared/timeline'
 import type { Project, ProjectSummary, Transcript } from '@shared/types'
 import { autoVerticalLayouts, defaultVerticalEdit, speechRanges } from '@shared/vertical'
+import { cameraStyleLayouts } from '@shared/camera-style-layouts'
 import { generateAutoZooms, zoomPresetFor } from '@shared/zoom'
 import { deriveRetakeCuts } from '@shared/retake-marker'
 import type { CameraService } from './camera/service'
@@ -28,6 +29,8 @@ import { mergeEditorProject } from '@shared/project-merge'
 import { suggestClips } from './llm/clips'
 import { generatePublish } from './llm/publish'
 import { detectRetakes } from './llm/retakes'
+import { detectDictionaryCorrections } from './llm/dictionary'
+import { applyDictionaryCorrections, correctedTranscriptWords } from '@shared/dictionary-corrections'
 import type { LlmManager } from './llm/manager'
 import type { Logger } from './logger'
 import { MANIFEST_PATH, readManifest, writeManifest } from './manifest'
@@ -51,6 +54,7 @@ export interface AutopilotService {
 export type AutopilotDeps = {
   store: ProjectStore; transcription: TranscriptionService; derived: DerivedMedia; exporter: ExportService; llm: LlmManager; logger: Logger
   prefs(): AutopilotPrefs; ownerStyle?(): Project['style'] | undefined
+  vocabulary?(): readonly string[]
   ownerBackground?(): Promise<string | undefined>
   /** O serviço da câmera (M4c): o piloto espera a análise do rosto e do recorte do fundo e escolhe o Apresentador quando o recorte já existe. */
   camera?: Pick<CameraService, 'idle' | 'result' | 'analyze' | 'view'>
@@ -107,7 +111,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
   const transcript = async (id: string): Promise<Transcript> => {
     const t = await deps.transcription.getTranscript(id)
     if (!t || t.words.length === 0) throw new Error('Sem transcrição com fala. Prepare a transcrição nos Ajustes e tente de novo.')
-    return t
+    const { project } = await deps.store.read(id)
+    return { ...t, words: correctedTranscriptWords(t.words, project.wordFixes, project.review?.dictionaryCorrections) }
   }
   const textOf = (project:Project,itemId:string,words:Transcript['words'] | null):string => {
     const item = itemOf(project,itemId)
@@ -127,6 +132,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     // cliques no espaço dele; um clique fora do recorte, na barra de abas, não abre zoom e o foco de um zoom é lido dentro do recorte).
     return applyScreenCrop(prepareEvents(eventsFromText(texts), durationMs), project)
   }
+  const automaticExportEnabled = (itemId: string, prefs = deps.prefs()): boolean => prefs.mode === 'everything' && prefs.steps[itemId === 'youtube' ? 'youtube' : 'clipExports'] !== false
   async function exportItem(id: string, itemId: string): Promise<void> {
     // Cada exportação nasce de uma revisão da edição do item. Se o usuário ajustar durante a exportação (updateItem sobe a revisão
     // e deixa o item "queued"), o fim da exportação antiga não pode apagar essa pendência: a reexportação ainda precisa rodar.
@@ -140,7 +146,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       await deps.camera?.idle()
       await deps.exporter.idle()
       const protection = protectionFingerprint((await deps.store.read(id)).project)
-      const { exportId } = await deps.exporter.start({ projectId: id, format: itemId === 'youtube' ? 'horizontal' : 'vertical', resolution: '1080p', fps: 30, ...(itemId === 'youtube' ? {} : { clipId: itemId }) })
+      const { exportId } = await deps.exporter.start({ projectId: id, format: itemId === 'youtube' ? 'horizontal' : 'vertical', resolution: itemId === 'youtube' ? deps.prefs().youtubeResolution : '1080p', fps: 30, ...(itemId === 'youtube' ? {} : { clipId: itemId }) })
       await deps.exporter.idle()
       const done = deps.exporter.status(exportId)
       if (done?.exportId !== exportId || done.phase !== 'done' || !done.outputPath) throw new Error(done?.message ?? 'A exportação não terminou.')
@@ -173,6 +179,37 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         await deps.transcription.idle()
         const t = await transcript(id)
         return `${t.words.length} palavras transcritas localmente.`
+      }
+      case 'dictionary': {
+        const provider = deps.llm.provider()
+        if (!provider) return 'Sem IA: mantive a transcrição e as correções do usuário.'
+        const dictionary = deps.vocabulary?.() ?? []
+        if (!dictionary.length) return 'Dicionário vazio: mantive a transcrição.'
+        const t = await deps.transcription.getTranscript(id)
+        if (!t?.words.length) return 'Sem transcrição: nenhuma grafia foi alterada.'
+        const raw = await detectDictionaryCorrections({ provider, words: t.words, dictionary })
+        let count = 0
+        await regenerate(id, (p) => {
+          const next = applyDictionaryCorrections(p, t.words, raw, dictionary)
+          count = (next.review?.dictionaryCorrections?.length ?? 0) - (p.review?.dictionaryCorrections?.length ?? 0)
+          if (!count) return next
+          const added = next.review!.dictionaryCorrections!.slice(p.review?.dictionaryCorrections?.length ?? 0)
+          const items = { ...next.review?.items }
+          for (const itemId of ['youtube', ...next.clips.map((c) => c.id)]) {
+            const item = itemOf(next, itemId)
+            if (item.decision === 'discarded' || (!item.exportPath && item.phase !== 'exporting' && item.phase !== 'queued')) continue
+            const effective = reviewDocument(next, itemId)
+            const ranges = next.clips.find((c) => c.id === itemId)?.ranges
+            const changed = added.some((correction) => {
+              if (effective.wordFixes?.[String(correction.i)] !== correction.after) return false
+              const first = t.words.find((w) => w.i === correction.i), last = t.words.find((w) => w.i === (correction.last ?? correction.i))
+              return first && last && (!ranges || ranges.some((r) => r.start < last.end && r.end > first.start))
+            })
+            if (changed) items[itemId] = { ...item, phase: automaticExportEnabled(itemId, prefs) ? 'queued' : undefined, revision: (item.revision ?? 0) + 1, exportPath: undefined, textPath: undefined, error: undefined }
+          }
+          return { ...next, review: { ...next.review, items } }
+        })
+        return `${count} ${count === 1 ? 'troca de grafia' : 'trocas de grafia'} em nomes de produtos com confiança alta; veja e desfaça em “O que o automático fez”.`
       }
       case 'clean': {
         const t = await transcript(id)
@@ -218,6 +255,16 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           hasMatte = matte.ok
           if (!matte.ok) notice = `O recorte do fundo falhou; usei o quadro ao lado. Motivo: ${matte.reason.replace(/[.\s]+$/, '')}. No editor: Câmera → Recortar de novo. `
         }
+        // O estilo escolhido vale no vídeo inteiro, nos dois formatos: sem alternância por atividade e sem bolinha. Segmentos que o usuário
+        // criou à mão ficam; só os automáticos de antes saem.
+        const styled = cameraStyleLayouts(project, hasMatte)
+        if (styled) {
+          await regenerate(id, (p) => {
+            const v = p.vertical ?? defaultVerticalEdit()
+            return { ...p, style: { ...p.style, defaultLayout: styled.horizontal }, layouts: p.layouts.filter((s) => s.origin !== 'auto'), vertical: { ...v, layout: styled.vertical, layouts: v.layouts.filter((s) => s.origin !== 'auto') } }
+          })
+          return `${notice}${styled.style === 'presenter' ? 'Apresentador recortado' : 'Quadro ao lado'} no vídeo inteiro: ${styled.style === 'presenter' ? 'Apresentador no 16:9 e V-D no 9:16' : 'lado a lado no 16:9 e câmera embaixo da tela no 9:16'}. A bolinha só por escolha sua.`
+        }
         const automatic = autoVerticalLayouts({ ...(hasMatte ? { hasMatte } : {}), durationMs: duration, hasCamera: !!project.sources.camera && !project.style.camera.hidden, clicks: e.clicks, keys: e.keys, cursor: e.grid, speech: speechRanges(t?.words), kept: keptRanges(duration, project.cuts) })
         await regenerate(id, (p) => {
           const v = p.vertical ?? defaultVerticalEdit()
@@ -244,7 +291,17 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         let notice = ''
         const provider = deps.llm.provider()
         if (provider) {
-          try { drafts = (await suggestClips({ provider, ...input, script: project.script })).clips }
+          // O mesmo pedido usado por “Tentar de novo” roda uma única vez a mais se a primeira resposta não basta.
+          const suggest = () => suggestClips({ provider, ...input, script: project.script, count: prefs.maxClips })
+          try {
+            drafts = (await suggest()).clips
+            if (drafts.filter((c) => c.score >= prefs.minScore).length < prefs.maxClips) {
+              notice = 'Repeti a sugestão uma vez para buscar a quantidade pedida. '
+              // mergeSuggestedClips preserva os melhores e elimina a repetição entre as duas respostas.
+              try { drafts = mergeSuggestedClips([], [...drafts, ...(await suggest()).clips].sort((a,b) => b.score-a.score)).clips as ClipDraft[] }
+              catch (err) { notice += `A segunda sugestão falhou: ${err instanceof Error ? err.message : String(err)}. ` }
+            }
+          }
           catch (err) { notice = `Sugestão pela IA falhou: ${err instanceof Error ? err.message : String(err)}. ` }
         } else notice = 'Sem IA: sugestões pela heurística. '
         if (drafts.length === 0) drafts = heuristicClips(input).clips
@@ -254,13 +311,20 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           drafts = [{ ...heuristicClipLabels(text), ranges: [{ start: 0, end: duration }], score: 70, notes: { hook: 70, flow: 70, value: 70 }, reason: 'Versão vertical completa da gravação curta; nota heurística, confira o conteúdo.', source: 'heuristic' }]
           notice += 'Gravação curta: versão vertical completa, abaixo da faixa habitual de cortes. '
         }
-        const chosen = drafts.filter((c) => c.score >= prefs.minScore).sort((a,b) => b.score-a.score).slice(0, prefs.maxClips)
+        const ordered = [...drafts].sort((a,b) => b.score-a.score)
+        const qualified = ordered.filter((c) => c.score >= prefs.minScore)
+        // Reserva: até dois, com piso em 50. Se o usuário baixou a nota mínima para menos de 50, o piso é essa nota
+        // (o que a alcança continua sendo entregue, como antes).
+        const chosen = qualified.length >= 2 ? qualified.slice(0, prefs.maxClips) : ordered.filter((c) => c.score >= Math.min(50, prefs.minScore)).slice(0, 2)
+        const lowScore = chosen.some((c) => c.score < prefs.minScore)
         await regenerate(id, (p) => {
           const kept = p.clips.filter((c) => c.source === 'manual' || itemOf(p,c.id).origin === 'manual')
           const merged = mergeSuggestedClips(kept, chosen)
-          return { ...p, clips: merged.clips, review:{...p.review,items:Object.fromEntries(Object.entries(p.review?.items ?? {}).filter(([id]) => id === 'youtube' || merged.clips.some((c) => c.id === id)))} }
+          const items = Object.fromEntries(Object.entries(p.review?.items ?? {}).filter(([id]) => id === 'youtube' || merged.clips.some((c) => c.id === id)))
+          for (const clip of merged.added) items[clip.id] = { decision: 'pending', origin: 'auto', lowScore: clip.score < prefs.minScore }
+          return { ...p, clips: merged.clips, review:{...p.review,items} }
         })
-        return `${notice}${chosen.length} ${chosen.length === 1 ? 'corte' : 'cortes'} com nota ≥ ${prefs.minScore}; máximo ${prefs.maxClips}.`
+        return `${notice}${chosen.length} ${chosen.length === 1 ? 'corte' : 'cortes'} ${lowScore ? 'entre os melhores com nota ≥ 50. Nota baixa: revise antes de postar' : `com nota ≥ ${prefs.minScore}`}; máximo ${lowScore ? 2 : prefs.maxClips}.`
       }
       case 'clipExports': {
         const errors: string[] = []
@@ -278,7 +342,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         let meta: Project['meta']
         let notice = ''
         if (provider) {
-          try { const result = await generatePublish({ provider, project, words: t.words, durationMs: duration, clips: project.clips }); meta = { youtube: { titles: result.titles, description: result.description, chapters: result.chapters, tags: result.tags }, perClip: result.clips } }
+          try { const result = await generatePublish({ provider, project, words: t.words, durationMs: duration, clips: project.clips, dictionary: deps.vocabulary?.() }); meta = { youtube: { titles: result.titles, description: result.description, chapters: result.chapters, tags: result.tags }, perClip: result.clips } }
           catch (err) { notice = `Textos pela IA falharam: ${err instanceof Error ? err.message : String(err)}. ` }
         } else notice = 'Sem IA: textos e capítulos gerados pela transcrição; confira antes de postar. '
         const body = t.words.filter((w) => !project.cuts.some((c) => c.enabled && c.start <= w.start && c.end >= w.end)).map((w) => w.text).join(' ')
@@ -352,7 +416,22 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     const { project } = await deps.store.read(id)
     const state = project.autopilot ?? newPipeline(id)
     const prefs = deps.prefs()
-    await runPipeline(state, { stopped: () => stopped, enabled: (s) => prefs.steps[s] !== false && (prefs.mode !== 'prepare' || !['youtube','clipExports'].includes(s)), run: (s) => runStep(id,s), save: async (s) => { await change(id, (p) => ({ ...p, autopilot: structuredClone(s) })); deps.emit(structuredClone(s)) } })
+    await runPipeline(state, { stopped: () => stopped, enabled: (s) => prefs.steps[s] !== false && (prefs.mode !== 'prepare' || !['youtube','clipExports'].includes(s)), run: async (s) => {
+      const detail = await runStep(id, s)
+      if (s === 'dictionary') {
+        // Projeto de versão anterior pode ter vídeos prontos: a grafia nova precisa chegar aos arquivos antes de publicar.
+        const latest = (await deps.store.read(id)).project
+        if (itemOf(latest, 'youtube').phase === 'queued') {
+          const youtube = state.steps.find((step) => step.id === 'youtube')
+          if (youtube) youtube.status = 'pending'
+        }
+        if (latest.clips.some((c) => itemOf(latest, c.id).phase === 'queued')) {
+          const clips = state.steps.find((step) => step.id === 'clipExports')
+          if (clips) clips.status = 'pending'
+        }
+      }
+      return detail
+    }, save: async (s) => { await change(id, (p) => ({ ...p, autopilot: structuredClone(s) })); deps.emit(structuredClone(s)) } })
   }
   const service: AutopilotService = {
     renameProject: (id,title) => {
@@ -528,7 +607,12 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         if (project.autopilot?.status === 'running' || (pending && !project.autopilot)) await service.start(entry.id).catch(() => undefined)
         else if (pending) await settleIntent(entry.id)
         const latest = (await deps.store.read(entry.id)).project
-        for (const [itemId,item] of Object.entries(latest.review?.items ?? {})) if (item.phase === 'queued' || item.phase === 'exporting') void enqueue(() => exportItem(entry.id,itemId))
+        for (const [itemId,item] of Object.entries(latest.review?.items ?? {})) {
+          if (item.phase !== 'queued' && item.phase !== 'exporting') continue
+          if (automaticExportEnabled(itemId)) void enqueue(() => exportItem(entry.id,itemId))
+          // Uma fila de versão anterior também obedece aos ajustes atuais. Sem arquivo pronto, o botão Exportar permite o pedido explícito.
+          else await change(entry.id, (p) => updateReviewItem(p, itemId, { phase: undefined, exportPath: undefined, textPath: undefined, error: undefined }, false))
+        }
       }
     },
     async idle() { await queue },

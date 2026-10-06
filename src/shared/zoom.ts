@@ -310,6 +310,11 @@ export type CameraPathOptions = {
   /** A mola da ESCALA: dá o tempo do movimento do zoom (1,0 s no 16:9, 0,6 s no vertical). Padrão: a mesma do centro. */
   scaleSpring?: SpringParams
   lookaheadMs?: number
+  /**
+   * O foco da ação (`action-focus.ts`): quando existe, o centro do recorte NÃO segue o cursor, vai para onde a ação está (e os zooms
+   * de foco automático usam o mesmo ponto). Sem ele, vale a zona morta em volta do cursor (V-A e 16:9).
+   */
+  focusAt?: (tMs: number) => { cx: number; cy: number }
 }
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v)
@@ -396,8 +401,12 @@ export function computeCameraPath(
         tcy = eff.focus.y
       } else {
         const fp = focusPoint(cursor, tMs, lookahead)
-        // Num recorte que segue sempre, começar um segmento NÃO reposiciona o alvo (a câmera já está no cursor).
-        if ((eff.id !== activeId && !follows) || wasSweeping || i === 0) {
+        if (opts.focusAt) {
+          const f = opts.focusAt(tMs)
+          tcx = f.cx
+          tcy = f.cy
+        } else if ((eff.id !== activeId && !follows) || wasSweeping || i === 0) {
+          // Num recorte que segue sempre, começar um segmento NÃO reposiciona o alvo (a câmera já está no cursor).
           tcx = fp.x
           tcy = fp.y
         } else {
@@ -484,7 +493,10 @@ export function sampleCameraPath(path: CameraPath, tMs: number): { scale: number
 
 /** Retângulo visível (normalizado, na fonte) para uma amostra da câmera. */
 export function visibleRect(sample: { scale: number; cx: number; cy: number }, view = { w: 1, h: 1 }): Rect {
-  const w = view.w / sample.scale
-  const h = view.h / sample.scale
-  return { x: sample.cx - w / 2, y: sample.cy - h / 2, w, h }
+  const scale = Math.max(1, sample.scale)
+  const w = Math.min(1, view.w / scale)
+  const h = Math.min(1, view.h / scale)
+  // O desenho recebe amostras interpoladas entre os limites de 60 Hz. Limitar o retângulo final também elimina resíduos
+  // negativos de ponto flutuante nas bordas; no espaço C1, [0,1] é sempre a página, nunca a interface do navegador.
+  return { x: clamp(sample.cx - w / 2, 0, 1 - w), y: clamp(sample.cy - h / 2, 0, 1 - h), w, h }
 }

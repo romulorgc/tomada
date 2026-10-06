@@ -8,6 +8,8 @@ import { LlmError } from '@shared/llm-json'
 import { PUBLISH_SYSTEM, buildPublishPrompt, publishSchema, validatePublish, type PublishResult } from '@shared/publish'
 import type { Clip, Project, Word } from '@shared/types'
 import type { LlmProvider } from './provider'
+import { normalizeDictionary } from '@shared/dictionary'
+import { correctedTranscriptWords } from '@shared/dictionary-corrections'
 
 export type GeneratePublishArgs = {
   provider: LlmProvider
@@ -15,19 +17,21 @@ export type GeneratePublishArgs = {
   words: readonly Word[]
   durationMs: number
   clips: readonly Clip[]
+  dictionary?: readonly string[]
   signal?: AbortSignal
 }
 
 export async function generatePublish(args: GeneratePublishArgs): Promise<PublishResult> {
+  const words = correctedTranscriptWords(args.words, args.project.wordFixes, args.project.review?.dictionaryCorrections)
   const raw = await args.provider.complete({
     task: 'publish',
     system: PUBLISH_SYSTEM,
-    prompt: buildPublishPrompt({ project: args.project, words: args.words, durationMs: args.durationMs, clips: args.clips }),
+    prompt: buildPublishPrompt({ project: args.project, words, durationMs: args.durationMs, clips: args.clips, dictionary: normalizeDictionary([...(args.dictionary ?? [])]) }),
     schema: publishSchema,
     ...(args.signal ? { signal: args.signal } : {})
   })
   try {
-    return validatePublish(raw, { words: args.words, durationMs: args.durationMs, cuts: args.project.cuts, clips: args.clips })
+    return validatePublish(raw, { words, durationMs: args.durationMs, cuts: args.project.cuts, clips: args.clips })
   } catch (err) {
     throw new LlmError(`${err instanceof Error ? err.message : String(err)} Tente de novo.`, true)
   }

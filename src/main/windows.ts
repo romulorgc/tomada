@@ -11,6 +11,7 @@ import type { Logger } from './logger'
 import type { RecordingWindows } from './recording-service'
 import type { TeleprompterAction, TeleprompterState } from '@shared/script'
 import { DEFAULT_RECORDING_SHORTCUTS, type RecordingShortcuts } from '@shared/shortcuts-config'
+import { e2eWindowOptions, isE2eHidden, keepE2ePainting, revealWindow } from './window-visibility'
 
 export type AuxWindowsDeps = {
   /** Caminho do preload compilado. */
@@ -69,7 +70,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
     else void win.loadFile(deps.rendererFile, { hash })
   }
 
-  const overlayDefaults = {
+  const overlayDefaults = e2eWindowOptions({
     ...(deps.icon ? { icon: deps.icon } : {}),
     frame: false,
     transparent: true,
@@ -85,7 +86,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
     alwaysOnTop: true,
     backgroundColor: '#00000000',
     webPreferences
-  } as const
+  })
 
   /** Fora da captura e acima de tudo (inclusive de jogos em tela cheia). */
   const hardenOverlay = (win: BrowserWindow): void => {
@@ -109,13 +110,12 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
 
   const api: AuxWindows = {
     setMainMinimized(minimized) {
+      if (isE2eHidden()) return
       const main = deps.getMain()
       if (!main || main.isDestroyed()) return
       if (minimized) main.minimize()
       else {
-        if (main.isMinimized()) main.restore()
-        main.show()
-        main.focus()
+        revealWindow(main, { restore: true, focus: true })
       }
     },
 
@@ -130,6 +130,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
           height: display.h
         })
         countdownWin = win
+        keepE2ePainting(win)
         hardenOverlay(win)
         win.setIgnoreMouseEvents(true)
         win.setBounds({ x: display.x, y: display.y, width: display.w, height: display.h })
@@ -152,7 +153,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
         // Esc cancela sem precisar de foco (a contagem não pode roubar o foco do que será gravado).
         if (!globalShortcut.register('Escape', () => done(false))) logger.warn('Não consegui registrar o Esc para cancelar a contagem.')
         win.on('closed', () => done(false))
-        win.webContents.once('did-finish-load', () => win.showInactive())
+        win.webContents.once('did-finish-load', () => revealWindow(win, { inactive: true }))
         win.webContents.on('did-fail-load', (_e, code, description) => {
           logger.error(`A contagem não carregou (${code}: ${description}).`)
           done(false)
@@ -165,11 +166,12 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
       destroy(bar)
       const win = new BrowserWindow({ ...overlayDefaults, width: BAR_SIZE.w, height: BAR_SIZE.h })
       bar = win
+      keepE2ePainting(win)
       hardenOverlay(win)
       placeBottomCenter(win, display)
       win.webContents.once('did-finish-load', () => {
         win.webContents.send('bar:state', state)
-        win.showInactive()
+        revealWindow(win, { inactive: true })
       })
       win.on('closed', () => {
         if (bar === win) bar = null
@@ -194,13 +196,14 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
       destroy(bubble)
       const win = new BrowserWindow({ ...overlayDefaults, width: BUBBLE_SIZE.w, height: BUBBLE_SIZE.h })
       bubble = win
+      keepE2ePainting(win)
       hardenOverlay(win)
       const d = display ?? (() => {
         const b = screen.getPrimaryDisplay().workArea
         return { x: b.x, y: b.y, w: b.width, h: b.height }
       })()
       win.setPosition(Math.round(d.x + MARGIN), Math.round(d.y + d.h - BUBBLE_SIZE.h - MARGIN * 2))
-      win.webContents.once('did-finish-load', () => win.showInactive())
+      win.webContents.once('did-finish-load', () => revealWindow(win, { inactive: true }))
       win.on('closed', () => {
         if (bubble === win) bubble = null
       })
@@ -218,9 +221,10 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
       const width = Math.min(760, d.w - 32)
       const win = new BrowserWindow({ ...overlayDefaults, width, height: 300 })
       prompter = win
+      keepE2ePainting(win)
       hardenOverlay(win)
       win.setPosition(Math.round(d.x + (d.w - width) / 2), Math.round(d.y + 16))
-      win.webContents.once('did-finish-load', () => { win.webContents.send('teleprompter:state', state); win.showInactive() })
+      win.webContents.once('did-finish-load', () => { win.webContents.send('teleprompter:state', state); revealWindow(win, { inactive: true }) })
       win.on('closed', () => {
         if (prompter === win) {
           prompter = null

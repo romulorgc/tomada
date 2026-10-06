@@ -36,6 +36,17 @@ import { createTracker } from './tracker'
 import { chooseEngine } from './transcription/engines'
 import { createTranscriptionService } from './transcription/service'
 import { createAuxWindows } from './windows'
+import { e2eWindowOptions, isE2eHidden, keepE2ePainting, revealWindow } from './window-visibility'
+
+// O compositor OSR acelerado deste Electron devolve canvas pretos no screenshot
+// do Chromium. O modo software preserva a pintura oculta para os testes.
+if (isE2eHidden()) {
+  // TOMADA_E2E_GPU=1 (só a medição de velocidade da exportação) deixa a GPU ligada: as capturas de tela dos specs não valem nesse modo.
+  if (process.env.TOMADA_E2E_GPU !== '1') app.disableHardwareAcceleration()
+  // As janelas sintéticas dos specs usam o mesmo relógio central do app.
+  const globals = globalThis as { __tomadaE2eKeepPainting?: typeof keepE2ePainting }
+  globals.__tomadaE2eKeepPainting = keepE2ePainting
+}
 
 // Testes isolam ajustes e logs do app real. Precisa vir antes de qualquer uso de userData.
 if (process.env[ENV_USER_DATA_DIR]) app.setPath('userData', process.env[ENV_USER_DATA_DIR])
@@ -96,6 +107,10 @@ async function main(): Promise<void> {
     logger,
     trash,
     openFolder: async (path) => {
+      if (testMode || isE2eHidden()) {
+        testCalls().push({ op: 'open', path })
+        return
+      }
       const error = await shell.openPath(path)
       if (error) throw new Error(`Não consegui abrir a pasta: ${error}`)
     }
@@ -145,9 +160,7 @@ async function main(): Promise<void> {
   let mainWindow: BrowserWindow | null = null
   app.on('second-instance', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
+    revealWindow(mainWindow, { restore: true, focus: true })
   })
   const emit = <K extends keyof IpcEvents>(channel: K, payload: IpcEvents[K]): void => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
@@ -303,6 +316,7 @@ async function main(): Promise<void> {
 
   autopilot = createAutopilot({
     store, transcription, derived, exporter, llm, logger, camera,
+    vocabulary: () => state.dictionary(),
     prefs: () => {
       const settings = state.settings()
       return { ...DEFAULT_AUTOPILOT, ...settings.autopilot,
@@ -319,8 +333,8 @@ async function main(): Promise<void> {
       emit('autopilot:ready',{ projectId: id })
       if (Notification.isSupported()) {
         const notification = new Notification({ title: 'Tomada', body: youtube ? `Pronto: 1 vídeo + ${clips} cortes` : `Preparação concluída: ${clips} cortes prontos. Confira a Revisão.` })
-        notification.on('click',() => { mainWindow?.show(); mainWindow?.focus(); emit('autopilot:ready',{ projectId: id }) })
-        if (!testMode) notification.show()
+        notification.on('click',() => { if (mainWindow) revealWindow(mainWindow, { focus: true }); emit('autopilot:ready',{ projectId: id }) })
+        if (!testMode && !isE2eHidden()) notification.show()
       }
     }
   })
@@ -396,6 +410,7 @@ async function main(): Promise<void> {
         // TOMADA_TEST_PICK_DIR: nos testes o diálogo do Windows não aparece; vazio = "cancelou"
         const forced = process.env.TOMADA_TEST_PICK_DIR
         if (forced !== undefined) return forced === '' ? null : forced
+        if (isE2eHidden()) return null
         const options = {
           title: 'Escolha a pasta da exportação',
           properties: ['openDirectory', 'createDirectory'] as ('openDirectory' | 'createDirectory')[],
@@ -407,6 +422,7 @@ async function main(): Promise<void> {
       pickImage: async () => {
         const forced = process.env.TOMADA_TEST_PICK_IMAGE
         if (forced !== undefined) return forced === '' ? null : forced
+        if (isE2eHidden()) return null
         const options = {
           title: 'Escolha a imagem de fundo',
           properties: ['openFile'] as 'openFile'[],
@@ -416,7 +432,7 @@ async function main(): Promise<void> {
         return result.canceled ? null : (result.filePaths[0] ?? null)
       },
       openPath: async (path) => {
-        if (testMode) {
+        if (testMode || isE2eHidden()) {
           testCalls().push({ op: 'open', path })
           return
         }
@@ -424,7 +440,7 @@ async function main(): Promise<void> {
         if (error) throw new Error(`Não consegui abrir o arquivo: ${error}`)
       },
       revealPath: async (path) => {
-        if (testMode) {
+        if (testMode || isE2eHidden()) {
           testCalls().push({ op: 'reveal', path })
           return
         }
@@ -434,6 +450,7 @@ async function main(): Promise<void> {
       finishCountdown: (completed) => windows.finishCountdown(completed),
       clock,
       pickFolder: async (defaultPath) => {
+        if (isE2eHidden()) return null
         const options = {
           title: 'Escolha a pasta dos projetos',
           properties: ['openDirectory', 'createDirectory'] as ('openDirectory' | 'createDirectory')[],
@@ -443,6 +460,7 @@ async function main(): Promise<void> {
         return result.canceled ? null : (result.filePaths[0] ?? null)
       },
       pickFfmpeg: async () => {
+        if (isE2eHidden()) return null
         const options = {
           title: 'Escolha o ffmpeg.exe (ou a pasta que tem o ffmpeg e o ffprobe)',
           properties: ['openFile', 'openDirectory'] as ('openFile' | 'openDirectory')[]
@@ -456,7 +474,7 @@ async function main(): Promise<void> {
   )
 
   const createWindow = (): BrowserWindow => {
-    const win = new BrowserWindow({
+    const win = new BrowserWindow(e2eWindowOptions({
       width: 1440,
       height: 900,
       minWidth: 960,
@@ -477,8 +495,9 @@ async function main(): Promise<void> {
         // sem isto o Chromium freia timers e rAF de página oculta.
         backgroundThrottling: false
       }
-    })
-    win.once('ready-to-show', () => win.show())
+    }))
+    keepE2ePainting(win)
+    win.once('ready-to-show', () => revealWindow(win))
     win.webContents.on('did-fail-load', (_e, code, description, url) =>
       logger.error(`A interface não carregou (${code}: ${description}) em ${url}`)
     )
@@ -495,7 +514,7 @@ async function main(): Promise<void> {
     })
     if (rendererUrl) void win.loadURL(rendererUrl)
     else void win.loadFile(join(__dirname, '../renderer/index.html'))
-    if (process.env.TOMADA_DEVTOOLS === '1') win.webContents.openDevTools({ mode: 'detach' })
+    if (process.env.TOMADA_DEVTOOLS === '1' && !isE2eHidden()) win.webContents.openDevTools({ mode: 'detach' })
     return win
   }
 
@@ -513,6 +532,6 @@ async function main(): Promise<void> {
 if (primaryInstance) main().catch((err) => {
   // Falha na partida: aparece para o usuário, não fica só no console.
   console.error(err)
-  dialog.showErrorBox('O Tomada não conseguiu iniciar', err instanceof Error ? (err.stack ?? err.message) : String(err))
+  if (!isE2eHidden()) dialog.showErrorBox('O Tomada não conseguiu iniciar', err instanceof Error ? (err.stack ?? err.message) : String(err))
   app.exit(1)
 })

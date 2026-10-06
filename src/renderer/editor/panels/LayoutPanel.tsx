@@ -28,7 +28,7 @@ import { useEditorOps } from '../ops'
 const T = t.editor.layout
 const KINDS: LayoutKind[] = ['bubble', 'side-by-side', 'presenter', 'screen', 'camera']
 /** No vertical: V-A Cursor, V-B Câmera + tela, V-D Apresentador (recortado), V-C Tela na largura e só a câmera. */
-const VERTICAL_KINDS: LayoutKind[] = ['screen-focus', 'stack', 'presenter', 'screen-wide', 'camera']
+const VERTICAL_KINDS: LayoutKind[] = ['screen-center', 'screen-focus', 'stack', 'presenter', 'screen-wide', 'camera']
 const HOOK_MAX = 80
 const ICONS: Record<string, ReactNode> = {
   bubble: <LayoutBubbleIcon size={26} />,
@@ -36,6 +36,7 @@ const ICONS: Record<string, ReactNode> = {
   screen: <LayoutScreenIcon size={26} />,
   camera: <LayoutCameraIcon size={26} />,
   'screen-focus': <LayoutFocusIcon size={26} />,
+  'screen-center': <LayoutScreenIcon size={26} />,
   stack: <LayoutStackIcon size={26} />,
   'screen-wide': <LayoutWideIcon size={26} />,
   presenter: <LayoutPresenterIcon size={26} />
@@ -45,7 +46,7 @@ const iconFor = (l: LayoutKind, vertical: boolean): ReactNode => (l === 'present
 /** Por que um layout não está disponível neste projeto (ou `null` se está). */
 function unavailable(l: LayoutKind, hasScreen: boolean, hasCamera: boolean): string | null {
   if (l === 'camera') return hasCamera ? null : T.needsCamera
-  if (l === 'screen' || l === 'screen-focus' || l === 'screen-wide') return hasScreen ? null : T.needsScreen
+  if (l === 'screen' || l === 'screen-focus' || l === 'screen-center' || l === 'screen-wide') return hasScreen ? null : T.needsScreen
   return hasCamera && hasScreen ? null : hasCamera ? T.needsScreen : T.needsCamera
 }
 

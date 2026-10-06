@@ -34,10 +34,11 @@ import {
 import { keptRanges, outputDuration, sourceToOutput } from './timeline'
 import type { Background, ClickEvent, ContentRectSample, CursorSample, KeyEvent, LayoutKind, Point, Project, Range, Rect, Size, Style, Word } from './types'
 import { GRID_HZ } from './cursor'
-import { HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
+import { CENTER_BOX, CENTER_ZOOM_MAX, HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
 import { ZOOM_SCALE_SPRING } from './spring'
 import { computeCameraPath, sampleCameraPath, visibleRect, type CameraPath } from './zoom'
 import { fitRect } from './geometry'
+import { FOCUS_SPRING, actionFocusAt, buildActionFocus } from './action-focus'
 import { activeBlurRegions } from './blur'
 import type { BlurRegion } from './types'
 
@@ -283,8 +284,22 @@ export function deriveProject(project: Project, rawData: CursorData, format: For
         paths[key] = { view: f.view, path: TRIVIAL_PATH }
         continue
       }
-      const zooms = project.zooms.map((z) => ({ ...z, scale: 1 + (z.scale - 1) * f.gain }))
-      paths[key] = { view: f.view, path: computeCameraPath({ zooms }, data.grid, { durationMs, view: f.view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.vertical }) }
+      // A janela quadrada (Tela ao centro, metade de tela do V-B, faixa do V-D) enquadra a AÇÃO em vez de seguir o cursor e nunca amplia
+      // além de 1:1: a janela mostra `source` px da página num quadrado de `dest` px, e um zoom z amplia z·dest/source.
+      const square = key === 'screen-center' || key === 'stack' || key === 'presenter'
+      let max = Infinity
+      let focus: Pick<Parameters<typeof computeCameraPath>[2], 'focusAt' | 'spring'> = {}
+      if (square && baseSize) {
+        const dest = layoutGeometry(key as LayoutKind, project.style, format, { screen: baseSize, camera: cameraSize }).screen
+        const source = f.view.h * baseSize.h
+        const oneToOne = dest && source > 0 ? Math.max(1, source / Math.min(dest.w, dest.h)) : 1
+        max = Math.min(CENTER_ZOOM_MAX, oneToOne)
+        const steps = buildActionFocus({ clicks: data.clicks, keys: data.keys, cursor: data.grid, view: f.view })
+        // sem nenhuma ação (só passeio do cursor) a janela segue o cursor, como o V-A
+        if (steps) focus = { focusAt: (t) => actionFocusAt(steps, t), spring: FOCUS_SPRING }
+      }
+      const zooms = project.zooms.map((z) => ({ ...z, scale: Math.min(max, 1 + (z.scale - 1) * f.gain) }))
+      paths[key] = { view: f.view, path: computeCameraPath({ zooms }, data.grid, { durationMs, view: f.view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.vertical, ...focus }) }
     }
   }
   const main = paths.main ?? paths[mainKey] ?? Object.values(paths)[0] ?? { view: { w: 1, h: 1 }, path: TRIVIAL_PATH }
@@ -333,13 +348,13 @@ export function resolveLayout(layout: LayoutKind, hasScreen: boolean, hasCamera:
   let l = layout
   if (kind === 'horizontal') {
     if (l === 'stack') l = 'side-by-side'
-    if (l === 'screen-focus' || l === 'screen-wide') l = 'bubble'
-  } else if (l !== 'camera' && l !== 'stack' && l !== 'screen-wide' && l !== 'presenter') {
+    if (l === 'screen-focus' || l === 'screen-center' || l === 'screen-wide') l = 'bubble'
+  } else if (l !== 'camera' && l !== 'stack' && l !== 'screen-wide' && l !== 'screen-center' && l !== 'presenter') {
     l = 'screen-focus'
   }
   if (!hasCamera) {
     // sem câmera: no vertical sobram o recorte que segue o cursor e a tela na largura; no 16:9, só a tela
-    if (kind === 'vertical') return l === 'screen-wide' ? 'screen-wide' : 'screen-focus'
+    if (kind === 'vertical') return l === 'screen-wide' || l === 'screen-center' ? l : 'screen-focus'
     if (l === 'bubble' || l === 'side-by-side' || l === 'camera' || l === 'presenter') return 'screen'
   }
   return l
@@ -379,13 +394,24 @@ export function layoutGeometry(
     return { screen: snap(full), camera: sources.camera ? bubbleVertical(style, format, zoomProgress) : null }
   }
 
+  if (L === 'screen-center') {
+    const k = W / VERTICAL_W
+    const screen = snap({ x: CENTER_BOX.x*k, y: CENTER_BOX.y*k, w: CENTER_BOX.w*k, h: CENTER_BOX.h*k })
+    // A bolha fica no canto superior, acima do gancho e do quadrado, mesmo se o estilo horizontal pedir um canto de baixo.
+    const d = Math.min(180*k, style.camera.size*side) * (1-CAMERA_ZOOM_SHRINK*clamp01(zoomProgress))
+    const cw = d*cameraBoxAspect(style.camera.shape)
+    const right = style.camera.corner.endsWith('right')
+    const rect = snap({ x: right ? W-65*k-cw : 65*k, y: 24*k, w:cw, h:d })
+    return { screen, camera: sources.camera ? {rect,radius:cameraRadius(style.camera.shape,rect.w,rect.h)} : null }
+  }
+
   if (L === 'stack') {
     // vertical V-B SEM barras: a tela em cima (y 0-960) e a câmera embaixo (y 960-1920), de ponta a ponta e sem cantos; com
     // `stackCameraTop` as duas trocam de lugar
     const k = format.w / VERTICAL_W
     const sc = (r: { x: number; y: number; w: number; h: number }): Rect => snap({ x: r.x * k, y: r.y * k, w: r.w * k, h: r.h * k })
     const halves = stackRects(style.stackCameraTop === true)
-    return { screen: sources.screen ? sc(halves.screen) : null, camera: sources.camera ? { rect: sc(halves.camera), radius: 0 } : null }
+    return { screen: sources.screen ? snap(fitRect({w:1,h:1},sc(halves.screen))) : null, camera: sources.camera ? { rect: sc(halves.camera), radius: 0 } : null }
   }
 
   if (L === 'screen-wide') {
@@ -407,7 +433,7 @@ export function layoutGeometry(
     const win = snap(presenterWindow(pr, format, format.kind === 'vertical'))
     if (format.kind === 'vertical') {
       const topH = presenterScreenHeightV(pr) * H
-      return { screen: snap({ x: 0, y: 0, w: W, h: topH }), camera: sources.camera ? { rect: win, radius: 0 } : null }
+      return { screen: snap(fitRect({w:1,h:1},{ x: 0, y: 0, w: W, h: topH })), camera: sources.camera ? { rect: win, radius: 0 } : null }
     }
     return { screen: snap(fitRect(sources.screen, inner)), camera: sources.camera ? { rect: win, radius: 0 } : null }
   }
@@ -688,7 +714,7 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
   }
 
   // a tela flutua (com sombra) no 16:9 e na tela na largura do vertical; nos outros verticais ela é de borda a borda
-  const wide = curKey === 'screen-wide' || (p < 1 && prevKey === 'screen-wide')
+  const wide = curKey === 'screen-wide' || curKey === 'screen-center' || (p < 1 && (prevKey === 'screen-wide' || prevKey === 'screen-center'))
   const shadowOn = !vertical || wide
   const shadowOf = (scaleBlur: number, scaleOffset: number): ShadowSpec | null =>
     style.shadow.opacity > 0 && style.shadow.blur > 0
@@ -745,10 +771,12 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
   // fundo da tela na largura: o próprio vídeo, desfocado e escurecido
   let backdrop: SceneBackdrop | null = null
   // o fundo desfocado do V-C também aparece embaixo da pessoa no V-D (a tela só ocupa a faixa de cima)
-  const hasBackdrop = (k: string): boolean => k === 'screen-wide' || (vertical && k === 'presenter')
+  const hasBackdrop = (k: string): boolean => k === 'screen-wide' || k === 'screen-center' || (vertical && (k === 'presenter' || k === 'stack'))
   const wideWeight = (hasBackdrop(curKey) ? e : 0) + (p < 1 && hasBackdrop(prevKey) && prevKey !== curKey ? 1 - e : 0)
   if (vertical && derived.screenSize && wideWeight > 0.002) {
-    backdrop = { src: inSource(coverCrop(derived.screenSize, format.w / format.h)), darken: 0.58, alpha: Math.min(1, wideWeight) }
+    // O fundo do quadrado/V-B/V-D também mostra a janela quadrada acompanhando o foco. O V-C mantém sua composição anterior.
+    const bgSrc = curKey === 'screen-wide' ? coverCrop(derived.screenSize, format.w / format.h) : srcRect
+    backdrop = { src: inSource(bgSrc), darken: 0.58, alpha: Math.min(1, wideWeight) }
   }
 
   // posição normalizada na fonte → px do quadro de saída (pelo recorte do zoom)

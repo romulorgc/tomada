@@ -15,7 +15,8 @@ import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { PNG } from 'pngjs'
 import { createProject, serializeProject } from '../../src/shared/project'
-import { HORIZONTAL_1080, VERTICAL_1080, type FormatSpec } from '../../src/shared/scene'
+import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, evaluateScene, prepareEvents, type FormatSpec } from '../../src/shared/scene'
+import { projectForFormat } from '../../src/shared/vertical'
 import type { LayoutKind, Project, Rect } from '../../src/shared/types'
 import { launchTomada, SCREENS_DIR, type Session } from './helpers'
 import { exportProject } from './export-helpers'
@@ -120,7 +121,7 @@ const FRINGE = 6
 type Proof = { whiteBefore: number; whiteInnerAfter: number; innerTotal: number; solidShare: number; outsideChanged: number; outsideTotal: number }
 const isSolid = (d: Buffer | Uint8Array, i: number): boolean => Math.abs(d[i]! - SOLID[0]) < 12 && Math.abs(d[i + 1]! - SOLID[1]) < 12 && Math.abs(d[i + 2]! - SOLID[2]) < 12
 /** O controle (sem a proteção) × o protegido, no mesmo quadro. */
-function prove(control: PNG, guarded: PNG): Proof {
+function prove(control: PNG, guarded: PNG, backdropRegion?: Rect): Proof {
   expect([guarded.width, guarded.height]).toEqual([control.width, control.height])
   const box = whiteBounds(control)
   expect(box, 'a caixa branca aparece no controle').not.toBeNull()
@@ -138,6 +139,8 @@ function prove(control: PNG, guarded: PNG): Proof {
           if (isSolid(guarded.data, i)) solid++
         }
       } else if (x < box!.x0 - margin || x > box!.x1 + margin || y < box!.y0 - margin || y > box!.y1 + margin) {
+        // O fundo também repete a região protegida. Essa cópia muda por privacidade; só FORA de ambas as cópias se exige igualdade.
+        if (backdropRegion && x>=backdropRegion.x-32 && x<=backdropRegion.x+backdropRegion.w+32 && y>=backdropRegion.y-32 && y<=backdropRegion.y+backdropRegion.h+32) continue
         outside++
         if (Math.abs(guarded.data[i]! - control.data[i]!) > 4 || Math.abs(guarded.data[i + 1]! - control.data[i + 1]!) > 4 || Math.abs(guarded.data[i + 2]! - control.data[i + 2]!) > 4) changed++
       }
@@ -152,7 +155,8 @@ const CASES: Array<{ name: string; format: FormatSpec; layout: LayoutKind }> = [
   { name: '16:9 Apresentador', format: H, layout: 'presenter' },
   { name: 'vertical V-A', format: V, layout: 'screen-focus' },
   { name: 'vertical V-B', format: V, layout: 'stack' },
-  { name: 'vertical V-D (Apresentador)', format: V, layout: 'presenter' }
+  { name: 'vertical V-D (Apresentador)', format: V, layout: 'presenter' },
+  { name: 'vertical Tela ao centro', format: V, layout: 'screen-center' }
 ]
 
 function docFor(base: Project, c: (typeof CASES)[number], crop: Rect, guarded: boolean): Project {
@@ -164,7 +168,21 @@ function docFor(base: Project, c: (typeof CASES)[number], crop: Rect, guarded: b
   return p
 }
 
-test('o desfoque cobre o mesmo pedaço com o recorte ligado: dois formatos, três layouts com câmera, recorte inteiro e recorte que corta a caixa', async () => {
+/** A segunda cópia da região protegida, projetada no fundo desfocado. */
+function backdropRegionFor(p: Project, format: FormatSpec): Rect | undefined {
+  const view = projectForFormat(p, format.kind)
+  const events = prepareEvents({ cursor: [{ t: 0, x: 0.5, y: 0.78 }], clicks: [], keys: [] }, 6000)
+  const scene = evaluateScene(view, deriveProject(view, events, format), 1000, format)
+  const bg = scene.backdrop?.src
+  return bg ? {
+    x: (BOX.x - bg.x) / bg.w * format.w,
+    y: (BOX.y - bg.y) / bg.h * format.h,
+    w: BOX.w / bg.w * format.w,
+    h: BOX.h / bg.h * format.h
+  } : undefined
+}
+
+test('o desfoque cobre o mesmo pedaço com o recorte ligado: dois formatos, todos os layouts de tela, recorte inteiro e recorte que corta a caixa', async () => {
   test.setTimeout(240_000)
   s = await launchTomada({ seed: false })
   const base = await seed(s)
@@ -180,7 +198,8 @@ test('o desfoque cobre o mesmo pedaço com o recorte ligado: dois formatos, trê
       const tag = `recorte-desfoque-${c.format.kind}-${c.layout}-${crop === CROP_IN ? 'inteiro' : 'corta'}`
       saveScreen(`${tag}-controle`, control!)
       saveScreen(`${tag}-protegido`, guarded!)
-      const proof = prove(PNG.sync.read(control!), PNG.sync.read(guarded!))
+      const backdropRegion = backdropRegionFor(docFor(base, c, crop, false), c.format)
+      const proof = prove(PNG.sync.read(control!), PNG.sync.read(guarded!), backdropRegion)
       proofs[`${c.name} (${cropName})`] = proof
       const label = `${c.name}, ${cropName}`
       expect(proof.whiteBefore, `${label}: a caixa branca é visível no controle`).toBeGreaterThan(2000)
@@ -201,7 +220,7 @@ test('o arquivo exportado (16:9 e vertical) também cobre a caixa com o recorte 
   const frameOf = (path: string): PNG =>
     PNG.sync.read(execFileSync('ffmpeg', ['-v', 'error', '-ss', '1', '-i', path, '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', '-'], { windowsHide: true, maxBuffer: 64 * 1024 * 1024 }))
   for (const [cropName, crop] of [['recorte inteiro', CROP_IN], ['recorte que corta a caixa', CROP_CUT]] as const) {
-    for (const c of [CASES[0]!, CASES[3]!]) {
+    for (const c of [CASES[0]!, CASES[3]!, CASES[6]!]) {
       const control = docFor(base, c, crop, false)
       const guarded = docFor(base, c, crop, true)
       // o controle do mesmo quadro (a caixa visível), pelo desenho avulso; o arquivo vem da exportação de verdade
@@ -212,7 +231,7 @@ test('o arquivo exportado (16:9 e vertical) também cobre a caixa com o recorte 
       const result = await exportProject(s.page, FOLDER, { resolution: '1080p', fps: 30, format: c.format.kind })
       expect(result.phase, result.message ?? '').toBe('done')
       const exported = frameOf(result.outputPath!)
-      const tag = `recorte-desfoque-exportado-${c.format.kind}-${crop === CROP_IN ? 'inteiro' : 'corta'}`
+      const tag = `recorte-desfoque-exportado-${c.format.kind}-${c.layout}-${crop === CROP_IN ? 'inteiro' : 'corta'}`
       saveScreen(tag, PNG.sync.write(exported))
       saveScreen(`${tag}-controle`, reference!)
       expect([exported.width, exported.height]).toEqual([c.format.w, c.format.h])
@@ -228,10 +247,12 @@ test('o arquivo exportado (16:9 e vertical) também cobre a caixa com o recorte 
       expect(whiteInside, `${c.name}, ${cropName}: o arquivo não tem a caixa branca onde ela estava (miolo)`).toBeLessThanOrEqual(total * 0.002)
       // …e o resto do quadro é o mesmo do controle (o recorte não deslocou nada): a média das cores fora da caixa difere pouco
       const ref = PNG.sync.read(reference!)
+      const backdropRegion = backdropRegionFor(control, c.format)
       let diff = 0, n = 0
       for (let y = 0; y < ref.height; y += 3) {
         for (let x = 0; x < ref.width; x += 3) {
           if (x >= box!.x0 - 12 && x <= box!.x1 + 12 && y >= box!.y0 - 12 && y <= box!.y1 + 12) continue
+          if (backdropRegion && x >= backdropRegion.x - 32 && x <= backdropRegion.x + backdropRegion.w + 32 && y >= backdropRegion.y - 32 && y <= backdropRegion.y + backdropRegion.h + 32) continue
           const i = (y * ref.width + x) * 4
           diff += Math.abs(ref.data[i]! - exported.data[i]!) + Math.abs(ref.data[i + 1]! - exported.data[i + 1]!) + Math.abs(ref.data[i + 2]! - exported.data[i + 2]!)
           n++

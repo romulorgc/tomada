@@ -286,6 +286,7 @@ export type PublishPromptInput = {
   durationMs: number
   /** Os cortes verticais do projeto (a IA escreve a legenda de cada um). */
   clips: readonly Clip[]
+  dictionary?: readonly string[]
 }
 
 /** O pedido: o resumo, os cortes e a transcrição em frases, com os tempos do vídeo FINAL. */
@@ -294,6 +295,7 @@ export function buildPublishPrompt(input: PublishPromptInput): string {
   const kept = keptRanges(durationMs, project.cuts)
   const outputMs = kept.reduce((a, r) => a + (r.end - r.start), 0)
   const lines: string[] = [`Vídeo "${oneLine(project.title).slice(0, 120)}" com ${formatSpan(outputMs)} (depois dos cortes).`]
+  if (input.dictionary?.length) lines.push(`Grafias do dicionário: ${JSON.stringify(input.dictionary)}. Em contexto de produto, use a grafia exata da lista nos títulos, descrição, capítulos, legendas e hashtags. Avalie cada ocorrência pelo contexto: não faça troca cega nem global de palavras comuns (por exemplo, "sintoma de febre" continua sintoma; o programa Sintomax usa Sintomax). Na dúvida, preserve o texto.`)
   if (project.script) lines.push(`Roteiro de referência: ${JSON.stringify(project.script)}`)
   if (input.clips.length > 0) {
     lines.push('', 'Cortes verticais (escreva a legenda e as hashtags de cada um):')

@@ -171,7 +171,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
             await window.tomada.projects.save(detail.id, {...base, blurRegions:p.blurRegions ?? []}, base)
           }
           const view = projectForFormat(p,itemId === 'youtube' ? 'horizontal' : 'vertical')
-          return window.tomada.review.update(detail.id,itemId,{title:p.title,hook:view.vertical?.hook,edits:{cuts:view.cuts,zooms:view.zooms,layouts:view.layouts,captions:view.captions,style:view.style,wordFixes:view.wordFixes ?? {},mutes:view.mutes ?? [],meta:view.meta ?? {},zoomPreset:view.zoomPreset,autoExclusions:view.autoExclusions}})
+          return window.tomada.review.update(detail.id,itemId,{title:p.title,hook:view.vertical?.hook,edits:{cuts:view.cuts,zooms:view.zooms,layouts:view.layouts,captions:view.captions,style:view.style,wordFixes:view.wordFixes ?? {},dictionaryCorrections:view.review?.dictionaryCorrections,mutes:view.mutes ?? [],meta:view.meta ?? {},zoomPreset:view.zoomPreset,autoExclusions:view.autoExclusions}})
         },
         onSaveError: (message) => {
           window.tomada.log({ level: 'error', message: 'Falha ao salvar o project.json', detail: message })
@@ -635,6 +635,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   const value = useMemo<EditorCtx>(
     () => ({
       detail,
+      itemId,
       store,
       playback,
       engineRef,
@@ -661,7 +662,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, store, playback, cursorData, rawData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
+    [detail, itemId, store, playback, cursorData, rawData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (

@@ -134,7 +134,7 @@ test('descartar pela barra apaga a gravação e devolve a janela; recomeçar des
     app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('#'))?.isMinimized() ?? null)
 
   let bar = await startRecording(s, { camera: true })
-  expect(await mainMinimized()).toBe(true)
+  expect(await mainMinimized()).toBe(process.env.TOMADA_E2E_HIDDEN !== '1')
   expect(projectFolders(s)).toHaveLength(1)
   await page.waitForTimeout(1500)
 
@@ -150,7 +150,9 @@ test('descartar pela barra apaga a gravação e devolve a janela; recomeçar des
   await bar.getByTestId('bar-confirm-yes').click()
   await expect.poll(() => auxPage(app, 'bar'), { timeout: 20_000 }).toBeUndefined()
   await expect.poll(mainMinimized, { timeout: 20_000 }).toBe(false)
-  expect(projectFolders(s)).toEqual([]) // em modo de teste a pasta vai direto, sem Lixeira real
+  // Em modo de teste a pasta vai direto, sem Lixeira real. Com as janelas ocultas a principal nunca fica minimizada, então o
+  // poll acima já passou antes da remoção terminar: o próprio desaparecimento da pasta é o ponto de sincronia.
+  await expect.poll(() => projectFolders(s!), { timeout: 20_000 }).toEqual([])
   expect(await app.evaluate(({ globalShortcut }) => globalShortcut.isRegistered('CommandOrControl+Shift+R'))).toBe(false)
   await expect(page.getByTestId('record-view')).toHaveAttribute('data-phase', 'idle')
 

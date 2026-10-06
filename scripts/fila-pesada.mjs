@@ -36,7 +36,8 @@ function outraBateria() {
     const out = execFileSync('powershell', ['-NoProfile', '-Command', ps], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 20000
+      timeout: 20000,
+      windowsHide: true
     })
     const metadata = JSON.parse(out.trim() || '[]')
     falhasConsulta = 0
@@ -93,7 +94,7 @@ process.on('SIGINT', () => {
   soltar()
   process.exit(130)
 })
-const filho = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit', shell: true })
+const filho = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit', shell: true, windowsHide: true })
 filho.on('exit', code => {
   soltar()
   process.exit(code ?? 1)

@@ -25,6 +25,6 @@ export type OwnerEditingDefaults = {
 /** Só no nascimento de um projeto: depois disso cada edição pertence ao documento. */
 export function applyOwnerEditingDefaults(project: Project, prefs: OwnerEditingDefaults): Project {
   const result: Project = { ...project, captions: { ...project.captions, ...prefs.ownerCaptionsHorizontal }, ...(prefs.ownerZoomPreset ? { zoomPreset: prefs.ownerZoomPreset } : {}) }
-  if (prefs.ownerCaptionsVertical || prefs.ownerVerticalZoomPreset) result.vertical = { layout: 'screen-focus', layouts: [], zooms: [], ...project.vertical, ...(prefs.ownerCaptionsVertical ? { captions: { ...prefs.ownerCaptionsVertical } } : {}), ...(prefs.ownerVerticalZoomPreset ? { zoomPreset: prefs.ownerVerticalZoomPreset } : {}) }
+  if (prefs.ownerCaptionsVertical || prefs.ownerVerticalZoomPreset) result.vertical = { layout: 'screen-center', layouts: [], zooms: [], ...project.vertical, ...(prefs.ownerCaptionsVertical ? { captions: { ...prefs.ownerCaptionsVertical } } : {}), ...(prefs.ownerVerticalZoomPreset ? { zoomPreset: prefs.ownerVerticalZoomPreset } : {}) }
   return result
 }
