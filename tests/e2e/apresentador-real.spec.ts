@@ -4,7 +4,9 @@
  * MESMO caminho da exportação, o Apresentador 16:9 (direita e esquerda, com contorno e sombra) e o V-D 9:16. A prancha para olhar fica em
  * `test-results/screens/real-apresentador-prancha.png` (nada disto vai para `tests/`).
  *
- * Exige o motor preparado (`npm run preparar:camera`) e a gravação real: sem eles o teste FALHA dizendo isso (nada de pular). Pela fila pesada (usa a placa).
+ * Exige o motor preparado (`npm run preparar:camera`) e uma entrada de câmera: sem eles o teste FALHA dizendo isso (nada de pular). Pela fila pesada (usa a placa).
+ * Em worktrees sem gravações, usa o exemplo público local do SyncNet composto sobre um fundo de teste.
+ * Mantém o motor real e todas as provas por pixels; não busca gravações em outras cópias.
  */
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
@@ -56,18 +58,27 @@ function regionDiff(a: Buffer, b: Buffer, x0: number, y0: number, x1: number, y1
 
 test('gravação real + recorte de verdade: o fundo do quarto some, a pessoa fica, no 16:9 e no V-D; prancha para olhar', async () => {
   test.setTimeout(240_000)
-  expect(existsSync(REAL), 'a gravação real do usuário fica em gravacoes/ (só nesta máquina, fora do git)').toBe(true)
   const tools = toolPaths(ensureToolsDir())
   const ffmpeg = locateFfmpeg()?.ffmpeg ?? null
   const engine = createPythonCamera({ tools, scriptPath: join(ROOT, 'resources', 'camera_tools.py'), logger: createMemoryLogger(), ffmpeg: () => ffmpeg })
   const check = await engine.check()
   expect(check.matte.state, `o recorte do fundo não está preparado (${check.matte.detail ?? ''}). Rode: node scripts/fila-pesada.mjs npm run preparar:camera`).toBe('ready')
 
-  // 6 s do meio da gravação real: ficam numa pasta temporária (some ao fim)
+  // 6 s do meio da entrada de câmera: ficam numa pasta temporária (some ao fim).
   const work = mkdtempSync(join(tmpdir(), 'tomada-t-real-'))
   try {
+    let source = REAL
+    if (!existsSync(source)) {
+      const example = join(tools.base, 'lip-sync', 'example.avi')
+      expect(existsSync(example), 'sem gravações nesta cópia, exige o exemplo público local: preparar:sincronia').toBe(true)
+      source = join(work, 'camera-publica-composta.mp4')
+      execFileSync('ffmpeg', ['-v', 'error', '-y', '-stream_loop', '-1', '-i', example,
+        '-f', 'lavfi', '-i', 'color=c=black:s=1920x1080:r=60:d=28.672',
+        '-filter_complex', '[0:v]scale=720:720,pad=1280:720:280:0:black[pessoa];[1:v][pessoa]overlay=320:360:shortest=1,fps=60,select=not(eq(mod(n\\,15)\\,7))',
+        '-t', '28.672', '-an', '-fps_mode', 'vfr', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-pix_fmt', 'yuv420p', source], { timeout: 90000 })
+    }
     const excerpt = join(work, 'camera.mp4')
-    execFileSync('ffmpeg', ['-v', 'error', '-y', '-ss', '8', '-t', '6', '-i', REAL, '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-pix_fmt', 'yuv420p', excerpt])
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-ss', '8', '-t', '6', '-i', source, '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-pix_fmt', 'yuv420p', excerpt])
     const matte = join(work, 'camera-matte.mp4')
     const result = await engine.makeMatte({ video: excerpt, out: matte, durationMs: 6000 })
     console.log(`recorte real: ${result.frames} quadros, ${result.msPerFrame.toFixed(1)} ms por quadro, ${result.device}`)
