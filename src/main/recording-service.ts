@@ -64,6 +64,7 @@ import {
   type RecordingManifest
 } from './manifest'
 import { createProcessContext, runProcessing, type ProcessContext, type ProcessDeps } from './processing'
+import { injectTestMedia } from './test-media'
 import type { Tracker, TrackerConfig, TrackerResult } from './tracker'
 
 /** Uma fonte já resolvida: o que o rastreador e a captura precisam saber. */
@@ -854,6 +855,12 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       if (s.writeError) s.manifest.notes.push(`Erro de escrita em disco: ${s.writeError}`)
       if (tracked?.error) s.manifest.notes.push(`O rastreador do mouse falhou durante a gravação: ${tracked.error.split('\n')[0]}`)
       if (tracked?.windowGone) s.manifest.notes.push('A janela gravada foi fechada durante a gravação.')
+      // Gancho de TESTE (só pelo ambiente do processo principal): voz ou câmera de arquivo, alinhada ao t0 (ver `test-media.ts`).
+      try { await injectTestMedia({ dir: s.dir, manifest: s.manifest, env: deps.env, ffmpeg: deps.ffmpeg(), logger }) } catch (err) {
+        logger.error('Falha ao injetar a mídia de teste.', err)
+        s.manifest.notes.push(`Falha ao injetar a mídia de teste: ${messageOf(err)}`)
+        deps.emit('record:notice', { kind: 'error', text: 'Não consegui injetar a mídia de teste na gravação.', detail: messageOf(err) })
+      }
       let manifestError: string | null = null
       try { await writeManifest(s.dir, s.manifest) } catch (err) {
         manifestError = messageOf(err)

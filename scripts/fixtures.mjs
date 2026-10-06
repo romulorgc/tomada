@@ -203,13 +203,17 @@ function writeWavPcm16(file, samples, sampleRate) {
   writeFileSync(file, buf)
 }
 
-/** Sintetiza o roteiro, monta a linha do tempo e escreve `voz.wav` (48 kHz mono) em `tmp`. */
-async function synthVoice(tmp) {
+/**
+ * Sintetiza o roteiro, monta a linha do tempo e escreve `voz.wav` (48 kHz mono) em `tmp`. Exportada com o roteiro como parâmetro para a prova
+ * real (`scripts/prova-voz.mjs`) usar a MESMA voz e a mesma montagem exata por contagem de amostras; sem argumentos é o roteiro dos fixtures.
+ */
+export async function synthVoice(tmp, script = SCRIPT, { leadMs = LEAD_MS, tailMs = TAIL_MS, joinMs = JOIN_MS } = {}) {
   const segDir = join(tmp, 'seg')
   mkdirSync(segDir)
-  const items = SCRIPT.filter((s) => s.kind !== 'pause').map((s, i) => ({
+  const items = script.filter((s) => s.kind !== 'pause').map((s, i) => ({
     id: s.id,
-    text: s.text,
+    // `fala` (opcional) é o que a voz LÊ quando a grafia engana o sintetizador; `text` é o que o gabarito mostra
+    text: s.fala ?? s.text,
     file: join(segDir, `seg-${String(i).padStart(2, '0')}.wav`)
   }))
   const cfgFile = join(tmp, 'voz-config.json')
@@ -248,9 +252,9 @@ async function synthVoice(tmp) {
   const toMs = (n) => Math.round((n / sampleRate) * 1000)
 
   const segments = []
-  push(new Int16Array(ms(LEAD_MS)))
+  push(new Int16Array(ms(leadMs)))
   let prevWasSound = false
-  for (const s of SCRIPT) {
+  for (const s of script) {
     if (s.kind === 'pause') {
       const start = total
       push(new Int16Array(ms(s.ms)))
@@ -258,7 +262,7 @@ async function synthVoice(tmp) {
       prevWasSound = false
       continue
     }
-    if (prevWasSound) push(new Int16Array(ms(JOIN_MS)))
+    if (prevWasSound) push(new Int16Array(ms(joinMs)))
     const start = total
     push(wavs.get(s.id))
     segments.push({
@@ -271,7 +275,7 @@ async function synthVoice(tmp) {
     })
     prevWasSound = true
   }
-  push(new Int16Array(ms(TAIL_MS)))
+  push(new Int16Array(ms(tailMs)))
 
   const all = new Int16Array(total)
   let off = 0

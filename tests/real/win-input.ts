@@ -106,8 +106,8 @@ export function clientRect(hwnd: number): Rect {
   return { x: o.x, y: o.y, w: c.right - c.left, h: c.bottom - c.top }
 }
 
-function sendMouse(flags: number, dx = 0, dy = 0): void {
-  const input = { type: 0, mi: { dx, dy, mouseData: 0, dwFlags: flags, time: 0, dwExtraInfo: 0 } }
+function sendMouse(flags: number, dx = 0, dy = 0, data = 0): void {
+  const input = { type: 0, mi: { dx, dy, mouseData: data, dwFlags: flags, time: 0, dwExtraInfo: 0 } }
   const sent = SendInput(1, [input], koffi.sizeof(INPUT))
   if (sent !== 1) throw new Error('SendInput não aceitou o evento (o Windows barrou a entrada simulada?).')
 }
@@ -277,4 +277,39 @@ export function childWindowsOf(hwnd: number): { className: string; visible: bool
     GetWindowRectRaw(h, r)
     return { className: classNameOf(h), visible: IsWindowVisible(h) !== 0, rect: { x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top } }
   })
+}
+
+// ---------------------------------------------------------------------------------------
+// Prova real (M5b): roda do mouse. Mesma trava de segurança do clique: só gira se a janela de teste for a que está em primeiro plano E a
+// que está sob o cursor.
+
+const MOUSEEVENTF_WHEEL = 0x0800
+
+/** Gira a roda do mouse `notches` entalhes (positivo = para cima, como o Windows; negativo = para baixo). */
+export async function safeWheel(hwnd: number, notches: number): Promise<void> {
+  const fg = foregroundHwnd()
+  if (fg !== hwnd) throw new UnsafeClickError(`A janela em primeiro plano é ${fg}, não a de teste (${hwnd}); não girei a roda.`)
+  const at = cursorPos()
+  const under = topLevelAt(at)
+  if (under !== hwnd) throw new UnsafeClickError(`O cursor (${at.x}, ${at.y}) está sobre a janela ${under}, não sobre a de teste (${hwnd}); não girei a roda.`)
+  sendMouse(MOUSEEVENTF_WHEEL, 0, 0, (Math.round(notches * 120) >>> 0))
+}
+
+const SetForegroundWindow = user32.func('int __stdcall SetForegroundWindow(intptr_t hwnd)')
+
+/**
+ * Traz a janela de teste ao primeiro plano SEM clicar em nada dela. O Windows só deixa quem recebeu a última entrada trocar o foco: se a
+ * troca direta falha, um toque de Alt (que a entrada simulada conta como entrada do usuário) destrava e tenta de novo.
+ */
+export async function bringToFront(hwnd: number): Promise<boolean> {
+  if (foregroundHwnd() === hwnd) return true
+  SetForegroundWindow(hwnd)
+  await sleep(90)
+  if (foregroundHwnd() === hwnd) return true
+  keybdEvent(0x12, 0, 0, 0) // VK_MENU
+  keybdEvent(0x12, 0, 2, 0)
+  await sleep(40)
+  SetForegroundWindow(hwnd)
+  await sleep(120)
+  return foregroundHwnd() === hwnd
 }

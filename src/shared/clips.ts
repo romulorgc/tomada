@@ -10,6 +10,7 @@
  */
 import { z } from 'zod'
 import { captionStyleDefaults } from './caption-style'
+import { isHesitation, isSoftCrutch } from './fillers'
 import { formatDuration, formatSpan } from './format'
 import { nextSegId } from './segments'
 import {
@@ -200,6 +201,13 @@ export function limitHook(text: string): string {
   const parts = unquoted.split(' ').filter(Boolean)
   if (parts.length <= HOOK_MAX_WORDS) return unquoted.slice(0, HOOK_TEXT_MAX).trim()
   const kept = parts.slice(0, HOOK_MAX_WORDS)
+  // o corte cai numa vírgula, não no meio da oração: "A escuta é sua, o registro é do sistema" vira "A escuta é sua", e não "A escuta é sua, o registro é"
+  for (let i = kept.length - 2; i >= 2; i--) {
+    if (/[,;:]$/u.test(kept[i]!)) {
+      kept.length = i + 1
+      break
+    }
+  }
   while (kept.length > 1 && DANGLING.has(kept[kept.length - 1]!.toLowerCase().replace(/[.,;:!?…]+$/u, ''))) kept.pop()
   return kept.join(' ').replace(/[,;:-]+$/u, '').slice(0, HOOK_TEXT_MAX).trim()
 }
@@ -219,13 +227,22 @@ export const hookWords = wordCount
 // ---------------------------------------------------------------------------
 // Trechos
 
+/** Hesitação ou muleta que abre a frase e pára numa vírgula ou reticências ("É,", "Tipo,", "Então,", "Hã..."): a pessoa pensando em voz alta. */
+function isOpeningCrutch(text: string): boolean {
+  return /(?:,|…|\.{3})\s*$/u.test(text) && (isHesitation(text) || isSoftCrutch(text))
+}
+
 /** O trecho (ms) que vai da frase `a` à frase `b` (índices em `sentences`): folga curta antes e depois, nunca dentro de outra palavra. */
 export function rangeOfSentences(words: readonly Word[], sentences: readonly Sentence[], a: number, b: number, durationMs: number): Range {
   const sa = sentences[a]!
   const sb = sentences[b]!
-  const first = words[sa.firstPos]!
+  // a frase que abre com a muleta colada numa vírgula ("É, a escuta é sua", "Tipo, agenda, teleconsulta") começa DEPOIS dela: o corte
+  // não abre com uma hesitação (prova real da M5b: o corte 1 abria com "É,")
+  let fp = sa.firstPos
+  while (fp < sa.lastPos && fp - sa.firstPos < 2 && isOpeningCrutch(words[fp]!.text)) fp++
+  const first = words[fp]!
   const last = words[sb.lastPos]!
-  const prev = words[sa.firstPos - 1]
+  const prev = words[fp - 1]
   const next = words[sb.lastPos + 1]
   let start = first.start - CLIP_LEAD_MS
   if (prev) start = Math.max(start, (prev.end + first.start) / 2)

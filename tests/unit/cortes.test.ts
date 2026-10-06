@@ -17,6 +17,7 @@ import {
   limitTitle,
   mergeSuggestedClips,
   normalizeRanges,
+  rangeOfSentences,
   sentenceLine,
   shiftClipEdge,
   titleFromText,
@@ -55,6 +56,34 @@ describe('cortes: quantos pedir', () => {
     expect(clipCountRange(120 * 60_000)).toEqual({ min: 8, max: 8 })
     expect(heuristicClipCount(10 * 60_000)).toBe(5)
     expect(heuristicClipCount(30_000)).toBe(1)
+  })
+})
+
+describe('cortes: o começo não é uma muleta', () => {
+  const falas = (texts: string[], t0 = 1000): Word[] => texts.map((text, i) => ({ i, text, start: t0 + i * 400, end: t0 + i * 400 + 300, prob: 0.9, kind: 'word' as const }))
+  const range = (texts: string[]): { start: number; end: number; firstWordStart: number; afterCrutchStart: number } => {
+    const words = falas(texts)
+    const sentences = buildSentences(words, { clicks: [], keys: [] })
+    const r = rangeOfSentences(words, sentences, 0, 0, 20_000)
+    return { ...r, firstWordStart: words[0]!.start, afterCrutchStart: words[1]!.start }
+  }
+
+  it('"É," e "Tipo," colados na vírgula que abre a frase ficam de fora do corte (prova real da M5b: o corte 1 abria com "É,")', () => {
+    const a = range(['É,', 'a', 'escuta', 'é', 'sua.'])
+    expect(a.start).toBeGreaterThan(a.firstWordStart + 300) // depois do fim do "É,"
+    expect(a.start).toBeLessThan(a.afterCrutchStart) // e antes do "a"
+    const b = range(['Tipo,', 'agenda,', 'teleconsulta', 'e', 'lembretes.'])
+    expect(b.start).toBeGreaterThan(b.firstWordStart + 300)
+    expect(b.start).toBeLessThan(b.afterCrutchStart)
+  })
+
+  it('sem vírgula, "é" e "tipo" são palavras da frase e o corte começa nelas; e a frase nunca fica vazia', () => {
+    const a = range(['É', 'isso', 'mesmo.'])
+    expect(a.start).toBeLessThan(a.firstWordStart)
+    const b = range(['Tipo', 'um', 'atalho.'])
+    expect(b.start).toBeLessThan(b.firstWordStart)
+    const c = range(['É,', 'ok.'])
+    expect(c.end).toBeGreaterThan(c.afterCrutchStart) // sobrou ao menos uma palavra
   })
 })
 
@@ -215,6 +244,11 @@ describe('cortes: validar o que a IA devolveu', () => {
     expect(limitHook('Cadastre um cliente em dez segundos sem digitar nada além do nome')).toBe('Cadastre um cliente em dez segundos sem digitar')
     expect(limitHook('Em menos de dez segundos o cliente está cadastrado e já recebe horário')).toBe('Em menos de dez segundos o cliente está')
     expect(limitHook('"Agende em três cliques"')).toBe('Agende em três cliques')
+    // prova real da M5b: o gancho da IA saiu "A escuta é sua, o registro é" (cortado no verbo, em cima do vídeo vertical)
+    expect(limitHook('A escuta é sua, o registro é do sistema e ninguém mais lê')).toBe('A escuta é sua')
+    expect(limitHook('Cadastre o cliente, escolha o horário, envie o lembrete e pronto')).toBe('Cadastre o cliente, escolha o horário')
+    expect(limitHook('Em dez segundos, tudo pronto')).toBe('Em dez segundos, tudo pronto') // cabe em 8 palavras: não mexe
+    expect(limitHook('Oi, tudo certo com o seu cadastro de hoje no sistema')).toBe('Oi, tudo certo com o seu cadastro') // vírgula antes da 3ª palavra: não corta ali
     expect(limitHook('')).toBe('')
     const title = limitTitle('Como cadastrar um cliente novo no sistema de agenda da barbearia e já marcar o primeiro horário dele sem sair da tela')
     expect(title.length).toBeLessThanOrEqual(80)
