@@ -212,7 +212,8 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
         events: {
           cursor: await eventUrl(EVENT_FILES.cursor),
           clicks: await eventUrl(EVENT_FILES.clicks),
-          keys: await eventUrl(EVENT_FILES.keys)
+          keys: await eventUrl(EVENT_FILES.keys),
+          contentRect: await eventUrl(EVENT_FILES.contentRect)
         }
       }
     },

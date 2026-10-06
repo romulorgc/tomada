@@ -11,6 +11,7 @@ import { t } from '../../i18n/pt-BR'
 import { useApp } from '../../store'
 import { ColorField, Hint, Section, Segmented, Slider } from '../controls'
 import { useDoc, useEditor } from '../context'
+import { CropSection } from './CropSection'
 
 const T = t.editor.style
 
@@ -67,6 +68,7 @@ export function StylePanel() {
 
   return (
     <div className="panel" data-testid="style-panel">
+      <CropSection />
       <Section title={T.background} testId="bg-section">
         <div className="bg-grid" role="group" aria-label={T.background} data-testid="bg-swatches">
           {[NIGHT_PRESET, ...BACKGROUND_PRESETS].map((b) => (

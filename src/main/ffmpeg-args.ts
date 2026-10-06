@@ -27,6 +27,13 @@ export type NormalizeVideoArgs = {
    * passar disso é cortado. Sem isto o vídeo sai com a duração do último quadro recebido.
    */
   padToMs?: number
+  /**
+   * Trava o tamanho do quadro no da ENTRADA (o primeiro): o quadro que muda de tamanho no meio (uma janela redimensionada) é
+   * esticado ao tamanho travado, SEM refazer o grafo de filtros. Sem isto o ffmpeg refaz o grafo na troca de tamanho e perde a
+   * duração do quadro que estava parado (medido: uma janela redimensionada aos 8,5 s fazia o vídeo perder 4,4 s e tudo o que vem
+   * depois ficava adiantado em relação aos eventos). Só vale para quem grava a tela/janela.
+   */
+  lockSize?: { w: number; h: number }
 }
 
 /** Quanto de rabo estático se aceita repetir (s). Acima disso o passo avisa em vez de esconder. */
@@ -77,7 +84,9 @@ export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
   const output = assertFfmpegPath(o.output, 'saída')
   const gop = gopFrames(o.fps, o.gopSeconds ?? 1)
   const pad = o.padToMs !== undefined && Number.isFinite(o.padToMs) && o.padToMs > 0
+  const lock = o.lockSize && o.lockSize.w > 0 && o.lockSize.h > 0 ? { w: Math.round(o.lockSize.w), h: Math.round(o.lockSize.h) } : null
   const vf = [
+    ...(lock ? [`scale=${lock.w}:${lock.h}`] : []),
     'setpts=PTS-STARTPTS',
     `fps=${o.fps}`,
     ...(pad ? [`tpad=stop_mode=clone:stop_duration=${MAX_TAIL_PAD_SECONDS}`] : []),
@@ -88,6 +97,7 @@ export function buildNormalizeVideoArgs(o: NormalizeVideoArgs): string[] {
     ? ['-map', '0:a:0?', '-c:a', 'aac', '-b:a', '192k', '-af', 'aresample=async=1:first_pts=0']
     : ['-an']
   return [
+    ...(lock ? ['-reinit_filter', '0'] : []),
     '-i', input,
     '-map', '0:v:0',
     ...audio,
@@ -156,6 +166,32 @@ export function buildPeaksPcmArgs(o: { input: string; output: string; sampleRate
   const input = assertFfmpegPath(o.input, 'entrada')
   const output = assertFfmpegPath(o.output, 'saída')
   return ['-i', input, '-vn', '-ac', '1', '-ar', String(Math.trunc(o.sampleRate)), '-f', 's16le', output]
+}
+
+/**
+ * `count` quadros da tela, espaçados por igual, em CINZA e crus (um byte por pixel, `width` de largura): a análise do recorte
+ * sugerido (C1). A altura segue a proporção (par).
+ */
+export function buildGrayFramesArgs(o: { input: string; output: string; count: number; durationMs: number; width: number; height: number }): string[] {
+  const input = assertFfmpegPath(o.input, 'entrada')
+  const output = assertFfmpegPath(o.output, 'saída')
+  const count = Math.max(1, Math.trunc(o.count))
+  const seconds = Math.max(0.5, o.durationMs / 1000)
+  // um quadro a cada (duração / count) s, começando um pouco depois do início (o primeiro quadro costuma ser de abertura)
+  return [
+    '-ss',
+    String(Math.min(1, seconds / 4)),
+    '-i',
+    input,
+    '-an',
+    '-vf',
+    `fps=${(count / seconds).toFixed(4)},scale=${Math.trunc(o.width)}:${Math.trunc(o.height)}:flags=area,format=gray`,
+    '-frames:v',
+    String(count),
+    '-f',
+    'rawvideo',
+    output
+  ]
 }
 
 /** Miniaturas da tela: um JPEG a cada `intervalMs`, numerados a partir de 0 (`outputPattern` leva `%04d`). */

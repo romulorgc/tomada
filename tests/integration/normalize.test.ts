@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -114,6 +115,41 @@ describe('normalizeVideo: tela VFR → MP4 de fps constante', () => {
     await normalizeVideo(ff, { input: FIX.telaVfr, output: plain, fps: 30, encoder: 'libx264' })
     expect(Math.abs((await ff.probe(plain)).durationMs - inputProbe.durationMs)).toBeLessThanOrEqual(1000 / 30 + 1)
   })
+
+  it('janela redimensionada no meio: o quadro novo é esticado ao tamanho do primeiro e NENHUM tempo se perde (lockSize)', async () => {
+    // Um WebM VFR de verdade cujo quadro muda de tamanho aos 2 s (o que o MediaRecorder entrega quando a janela é redimensionada):
+    // 2 s de vermelho 640×360 + 2 s de azul 480×270, a 2 quadros por segundo (quadros parados longos, como numa tela).
+    const dir = tmp()
+    const part = async (name: string, color: string, size: string): Promise<string> => {
+      const file = join(dir, name)
+      await ff.run(['-f', 'lavfi', '-i', `color=c=${color}:s=${size}:d=2:r=2`, '-c:v', 'libvpx', '-g', '1', '-b:v', '1M', '-y', file])
+      return file
+    }
+    const a = await part('a.webm', 'red', '640x360')
+    const b = await part('b.webm', 'blue', '480x270')
+    const posix = (p: string): string => p.split('\\').join('/')
+    writeFileSync(join(dir, 'lista.txt'), [`file '${posix(a)}'`, `file '${posix(b)}'`, ''].join('\n'))
+    const joined = join(dir, 'ab.webm')
+    await ff.run(['-f', 'concat', '-safe', '0', '-i', join(dir, 'lista.txt'), '-c', 'copy', '-y', joined])
+
+    const out = join(dir, 'com-trava.mp4')
+    await normalizeVideo(ff, { input: joined, output: out, fps: 30, encoder: 'libx264', padToMs: 4000, lockSize: true })
+    const probe = await ff.probe(out)
+    expect(probe.video?.width).toBe(640) // o tamanho do PRIMEIRO quadro
+    expect(probe.video?.height).toBe(360)
+    expect(Math.abs(probe.durationMs - 4000)).toBeLessThanOrEqual(1000 / 30 + 1)
+    // a cor muda no instante certo (2 s), não antes: o vermelho dura os 2 s inteiros
+    const pixel = (t: number): number[] => {
+      const rgb = execFileSync(ff.paths.ffmpeg, ['-v', 'error', '-ss', String(t), '-i', out, '-vf', 'crop=2:2:100:100,format=rgb24', '-frames:v', '1', '-f', 'rawvideo', '-'], { windowsHide: true, maxBuffer: 1 << 20 })
+      return [...rgb.subarray(0, 3)]
+    }
+    const early = pixel(1.85)
+    const late = pixel(2.25)
+    expect(early[0]!, 'antes de 2 s ainda é vermelho').toBeGreaterThan(200)
+    expect(early[2]!).toBeLessThan(80)
+    expect(late[2]!, 'depois de 2 s é azul').toBeGreaterThan(200)
+    expect(late[0]!).toBeLessThan(80)
+  }, 120_000)
 
   it('"auto" escolhe NVENC quando ele funciona aqui, senão libx264, e a saída é igualmente válida', async () => {
     const expected = (await encoderWorks(ff, 'h264_nvenc')) ? 'h264_nvenc' : 'libx264'

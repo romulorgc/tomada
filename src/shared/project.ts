@@ -237,7 +237,14 @@ const captureSchema = z.looseObject({
   scale: z.number(),
   frameSize: z.looseObject({ w: z.number(), h: z.number() }).optional(),
   cursorHidden: z.boolean().optional(),
-  sourceName: z.string().optional()
+  sourceName: z.string().optional(),
+  browser: z.looseObject({ exe: z.string(), engine: z.enum(['chromium', 'gecko']), contentRect: z.boolean() }).optional()
+})
+
+const screenCropSchema = z.looseObject({
+  mode: z.enum(['auto', 'manual', 'off']),
+  manual: rectSchema.optional(),
+  browserFrame: z.looseObject({ enabled: z.boolean(), domain: z.string().max(120).optional() }).optional()
 })
 
 export const projectSchema = z.looseObject({
@@ -268,6 +275,7 @@ export const projectSchema = z.looseObject({
   captions: captionStyleSchema.prefault({}),
   clips: z.array(clipSchema).default([]),
   zoomPreset: z.enum(['subtle', 'moderate', 'intense', 'off']).optional(),
+  screenCrop: screenCropSchema.optional(),
   vertical: verticalSchema.optional(),
   wordFixes: z.record(z.string(), z.string()).optional(),
   autoCleaned: z.boolean().optional(),

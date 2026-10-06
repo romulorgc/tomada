@@ -598,7 +598,8 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         eventUrls: {
           cursor: await eventUrl(request.projectId, dir, EVENT_FILES.cursor),
           clicks: await eventUrl(request.projectId, dir, EVENT_FILES.clicks),
-          keys: await eventUrl(request.projectId, dir, EVENT_FILES.keys)
+          keys: await eventUrl(request.projectId, dir, EVENT_FILES.keys),
+          contentRect: await eventUrl(request.projectId, dir, EVENT_FILES.contentRect)
         }
       }
       const now = deps.now()

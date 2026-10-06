@@ -25,6 +25,15 @@ describe('buildNormalizeVideoArgs', () => {
     expect(args).toContain('yuv420p')
   })
 
+  it('tamanho travado (janela redimensionada): escala PRIMEIRO ao tamanho do primeiro quadro e o ffmpeg não refaz o grafo', () => {
+    const args = buildNormalizeVideoArgs({ ...base, lockSize: { w: 1358, h: 866 } })
+    expect(args.slice(0, 3)).toEqual(['-reinit_filter', '0', '-i'])
+    expect(after(args, '-vf')!.split(',')).toEqual(['scale=1358:866', 'setpts=PTS-STARTPTS', 'fps=30', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', 'setsar=1'])
+    // sem o tamanho: nada disso (a câmera e os testes antigos seguem iguais)
+    expect(buildNormalizeVideoArgs(base)).not.toContain('-reinit_filter')
+    expect(buildNormalizeVideoArgs({ ...base, lockSize: { w: 0, h: 0 } })).not.toContain('-reinit_filter')
+  })
+
   it('o container sai do codec: MP4 explícito, faststart, nunca WebM', () => {
     const args = buildNormalizeVideoArgs(base)
     expect(after(args, '-f')).toBe('mp4')

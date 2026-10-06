@@ -189,3 +189,92 @@ export async function activateByClick(hwnd: number, neutral: Pt): Promise<boolea
 export function parkCursorAtPrimaryCenter(primary: Rect): void {
   moveTo({ x: Math.round(primary.x + primary.w / 2), y: Math.round(primary.y + primary.h / 2) })
 }
+
+// ---------------------------------------------------------------------------------------
+// C1: navegador de teste (instância SEPARADA, aberta pelo teste). Nada aqui toca em janela que o teste não abriu.
+
+const EnumProc = koffi.proto('int __stdcall EnumTopProc(intptr_t hwnd, intptr_t lparam)')
+const EnumWindows = user32.func('int __stdcall EnumWindows(EnumTopProc *cb, intptr_t lparam)')
+const GetWindowThreadProcessId = user32.func('uint32 __stdcall GetWindowThreadProcessId(intptr_t hwnd, _Out_ uint32 *pid)')
+const IsWindowVisible = user32.func('int __stdcall IsWindowVisible(intptr_t hwnd)')
+const GetClassNameW = user32.func('int __stdcall GetClassNameW(intptr_t hwnd, _Out_ uint16_t *buf, int n)')
+const GetWindowTextW = user32.func('int __stdcall GetWindowTextW(intptr_t hwnd, _Out_ uint16_t *buf, int n)')
+const SetWindowPos = user32.func('int __stdcall SetWindowPos(intptr_t hwnd, intptr_t after, int x, int y, int cx, int cy, uint32 flags)')
+const keybdEvent = user32.func('void __stdcall keybd_event(uint8 vk, uint8 scan, uint32 flags, uintptr_t extra)')
+
+/** Janelas de nível superior VISÍVEIS de um processo (só as do processo `pid`, que o teste abriu). */
+export function topLevelWindowsOfPid(pid: number): { hwnd: number; className: string; title: string; frame: Rect }[] {
+  const found: number[] = []
+  const cb = koffi.register((h: number) => {
+    const p = [0]
+    GetWindowThreadProcessId(h, p)
+    if (p[0] === pid && IsWindowVisible(h)) found.push(Number(h))
+    return 1
+  }, koffi.pointer(EnumProc))
+  try {
+    EnumWindows(cb, 0)
+  } finally {
+    koffi.unregister(cb)
+  }
+  return found.map((hwnd) => ({ hwnd, className: classNameOf(hwnd), title: windowTitle(hwnd), frame: frameRect(hwnd) }))
+}
+
+export function classNameOf(hwnd: number): string {
+  const b = Buffer.alloc(512)
+  const n = GetClassNameW(hwnd, b, 256)
+  return b.toString('utf16le', 0, n * 2)
+}
+
+/** O título da janela (para a página de teste: "Aba A clique 2"). */
+export function windowTitle(hwnd: number): string {
+  const b = Buffer.alloc(2048)
+  const n = GetWindowTextW(hwnd, b, 1024)
+  return b.toString('utf16le', 0, n * 2)
+}
+
+/** Deixa a janela (do teste) por cima de todas, sem ativar: o clique de teste só vale se ela estiver à vista. */
+export function keepOnTop(hwnd: number): void {
+  // HWND_TOPMOST = -1; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+  SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x1 | 0x2 | 0x10 | 0x40)
+}
+
+/** Move e redimensiona a janela do teste (sem ativar nem mexer na ordem). */
+export function setWindowRect(hwnd: number, r: Rect): void {
+  // SWP_NOZORDER | SWP_NOACTIVATE
+  if (!SetWindowPos(hwnd, 0, r.x, r.y, r.w, r.h, 0x4 | 0x10)) throw new Error(`Não consegui redimensionar a janela ${hwnd}.`)
+}
+
+/** Aperta e solta uma tecla, SÓ se a janela do teste for a que está em primeiro plano (senão lança sem apertar). */
+export async function pressKeyIn(hwnd: number, vk: number): Promise<void> {
+  const fg = foregroundHwnd()
+  if (fg !== hwnd) throw new UnsafeClickError(`A janela em primeiro plano é ${fg}, não a de teste (${hwnd}); não apertei a tecla.`)
+  keybdEvent(vk, 0, 0, 0)
+  await sleep(40)
+  keybdEvent(vk, 0, 2, 0) // KEYEVENTF_KEYUP
+}
+
+export const VK_F11 = 0x7a
+export const VK_F12 = 0x7b
+
+const EnumChildProc = koffi.proto('int __stdcall EnumChildTopProc(intptr_t hwnd, intptr_t lparam)')
+const EnumChildWindows = user32.func('int __stdcall EnumChildWindows(intptr_t parent, EnumChildTopProc *cb, intptr_t lparam)')
+const GetWindowRectRaw = user32.func('int __stdcall GetWindowRect(intptr_t hwnd, _Out_ RECT *r)')
+
+/** As janelas-filhas de uma janela (classe, visibilidade, retângulo de tela), como o rastreador as vê. */
+export function childWindowsOf(hwnd: number): { className: string; visible: boolean; rect: Rect }[] {
+  const handles: number[] = []
+  const cb = koffi.register((h: number) => {
+    handles.push(Number(h))
+    return 1
+  }, koffi.pointer(EnumChildProc))
+  try {
+    EnumChildWindows(hwnd, cb, 0)
+  } finally {
+    koffi.unregister(cb)
+  }
+  return handles.map((h) => {
+    const r = { left: 0, top: 0, right: 0, bottom: 0 }
+    GetWindowRectRaw(h, r)
+    return { className: classNameOf(h), visible: IsWindowVisible(h) !== 0, rect: { x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top } }
+  })
+}

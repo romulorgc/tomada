@@ -12,7 +12,8 @@
  */
 import { z } from 'zod'
 import { normalizePoint } from './geometry'
-import type { ClickEvent, CursorSample, KeyEvent, MouseButton, Rect, Size, WindowRectSample } from './types'
+import { FULL_RECT, sanitizeRect } from './crop'
+import type { ClickEvent, ContentRectSample, CursorSample, KeyEvent, MouseButton, Rect, Size, WindowRectSample } from './types'
 
 // ---------------------------------------------------------------------------
 // Preferências e pedido de gravação
@@ -323,8 +324,14 @@ export function chooseCaptureRect(frame: Size | null, candidates: RectCandidate[
 
 export type RawClick = { t: number; upT?: number; x: number; y: number; button: MouseButton }
 
-/** Retângulos da janela lidos pelo rastreador (relógio do main, pixels físicos). */
-export type RawWindowRect = { t: number; frame: Rect; client: Rect }
+/**
+ * Retângulos da janela lidos pelo rastreador (relógio do main, pixels físicos). `content` (C1): a página do navegador Chromium
+ * (coordenadas de tela); ausente = não medida (janela que não é navegador).
+ */
+export type RawWindowRect = { t: number; frame: Rect; client: Rect; content?: Rect | null }
+
+/** Captura de TELA (C1): a página do navegador em primeiro plano num instante (`null` = nenhum navegador à frente). */
+export type RawPage = { t: number; rect: Rect | null; exe?: string }
 
 export type RawEvents = {
   /** Plano: [t, x, y, t, x, y, …] (px físicos). */
@@ -333,6 +340,8 @@ export type RawEvents = {
   keys: number[]
   /** Só quando muda (primeiro elemento = estado inicial). Vazio para tela inteira. */
   windowRects: RawWindowRect[]
+  /** Só em tela inteira (C1): a página do navegador que estava à frente, só quando muda. */
+  pages?: RawPage[]
 }
 
 export type BuildEventsInput = {
@@ -356,6 +365,13 @@ export type BuiltEvents = {
   keys: KeyEvent[]
   /** Retângulo da janela ao longo da gravação, em tempo de gravação (vazio para tela). */
   windowRects: WindowRectSample[]
+  /**
+   * A página do navegador ao longo da gravação (C1), normalizada no QUADRO capturado, só quando muda. Vazio = não há navegador
+   * medido (janela de outro programa; tela sem nenhum navegador Chromium à frente).
+   */
+  contentRects: ContentRectSample[]
+  /** Quem foi medido: o navegador de uma janela, ou o que apareceu em primeiro plano numa gravação de tela. */
+  contentExe: string | null
   /** Retângulo físico usado na normalização (origem + tamanho do quadro real). */
   boundsPx: Rect
   rectSource: RectCandidate['name']
@@ -400,9 +416,14 @@ export function buildEvents(input: BuildEventsInput): BuiltEvents {
     rectSource = chosen.source
     sizeMismatch = chosen.sizeMismatch
     const size = frame && frame.w > 0 && frame.h > 0 ? frame : { w: chosen.rect.w, h: chosen.rect.h }
+    const firstSrc = chosen.source === 'client' ? first.client : first.frame
+    // A janela pode ser redimensionada no meio da gravação: o quadro capturado acompanha (e o ffmpeg o estica ao tamanho do
+    // primeiro), então a escala do quadro real sobre o primeiro retângulo vale para todos.
+    const kx = firstSrc.w > 0 ? size.w / firstSrc.w : 1
+    const ky = firstSrc.h > 0 ? size.h / firstSrc.h : 1
     timeline = raw.windowRects.map((r) => {
       const src = chosen.source === 'client' ? r.client : r.frame
-      return { t: r.t, rect: { x: src.x, y: src.y, w: size.w, h: size.h } }
+      return { t: r.t, rect: { x: src.x, y: src.y, w: src.w * kx, h: src.h * ky } }
     })
     boundsPx = timeline[0]!.rect
   } else {
@@ -480,11 +501,56 @@ export function buildEvents(input: BuildEventsInput): BuiltEvents {
     }
   }
 
+  // --- A página do navegador (C1), normalizada no quadro capturado
+  const contentRects: ContentRectSample[] = []
+  let contentExe: string | null = null
+  const pushContent = (t: number, r: Rect | null): void => {
+    const rect = r ? sanitizeRect(r) : FULL_RECT
+    const n = rect ?? FULL_RECT
+    const sample: ContentRectSample = { t: round1(t), x: round5(n.x), y: round5(n.y), w: round5(n.w), h: round5(n.h) }
+    const last = contentRects[contentRects.length - 1]
+    if (last && last.x === sample.x && last.y === sample.y && last.w === sample.w && last.h === sample.h) return
+    contentRects.push(sample)
+  }
+  if (kind === 'window' && raw.windowRects.some((r) => r.content)) {
+    const chosenSource = rectSource === 'client' ? 'client' : 'frame'
+    raw.windowRects.forEach((r, i) => {
+      if (!r.content) return
+      const src = chosenSource === 'client' ? r.client : r.frame
+      if (!(src.w > 0) || !(src.h > 0)) return
+      const t = Number.isFinite(r.t) ? toT(r.t) : 0
+      const tt = t ?? (contentRects.length === 0 && i === 0 ? 0 : null)
+      if (tt === null) return
+      pushContent(tt, { x: (r.content.x - src.x) / src.w, y: (r.content.y - src.y) / src.h, w: r.content.w / src.w, h: r.content.h / src.h })
+    })
+  } else if (kind === 'screen' && raw.pages && raw.pages.some((p) => p.rect)) {
+    const base = boundsPx
+    raw.pages.forEach((p, i) => {
+      const t = toT(p.t)
+      const tt = t ?? (contentRects.length === 0 && i === 0 ? 0 : null)
+      if (tt === null) return
+      if (p.exe && !contentExe) contentExe = p.exe
+      if (!p.rect) {
+        pushContent(tt, null)
+        return
+      }
+      // só a parte que cai neste monitor (a janela pode estar em outro)
+      const x0 = Math.max(base.x, p.rect.x)
+      const y0 = Math.max(base.y, p.rect.y)
+      const x1 = Math.min(base.x + base.w, p.rect.x + p.rect.w)
+      const y1 = Math.min(base.y + base.h, p.rect.y + p.rect.h)
+      if (x1 - x0 < 16 || y1 - y0 < 16) pushContent(tt, null)
+      else pushContent(tt, { x: (x0 - base.x) / base.w, y: (y0 - base.y) / base.h, w: (x1 - x0) / base.w, h: (y1 - y0) / base.h })
+    })
+  }
+
   return {
     cursor,
     clicks,
     keys,
     windowRects,
+    contentRects,
+    contentExe,
     boundsPx,
     rectSource,
     sizeMismatch,

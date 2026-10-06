@@ -525,6 +525,53 @@ function drawCard(
   ctx.globalAlpha = prev
 }
 
+/** As cores da moldura de navegador (C1): clara e neutra, no padrão de qualquer navegador, sem aba nem botão de verdade. */
+const BAR = { bg: '#eef0f3', line: '#d3d7dd', dots: ['#c3c7ce', '#c3c7ce', '#c3c7ce'], pill: '#ffffff', pillLine: '#dadde2', text: '#3c4043' }
+
+/**
+ * A barra mínima da moldura de navegador: três pontos, e (só se há domínio) uma pílula no centro com o texto. Desenhada por cima do
+ * cartão já pintado (`source-atop`: nunca vaza dos cantos arredondados).
+ */
+function drawBrowserBar(lc: Ctx2D, bar: { h: number; text: string }, w: number): void {
+  const h = bar.h
+  lc.fillStyle = BAR.bg
+  lc.fillRect(0, 0, w, h)
+  lc.fillStyle = BAR.line
+  lc.fillRect(0, h - 1, w, 1)
+  const r = Math.max(2, h * 0.14)
+  const gap = r * 2.7
+  for (let i = 0; i < 3; i++) {
+    lc.beginPath()
+    lc.arc(h * 0.5 + i * gap, h / 2, r, 0, Math.PI * 2)
+    lc.fillStyle = BAR.dots[i]!
+    lc.fill()
+  }
+  if (bar.text === '') return
+  const fontPx = Math.max(8, Math.round(h * 0.4))
+  lc.font = `600 ${fontPx}px "Tomada Inter", sans-serif`
+  lc.textAlign = 'center'
+  lc.textBaseline = 'middle'
+  const pillH = Math.round(h * 0.64)
+  const pad = pillH * 0.7
+  const maxW = Math.max(40, w * 0.6)
+  const textW = lc.measureText(bar.text).width
+  const pillW = Math.min(maxW, textW + 2 * pad)
+  const x = (w - pillW) / 2
+  const y = (h - pillH) / 2
+  roundedRectPath(lc, x, y, pillW, pillH, pillH / 2)
+  lc.fillStyle = BAR.pill
+  lc.fill()
+  lc.lineWidth = 1
+  lc.strokeStyle = BAR.pillLine
+  lc.stroke()
+  lc.fillStyle = BAR.text
+  lc.save()
+  roundedRectPath(lc, x + pad * 0.5, y, pillW - pad, pillH, 0)
+  lc.clip()
+  lc.fillText(bar.text, w / 2, y + pillH / 2 + 0.5)
+  lc.restore()
+}
+
 function drawScreen(ctx: Ctx2D, cache: RenderCache, scene: Scene, s: SceneScreen, frame: FrameSource | null | undefined): void {
   if (s.shadow) drawShadow(ctx, cache, s.dest, s.radius, s.shadow, s.opacity)
   drawCard(
@@ -534,7 +581,20 @@ function drawScreen(ctx: Ctx2D, cache: RenderCache, scene: Scene, s: SceneScreen
     s.dest,
     s.radius,
     s.opacity,
-    (lc, w, h) => drawSource(lc, frame, s.src, { x: 0, y: 0, w, h }),
+    (lc, w, h) => {
+      const bar = s.bar
+      if (!bar || bar.h <= 0 || bar.h >= h) {
+        drawSource(lc, frame, s.src, { x: 0, y: 0, w, h })
+        return
+      }
+      // Em `source-in` só a PRIMEIRA operação conta (as seguintes apagariam o que está fora delas): pinta o cartão todo (a máscara
+      // dos cantos fica) e passa a `source-atop` para a página e a barra.
+      lc.fillStyle = BAR.bg
+      lc.fillRect(0, 0, w, h)
+      lc.globalCompositeOperation = 'source-atop'
+      drawSource(lc, frame, s.src, { x: 0, y: bar.h, w, h: h - bar.h })
+      drawBrowserBar(lc, { h: bar.h, text: bar.text }, w)
+    },
     (lc, dx, dy) => {
       // ripples, halo e cursor usam coordenadas do quadro: leva a origem para o canto do cartão
       lc.translate(-dx, -dy)

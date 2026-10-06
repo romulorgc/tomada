@@ -606,6 +606,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       s.manifest.stopReason = info.reason
       s.manifest.recordedMs = clock ? Math.max(0, info.endedAt - clock.t0 - pauses.reduce((a, p) => a + (p.end - p.start), 0)) : null
       if (s.manifest.screen) s.manifest.screen.frameEnd = info.frame
+      if (s.manifest.screen && tracked?.browser) s.manifest.screen.browser = tracked.browser
       s.manifest.notes.push(...info.notes)
       if (s.writeError) s.manifest.notes.push(`Erro de escrita em disco: ${s.writeError}`)
       if (tracked?.error) s.manifest.notes.push(`O rastreador do mouse falhou durante a gravação: ${tracked.error.split('\n')[0]}`)

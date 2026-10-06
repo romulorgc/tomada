@@ -13,6 +13,7 @@
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Levels } from '@shared/clean'
+import { suggestPageRect, type CropSuggestion, type GrayFrame } from '@shared/crop-detect'
 import type { PeaksData, PreviewAudioData, ThumbsData } from '@shared/ipc'
 import { LEVELS_VERSION, LEVEL_FRAME_MS, alignLevels, computeLevels, type LevelsFile } from '@shared/levels'
 import { mediaUrl } from '@shared/media-url'
@@ -21,7 +22,7 @@ import { projectDurationMs } from '@shared/project'
 import type { Project } from '@shared/types'
 import { buildAudioArgs, buildAudioGraph, buildMeasureArgs, parseLoudnormMeasure } from './audio-graph'
 import type { Ffmpeg } from './ffmpeg'
-import { buildPeaksPcmArgs, buildThumbStripArgs } from './ffmpeg-args'
+import { buildGrayFramesArgs, buildPeaksPcmArgs, buildThumbStripArgs } from './ffmpeg-args'
 import { pathExists, writeFileAtomic } from './fs-utils'
 import type { Logger } from './logger'
 import { resolveProjectFile } from './project-files'
@@ -60,6 +61,8 @@ export interface DerivedMedia {
   thumbs(projectId: string): Promise<ThumbsData | null>
   /** Nível (dBFS por quadro de 20 ms) do microfone e do som do computador, para a limpeza de silêncio. */
   levels(projectId: string): Promise<Levels | null>
+  /** O recorte da tela sugerido por análise de quadros (C1): onde acaba a barra do navegador; `null` se não achou. */
+  cropSuggest(projectId: string): Promise<CropSuggestion | null>
   /** Espera tudo que está na fila (testes). */
   idle(): Promise<void>
   /** Interrompe o que está rodando e esvazia a fila (fechar o app). */
@@ -302,6 +305,36 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     }
   }
 
+  // --- recorte sugerido (C1) -------------------------------------------------------------------------------
+  const SUGGEST_FRAMES = 8
+  const SUGGEST_WIDTH = 960
+
+  async function buildCropSuggestion(id: string): Promise<CropSuggestion | null> {
+    const { project, dir } = await deps.read(id)
+    const src = project.sources.screen
+    if (!src) return null
+    const srcPath = await resolveProjectFile(dir, src.path, 'sources.screen.path')
+    const ff = deps.ffmpeg()
+    if (!ff) throw new Error('não encontrei o ffmpeg')
+    const tmpDir = await resolveProjectFile(dir, `media/.tmp-crop-${process.pid}`)
+    await mkdir(tmpDir, { recursive: true })
+    try {
+      const out = join(tmpDir, 'quadros.gray')
+      const w = SUGGEST_WIDTH
+      const h = 2 * Math.round(((src.h / src.w) * SUGGEST_WIDTH) / 2)
+      await ff.run(buildGrayFramesArgs({ input: srcPath, output: out, count: SUGGEST_FRAMES, durationMs: src.durationMs, width: w, height: h }), { signal: abort.signal, timeoutMs: 120_000 })
+      const bytes = await readFile(out)
+      const size = w * h
+      const frames: GrayFrame[] = []
+      for (let at = 0; at + size <= bytes.length; at += size) frames.push({ w, h, data: new Uint8Array(bytes.buffer, bytes.byteOffset + at, size) })
+      const found = suggestPageRect(frames)
+      logger.info(`Recorte sugerido do projeto ${id}: ${found ? `a página começa em ${(found.rect.y * 100).toFixed(1)}% da altura (confiança ${(found.confidence * 100).toFixed(0)}%)` : 'nenhuma barra de navegador achada'} (${frames.length} quadros).`)
+      return found
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => undefined)
+    }
+  }
+
   /** Falha vira aviso no log e `null` (o editor funciona sem a forma de onda ou as miniaturas). */
   const safe = <T>(label: string, id: string, job: () => Promise<T | null>): Promise<T | null> =>
     job().catch((err: unknown) => {
@@ -315,6 +348,7 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     previewAudio: (id) => once(`audio:${id}`, () => safe('o áudio da prévia', id, () => buildPreviewAudio(id))),
     thumbs: (id) => once(`thumbs:${id}`, () => safe('as miniaturas', id, () => buildThumbs(id))),
     levels: (id) => once(`levels:${id}`, () => safe('o nível do áudio', id, () => buildLevels(id))),
+    cropSuggest: (id) => once(`crop:${id}`, () => safe('a sugestão de recorte', id, () => buildCropSuggestion(id))),
     async idle() {
       while (inflight.size > 0) await Promise.allSettled([...inflight.values()])
     },

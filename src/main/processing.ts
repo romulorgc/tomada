@@ -11,6 +11,7 @@ import { mkdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ProcessSnapshot, ProcessStepId, ProcessStepState } from '@shared/ipc'
 import { createProject, parseProject, serializeProject } from '@shared/project'
+import { CONTENT_RECT_FILE } from '@shared/events'
 import { buildEvents, toJsonLines, type BuiltEvents, type RawEvents } from '@shared/recording'
 import type { CaptureInfo, Project, Src } from '@shared/types'
 import { writeFileAtomic } from './fs-utils'
@@ -114,6 +115,8 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
         input: rawPath(screen.file),
         output: mediaPath('screen.mp4'),
         fps: manifest.fps,
+        // A janela pode ser redimensionada no meio: o quadro novo é esticado ao tamanho do primeiro, sem perder tempo.
+        lockSize: true,
         // A captura de tela só entrega quadro quando algo muda: o rabo estático da gravação não vira
         // quadro nenhum. O vídeo precisa durar o que a gravação durou (o último quadro é repetido).
         ...(expectedMs ? { durationMs: expectedMs, padToMs: expectedMs } : {}),
@@ -193,6 +196,8 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
       })
       // Sem o cursor do sistema no vídeo, o editor precisa desenhar o sintético; com ele, só ripple/halo.
       project.style.cursor.mode = saved.capture.cursorHidden ? 'synthetic' : 'real'
+      // Janela de navegador com a página medida: o vídeo já sai só com a página. (Em gravação de tela o recorte é uma oferta do editor.)
+      if (saved.capture.kind === 'window' && saved.capture.browser?.contentRect) project.screenCrop = { mode: 'auto' }
       const text = serializeProject(project)
       parseProject(text) // o que escrevemos precisa passar pelo mesmo esquema de quem lê
       await writeFileAtomic(join(dir, PROJECT_FILE), text)
@@ -307,6 +312,21 @@ async function saveEvents(ctx: ProcessContext, deps: ProcessDeps): Promise<strin
   await writeFileAtomic(join(dir, 'events', 'clicks.jsonl'), toJsonLines(built.clicks))
   await writeFileAtomic(join(dir, 'events', 'keys.jsonl'), toJsonLines(built.keys))
   if (screen.kind === 'window') await writeFileAtomic(join(dir, 'events', 'window.jsonl'), toJsonLines(built.windowRects))
+  // A página do navegador (C1): só existe quando alguma vez foi medida
+  if (built.contentRects.length > 0) await writeFileAtomic(join(dir, 'events', CONTENT_RECT_FILE), toJsonLines(built.contentRects))
+
+  // Que navegador era (C1): janela = o que o rastreador reconheceu; tela = o Chromium que apareceu em primeiro plano
+  let browser: CaptureInfo['browser']
+  if (screen.kind === 'window' && screen.browser) {
+    browser = { exe: screen.browser.exe, engine: screen.browser.engine, contentRect: built.contentRects.length > 0 }
+    if (screen.browser.engine === 'gecko') {
+      addNote(ctx, deps, 'Gravação de uma janela do Firefox: o Tomada não mede a página dele sozinho. Para tirar as abas e a barra de endereço, use "Recorte da tela" no editor (manual ou "Sugerir recorte").')
+    } else if (built.contentRects.length === 0) {
+      addNote(ctx, deps, 'Não consegui medir a página do navegador nesta gravação: o vídeo mostra a janela inteira. Use "Recorte da tela" no editor.')
+    }
+  } else if (screen.kind === 'screen' && built.contentExe) {
+    browser = { exe: built.contentExe, engine: 'chromium', contentRect: built.contentRects.length > 0 }
+  }
 
   const capture: CaptureInfo = {
     kind: screen.kind,
@@ -315,7 +335,8 @@ async function saveEvents(ctx: ProcessContext, deps: ProcessDeps): Promise<strin
     ...(screen.frame ? { frameSize: screen.frame } : {}),
     // O que a trilha informou: com o Electron 40 o cursor real vai no vídeo (ver README, "cursor sintético").
     cursorHidden: screen.cursorHidden,
-    sourceName: screen.sourceName
+    sourceName: screen.sourceName,
+    ...(browser ? { browser } : {})
   }
   manifest.saved = {
     capture,

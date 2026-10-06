@@ -116,12 +116,13 @@ type Context = {
 }
 
 async function createContext(job: Pick<ExportJob, 'projectId' | 'project' | 'screenUrl' | 'cameraUrl' | 'eventUrls' | 'clipLayout'> & { words?: Word[] | null }, format: FormatSpec): Promise<Context> {
-  const [cursor, clicks, keys] = await Promise.all([
+  const [cursor, clicks, keys, contentRect] = await Promise.all([
     fetchText(job.eventUrls.cursor),
     fetchText(job.eventUrls.clicks),
-    fetchText(job.eventUrls.keys)
+    fetchText(job.eventUrls.keys),
+    fetchText(job.eventUrls.contentRect)
   ])
-  const events = eventsFromText({ cursor, clicks, keys })
+  const events = eventsFromText({ cursor, clicks, keys, contentRect })
   const doc = job.project
   const durationMs = Math.max(doc.sources.screen?.durationMs ?? 0, doc.sources.camera?.durationMs ?? 0, doc.sources.voice?.durationMs ?? 0, doc.sources.system?.durationMs ?? 0)
   const data = prepareEvents(events, durationMs)

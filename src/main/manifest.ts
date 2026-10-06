@@ -32,6 +32,8 @@ export type ManifestScreen = {
   frameEnd: Size | null
   /** Retângulo físico do monitor (tela inteira) ou da moldura da janela no início. */
   screenRect: Rect | null
+  /** A janela gravada é um navegador (C1), segundo o rastreador. */
+  browser?: { exe: string; engine: 'chromium' | 'gecko' }
 }
 
 export type ManifestCamera = {

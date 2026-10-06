@@ -7,6 +7,7 @@
  */
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import { useStore } from 'zustand'
+import { setScreenCrop } from '@shared/crop-edit'
 import { setZoomFocus } from '@shared/edits'
 import type { Scene } from '@shared/scene'
 import type { Corner } from '@shared/types'
@@ -14,6 +15,7 @@ import { PLATFORM_ZONES, SAFE_BOX, VERTICAL_H, VERTICAL_W, safeBoxFor } from '@s
 import { AlertIcon, FolderIcon, TargetIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
+import { CropEditor } from './CropEditor'
 import { useDoc, useEditor, usePlayback } from './context'
 
 type DragMode = { mode: 'camera' }
@@ -59,7 +61,9 @@ function SafeGuide() {
 }
 
 export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefObject<HTMLCanvasElement | null>; hostRef: RefObject<HTMLDivElement | null>; frameRef: RefObject<HTMLDivElement | null> }) {
-  const { store, engineRef, detail, clips } = useEditor()
+  const { store, engineRef, detail, clips, rawData, durationMs } = useEditor()
+  const screenCrop = useDoc((s) => s.doc.screenCrop)
+  const cropEditing = useDoc((s) => s.cropUi.editing)
   const revealProject = useApp((s) => s.revealProject)
   // a prévia de um corte: o quadro mostra o corte, não o vídeo inteiro
   const previewId = useStore(clips, (s) => s.previewId)
@@ -143,6 +147,12 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
 
   return (
     <div className="ed-view" data-testid="preview-view" data-clip-preview={previewTitle !== undefined ? 'true' : undefined}>
+      {cropEditing && screenCrop?.mode === 'manual' && screenCrop.manual ? (
+        <CropEditor
+          rect={screenCrop.manual}
+          onCommit={(manual) => store.getState().changeDoc((doc) => setScreenCrop(doc, { ...(doc.screenCrop ?? { mode: 'manual' }), mode: 'manual', manual }, rawData, durationMs))}
+        />
+      ) : null}
       {previewTitle !== undefined ? (
         <div className="preview-clip-banner" role="status" data-testid="preview-clip-banner">
           <span>{t.editor.clips.preview.banner(previewTitle)}</span>

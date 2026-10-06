@@ -17,6 +17,7 @@ import {
   type ResolvedSource,
   type SourceProvider
 } from '../../src/main/recording-service'
+import type { BrowserKind } from '../../src/shared/browser'
 import type { Tracker, TrackerResult } from '../../src/main/tracker'
 
 export type Emitted = { [K in keyof IpcEvents]: { channel: K; payload: IpcEvents[K] } }[keyof IpcEvents]
@@ -68,7 +69,8 @@ export function fakeTracker(result: Partial<TrackerResult> & { raw?: RawEvents }
         raw: result.raw ?? { cursor: [], clicks: [], keys: [], windowRects: [] },
         stats: result.stats ?? null,
         windowGone: result.windowGone ?? false,
-        error: result.error ?? null
+        error: result.error ?? null,
+        browser: result.browser ?? null
       }
     }
   }
@@ -82,7 +84,7 @@ export type FakeWorld = {
   trashed: string[]
   setSource(source: ResolvedSource): void
   /** O que o próximo rastreador entrega ao parar. */
-  trackerResult: { raw?: RawEvents; windowGone?: boolean; error?: string | null }
+  trackerResult: { raw?: RawEvents; windowGone?: boolean; error?: string | null; browser?: BrowserKind | null }
   countdownResult: { value: boolean }
   logger: ReturnType<typeof createMemoryLogger>
 }
