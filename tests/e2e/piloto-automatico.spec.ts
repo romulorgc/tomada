@@ -77,7 +77,7 @@ test('grava com motor real, marca errei e chega sem clique à Revisão com YouTu
   const dir=join(s.projects,readdirSync(s.projects)[0]!)
   const doc=readDoc(dir)
   const clip=doc.clips[0]!
-  expect(doc.clips.length).toBeGreaterThanOrEqual(1)
+  expect(doc.clips.length, `etapas do piloto: ${JSON.stringify(doc.autopilot?.steps)}`).toBeGreaterThanOrEqual(1)
   expect(doc.autopilot?.steps.filter((p) => p.status==='error')).toEqual([])
   expect(doc.review?.items.youtube?.phase).toBe('ready')
   expect(doc.review?.items[clip.id]?.phase).toBe('ready')
