@@ -20,6 +20,7 @@ import type { Transcript } from '@shared/types'
 import { projectForFormat, ensureVertical } from '@shared/vertical'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
+import { AudioQualityNotice } from '../components/AudioQualityNotice'
 import { cameraJobKey, useCamera } from '../camera-store'
 import { useApp } from '../store'
 import { useTranscription } from '../transcription-store'
@@ -65,6 +66,8 @@ function readSavedHeight(): number | null {
 /** Atalhos e o resto que precisa do contexto já montado. */
 function EditorInner({ onBack, layoutRef }: { onBack: () => void; layoutRef: React.RefObject<HTMLDivElement | null> }) {
   const ctx = useEditor()
+  const audioQuality = useStore(ctx.store, (s) => s.project.audioQuality)
+  const pcmSyncWarning = useStore(ctx.store, (s) => s.project.pcmSyncWarning)
   const ops = useEditorOps()
   useEditorShortcuts(ops, !ctx.exporter.open)
 
@@ -120,7 +123,8 @@ function EditorInner({ onBack, layoutRef }: { onBack: () => void; layoutRef: Rea
   return (
     <div className="ed" ref={layoutRef} style={{ ['--tl-h' as string]: `${current}px` }} data-testid="editor">
       <TopBar onBack={onBack} />
-      <div className="ed-stage">
+      <div className="ed-stage" data-audio-warning={Boolean(audioQuality?.warnings.length || pcmSyncWarning)}>
+        <AudioQualityNotice report={audioQuality} pcmSyncWarning={pcmSyncWarning} />
         <PreviewStage canvasRef={canvasRef} hostRef={ctx.refs.host} frameRef={ctx.refs.frame} />
         <Transport />
       </div>
@@ -501,10 +505,12 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
 
   // --- áudio da prévia: voz crua já; a tratada assume quando o ffmpeg termina ------------------------------
   const cameraOffset = project.sync.cameraOffsetMs
+  // A prévia tratada usa o silêncio da transcrição para medir o piso de ruído: pedir ANTES de ela carregar faria o main medir e filtrar a
+  // gravação inteira duas vezes (uma por VAD, outra com a transcrição). A voz crua já toca enquanto isso.
+  const transcriptSettled = transcript.status !== 'loading'
   useEffect(() => {
     const engine = engineRef.current
     if (!engine) return
-    let alive = true
     let voiceUrl: string | null = null
     try {
       voiceUrl = voicePath ? window.tomada.mediaUrl(detail.id, voicePath) : null
@@ -513,6 +519,13 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       window.tomada.log({ level: 'error', message: 'Caminho de voz inválido no projeto', detail: messageOf(err) })
     }
     engine.setAudio(voiceUrl, cameraOffset, false)
+    // a voz crua vale por projeto; o deslocamento da câmera só muda ao regravar
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engineGen, detail.id, voicePath])
+  useEffect(() => {
+    const engine = engineRef.current
+    if (!engine || !transcriptSettled) return
+    let alive = true
     void window.tomada.derived
       .previewAudio(detail.id)
       .then((r) => {
@@ -525,9 +538,8 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
     return () => {
       alive = false
     }
-    // a voz crua vale por projeto; o deslocamento da câmera só muda ao regravar
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engineGen, detail.id, voicePath])
+  }, [engineGen, detail.id, voicePath, transcriptSettled])
 
   // --- forma de onda e miniaturas ---------------------------------------------------------------------------
   const initialPeaks: AssetState<PeaksData> = { status: voicePath ? 'loading' : 'none', data: null, error: null }

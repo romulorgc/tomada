@@ -73,19 +73,24 @@ describe('AppState', () => {
     expect(JSON.parse(readFileSync(file, 'utf8')).projectsDir).toBe(novo)
   })
 
-  it('pasta relativa é recusada com mensagem clara e NADA é gravado', async () => {
+  it('pasta relativa é recusada com mensagem clara e preserva os ajustes', async () => {
     const { state, file } = await make()
+    const before = readFileSync(file)
+    const settingsBefore = structuredClone(state.settings())
     await expect(state.update({ projectsDir: 'pasta\\relativa' })).rejects.toThrow(/caminho completo/)
-    expect(existsSync(file)).toBe(false)
-    expect(state.settings()).toEqual({})
+    expect(readFileSync(file)).toEqual(before)
+    expect(state.settings()).toEqual(settingsBefore)
   })
 
   it('pasta impossível de criar é recusada (aqui: dentro de um arquivo)', async () => {
-    const { state, dir } = await make()
+    const { state, dir, file } = await make()
     const arquivo = join(dir, 'arquivo.txt')
     writeFileSync(arquivo, 'x')
+    const before = readFileSync(file)
+    const settingsBefore = structuredClone(state.settings())
     await expect(state.update({ projectsDir: join(arquivo, 'filha') })).rejects.toThrow(/Não consegui usar a pasta/)
-    expect(state.settings()).toEqual({})
+    expect(readFileSync(file)).toEqual(before)
+    expect(state.settings()).toEqual(settingsBefore)
   })
 
   it('ffmpeg em lugar errado é recusado; em lugar certo, aceito', async () => {

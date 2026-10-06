@@ -68,6 +68,8 @@ const api: TomadaApi = {
     status: () => invoke('record:status'),
     markRetake: () => invoke('record:mark-retake'),
     preflight: () => invoke('record:preflight'),
+    micVolume: (label) => invoke('record:mic-volume', label),
+    micVolumeSet: (label, db) => invoke('record:mic-volume-set', label, db),
     level: (level) => ipcRenderer.send(LEVEL_CHANNEL, level)
   },
   processing: { retry: (sessionId) => invoke('process:retry', sessionId) },

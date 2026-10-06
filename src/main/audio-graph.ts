@@ -18,9 +18,11 @@ export const TARGET_LUFS = -14
 export const TRUE_PEAK_DB = -1
 export const SYSTEM_GAIN_DB = -9
 export const OUTPUT_SAMPLE_RATE = 48_000
-export const OUTPUT_AUDIO_BITRATE = '384k'
-/** Vertical (TikTok, Reels, Shorts): AAC 192 kbps. */
-export const VERTICAL_AUDIO_BITRATE = '192k'
+export const OUTPUT_AUDIO_BITRATE = '320k'
+/** O mesmo áudio de publicação nos dois formatos (decisão do usuário, 06/10/2026). */
+export const VERTICAL_AUDIO_BITRATE = OUTPUT_AUDIO_BITRATE
+/** Reserva para a reconstrução AAC: Maria medida a -0,99 dBTP após loudnorm com teto -1. */
+export const AAC_HEADROOM_DB = 0.15
 
 /** Medição do primeiro passe do `loudnorm` (`print_format=json`). */
 export type LoudnormMeasure = {
@@ -34,7 +36,7 @@ export type LoudnormMeasure = {
 const sec = (ms: number): string => (ms / 1000).toFixed(6)
 
 // ---------------------------------------------------------------------------
-// Cadeia de voz (portada de `cadeiaDeVoz`, legado/lib/composicao.mjs)
+// Cadeia de voz: única limpeza no pós, com piso medido na própria gravação.
 
 /**
  * Latência do `afftdn` em amostras a 48 kHz (1200 = 25,0 ms). MEDIDA com o ffmpeg 8.1.1 por correlação
@@ -43,27 +45,25 @@ const sec = (ms: number): string => (ms / 1000).toFixed(6)
  */
 export const AFFTDN_LATENCY_SAMPLES = 1200
 
-/** Limpeza e compressão da voz, ANTES de normalizar: ronco, chiado, sibilância, dinâmica (igual à do legado). */
-export const VOICE_CLEAN_CHAIN = [
-  'highpass=f=80', // ronco de mesa e ar-condicionado
-  'afftdn=nr=12:nf=-45', // chiado de fundo
-  'deesser=i=0.4', // sibilância do microfone perto da boca
-  'acompressor=threshold=-18dB:ratio=3:attack=15:release=180'
-].join(',')
-
 /**
  * A mesma limpeza da voz, com o atraso do `afftdn` descontado: corta as primeiras amostras logo depois
  * dele e, no fim da faixa, completa com silêncio até a duração exata (`totalMs`), para a voz continuar
  * alinhada com a imagem e com a mesma duração.
  */
-export function voiceChainCompensated(totalMs: number): string {
+export function voiceChainCompensated(totalMs: number, noiseFloorDb?: number | null): string {
+  // Sem silêncio confiável, não se usa um piso presumido e não se corta o começo da voz.
+  const denoise = typeof noiseFloorDb === 'number' && Number.isFinite(noiseFloorDb) && noiseFloorDb >= -80 && noiseFloorDb <= -20
   return [
     'highpass=f=80',
-    'afftdn=nr=12:nf=-45',
-    `atrim=start_sample=${AFFTDN_LATENCY_SAMPLES}`,
-    'asetpts=PTS-STARTPTS',
-    'deesser=i=0.4',
-    'acompressor=threshold=-18dB:ratio=3:attack=15:release=180',
+    ...(denoise ? [
+      // Esvazia a janela do FFT: só aparar o atraso substituiria os últimos 25 ms de fala por silêncio.
+      `apad=pad_len=${AFFTDN_LATENCY_SAMPLES}`,
+      `afftdn=nr=6:nf=${noiseFloorDb.toFixed(2)}:gs=5`,
+      `atrim=start_sample=${AFFTDN_LATENCY_SAMPLES}`,
+      'asetpts=PTS-STARTPTS'
+    ] : []),
+    'deesser=i=0.15:m=0.25',
+    'acompressor=threshold=-18dB:ratio=1.5:attack=20:release=180',
     `apad=whole_dur=${sec(totalMs)}`,
     `atrim=end=${sec(totalMs)}`,
     'asetpts=PTS-STARTPTS'
@@ -83,16 +83,6 @@ export function loudnormFilter(opts: { measured?: LoudnormMeasure | null; print?
     return `${base}:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true`
   }
   return opts.print ? `${base}:print_format=json` : base
-}
-
-/** Mesma cadeia do legado (`cadeiaDeVoz`): limpeza + `loudnorm` + 48 kHz. Mantida igual para comparação. */
-export function cadeiaDeVoz(opts: { ganhoDb?: number; medido?: LoudnormMeasure | null; alvoLufs?: number; truePeak?: number } = {}): string {
-  const etapas: string[] = []
-  if (opts.ganhoDb) etapas.push(`volume=${opts.ganhoDb}dB`)
-  etapas.push(VOICE_CLEAN_CHAIN)
-  etapas.push(loudnormFilter({ measured: opts.medido ?? null, target: opts.alvoLufs ?? TARGET_LUFS, truePeak: opts.truePeak ?? -1.5 }))
-  etapas.push('aresample=48000')
-  return etapas.join(',')
 }
 
 /**
@@ -140,6 +130,8 @@ export type AudioGraphInput = {
   /** `measure`: só mede (primeiro passe); `final`: normaliza (com `measured` quando válido). */
   mode: 'measure' | 'final'
   measured?: LoudnormMeasure | null
+  /** Piso dBFS medido em silêncio da voz original, antes dos cortes; ausente desativa só o redutor. */
+  noiseFloorDb?: number | null
   /** Trechos (ms, relógio da gravação) em que a VOZ fica muda (muletas no modo "silenciar"); o resto não muda. */
   voiceMutes?: readonly Range[]
 }
@@ -230,7 +222,7 @@ export function buildAudioGraph(input: AudioGraphInput): AudioGraph {
     const b = trackBranch(kept, input.voice, 'v', input.voiceMutes ?? [])
     lines.push(...b.lines)
     const stereo = input.voice.channels === 1 ? ',pan=stereo|c0=c0|c1=c0' : ''
-    lines.push(`[${b.out}]${voiceChainCompensated(totalMs)}${stereo}[voz]`)
+    lines.push(`[${b.out}]${voiceChainCompensated(totalMs, input.noiseFloorDb)}${stereo}[voz]`)
     mixInputs.push('voz')
   }
   if (input.system) {
@@ -252,7 +244,8 @@ export function buildAudioGraph(input: AudioGraphInput): AudioGraph {
     input.mode === 'measure'
       ? loudnormFilter({ print: true })
       : loudnormFilter({ measured: input.measured ?? null })
-  lines.push(`[${mixed}]${norm},aresample=${OUTPUT_SAMPLE_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo[aout]`)
+  const headroom = input.mode === 'final' ? `,volume=-${AAC_HEADROOM_DB}dB` : ''
+  lines.push(`[${mixed}]${norm},aresample=${OUTPUT_SAMPLE_RATE}${headroom},aformat=sample_fmts=fltp:channel_layouts=stereo[aout]`)
   return { graph: lines.join(';\n'), out: 'aout' }
 }
 
@@ -264,7 +257,7 @@ export function buildMeasureArgs(opts: { inputs: string[]; graphFile: string }):
   return ['-loglevel', 'info', ...inputs.flatMap((f) => ['-i', f]), '-/filter_complex', graphFile, '-map', '[aout]', '-f', 'null', '-']
 }
 
-/** Argumentos do ffmpeg para o passe final: AAC 48 kHz, 384 kbps (YouTube) ou o `bitrate` pedido (vertical: 192k). */
+/** Argumentos do ffmpeg para o passe final: AAC 48 kHz, 320 kbps nos dois formatos. */
 export function buildAudioArgs(opts: { inputs: string[]; graphFile: string; output: string; bitrate?: string; durationMs?: number }): string[] {
   const inputs = opts.inputs.map((f) => assertFfmpegPath(f, 'entrada de áudio'))
   const graphFile = assertFfmpegPath(opts.graphFile, 'grafo de filtros')

@@ -34,7 +34,9 @@ export type RecordPrefs = {
   micId: string | null
   systemAudio: boolean
   fps: FrameRate
-  /** Supressão de ruído do Chrome no microfone (padrão: ligada). */
+  /** Versão da migração persistida dos filtros de áudio; ausente = preferência antiga. */
+  audioPrefsVersion?: number
+  /** Supressão de ruído do Chrome no microfone (padrão: desligada; tratamento local depois). */
   noiseSuppression: boolean
   /** Cancelamento de eco do Chrome no microfone (padrão: desligado). */
   echoCancellation: boolean
@@ -67,7 +69,8 @@ export const DEFAULT_RECORD_PREFS: RecordPrefs = {
   micId: null,
   systemAudio: false,
   fps: 30,
-  noiseSuppression: true,
+  audioPrefsVersion: 1,
+  noiseSuppression: false,
   echoCancellation: false,
   showBubble: true,
   framingGuide: true,
@@ -89,6 +92,7 @@ const recordPrefsSchema = z.looseObject({
   micId: z.string().nullable().catch(null),
   systemAudio: z.boolean().catch(DEFAULT_RECORD_PREFS.systemAudio),
   fps: z.union([z.literal(30), z.literal(60)]).catch(DEFAULT_RECORD_PREFS.fps),
+  audioPrefsVersion: z.number().int().min(1).catch(1),
   noiseSuppression: z.boolean().catch(DEFAULT_RECORD_PREFS.noiseSuppression),
   echoCancellation: z.boolean().catch(DEFAULT_RECORD_PREFS.echoCancellation),
   showBubble: z.boolean().catch(DEFAULT_RECORD_PREFS.showBubble),
@@ -114,6 +118,7 @@ export function normalizeRecordPrefs(raw: unknown): RecordPrefs {
     micId: parsed.micId,
     systemAudio: parsed.systemAudio,
     fps: parsed.fps,
+    audioPrefsVersion: parsed.audioPrefsVersion,
     noiseSuppression: parsed.noiseSuppression,
     echoCancellation: parsed.echoCancellation,
     showBubble: parsed.showBubble,

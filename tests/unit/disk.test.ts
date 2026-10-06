@@ -8,6 +8,7 @@ describe('espaço estimado', () => {
     expect(one).toBeGreaterThan(180_000_000)
     expect(hour).toBeGreaterThan(10_800_000_000)
     expect(estimateRecordingBytes({ durationMs: 60_000, screenBitrate: 8_000_000, cameraBitrate: 4_000_000, audioTracks: 1 })).toBeGreaterThan(one)
+    expect(estimateRecordingBytes({ durationMs: 60_000, screenBitrate: 0, cameraBitrate: 0, audioTracks: 1 })).toBeGreaterThan(100_000_000 + 60 * 48_000 * 4 * 2)
   })
   it('exportar reserva vídeo, mux, áudio e margem, sem depender da memória', () => {
     expect(estimateExportBytes(3_600_000, 8_000_000, 384_000)).toBeGreaterThan(7_545_600_000)

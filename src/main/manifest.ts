@@ -19,6 +19,7 @@ export const MANIFEST_PATH = 'raw/recording.json'
 export const RAW_SCREEN = 'raw/screen.webm'
 export const RAW_CAMERA = 'raw/camera.webm'
 export const RAW_MIC = 'raw/mic.webm'
+export const RAW_MIC_PCM = 'raw/mic.wav'
 
 export type ManifestScreen = {
   file: typeof RAW_SCREEN
@@ -41,7 +42,7 @@ export type ManifestScreen = {
 }
 
 export type ManifestCamera = {
-  file: typeof RAW_CAMERA | typeof RAW_MIC
+  file: typeof RAW_CAMERA | typeof RAW_MIC | typeof RAW_MIC_PCM
   mime: string | null
   hasVideo: boolean
   hasAudio: boolean
@@ -81,6 +82,10 @@ export type RecordingManifest = {
   fps: FrameRate
   screen: ManifestScreen | null
   camera: ManifestCamera | null
+  /** A voz PCM substitui a trilha Opus; começa no cameraStartAt (referência antiga da voz). */
+  micPcm?: boolean
+  /** Positivo = silêncio na cabeça do PCM; negativo = trim. Preserva a referência de tempo da voz anterior. */
+  pcmAlignment?: { offsetMs: number; correlation: number }
   clock: ManifestClock | null
   pauses: Interval[]
   endedAt: number | null
@@ -137,5 +142,7 @@ export async function readManifest(dir: string): Promise<RecordingManifest> {
   // O que a abertura da câmera decidiu é só informação para o aviso: se não bate com o formato, some (o aviso fala do que sabe).
   if (parsed.camera && parsed.camera.capture !== undefined && !cameraCaptureInfoSchema.safeParse(parsed.camera.capture).success) delete parsed.camera.capture
   if (parsed.cameraStyle !== undefined && parsed.cameraStyle !== 'side-by-side' && parsed.cameraStyle !== 'presenter') throw new Error('Estilo da câmera inválido no manifesto de gravação.')
+  if (parsed.micPcm !== undefined && typeof parsed.micPcm !== 'boolean') throw new Error('Formato do microfone inválido no manifesto de gravação.')
+  if (parsed.pcmAlignment && (!finite(parsed.pcmAlignment.offsetMs) || Math.abs(parsed.pcmAlignment.offsetMs) > 250 || !finite(parsed.pcmAlignment.correlation) || parsed.pcmAlignment.correlation < 0 || parsed.pcmAlignment.correlation > 1.000001)) throw new Error('Alinhamento do PCM inválido no manifesto de gravação.')
   return parsed
 }

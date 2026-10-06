@@ -58,6 +58,7 @@ import {
   MANIFEST_PATH,
   RAW_CAMERA,
   RAW_MIC,
+  RAW_MIC_PCM,
   RAW_SCREEN,
   readManifest,
   writeManifest,
@@ -65,6 +66,7 @@ import {
 } from './manifest'
 import { createProcessContext, runProcessing, type ProcessContext, type ProcessDeps } from './processing'
 import { injectTestMedia } from './test-media'
+import { checkpointPcm, validatePcmHeader } from './pcm-file'
 import type { Tracker, TrackerConfig, TrackerResult } from './tracker'
 
 /** Uma fonte já resolvida: o que o rastreador e a captura precisam saber. */
@@ -505,7 +507,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           const manifest = await readManifest(dir)
           if (manifest.processedAt || manifest.endedAt === null || !manifest.clock) continue
           if (manifest.screen && manifest.screen.file !== RAW_SCREEN) throw new Error('Caminho de tela inválido no manifesto de gravação.')
-          if (manifest.camera && ![RAW_CAMERA, RAW_MIC].includes(manifest.camera.file)) throw new Error('Caminho de câmera inválido no manifesto de gravação.')
+          if (manifest.camera && ![RAW_CAMERA, RAW_MIC, RAW_MIC_PCM].includes(manifest.camera.file)) throw new Error('Caminho de câmera inválido no manifesto de gravação.')
           manifest.folder = entry.name
           const eventsPath = await resolveProjectFile(dir, 'raw/events.json')
           const rawEvents = await readFile(eventsPath, 'utf8').then((text) => JSON.parse(text) as RawEvents).catch(() => null)
@@ -699,6 +701,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       const s = session
       if (!s || status !== 'countdown') throw new Error('A gravação não está pronta para começar.')
       s.offsetMs = info.clockOffsetMs
+      s.manifest.micPcm = info.micPcm === true
       s.manifest.cameraId = isPhysicalDeviceId(info.cameraDeviceId) ? info.cameraDeviceId : null
       s.manifest.micId = isPhysicalDeviceId(info.micDeviceId) ? info.micDeviceId : null
       s.manifest.clock = {
@@ -721,7 +724,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
         s.manifest.camera.hasAudio = info.cameraHasAudio
         if (info.cameraCapture && cameraCaptureInfoSchema.safeParse(info.cameraCapture).success) s.manifest.camera.capture = info.cameraCapture
         // Só áudio: o arquivo bruto não é "camera".
-        s.manifest.camera.file = info.cameraHasVideo ? RAW_CAMERA : RAW_MIC
+        s.manifest.camera.file = info.cameraHasVideo ? RAW_CAMERA : info.micPcm ? RAW_MIC_PCM : RAW_MIC
       }
       await writeManifest(s.dir, s.manifest)
       setStatus('recording')
@@ -775,14 +778,27 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
         try {
           let slot = s.files.get(kind)
           if (!slot) {
-            const rel = kind === 'screen' ? RAW_SCREEN : kind === 'camera' ? RAW_CAMERA : RAW_MIC
+            // Pode chegar antes de started(): o primeiro pedaço identifica o formato.
+            const pcm = kind === 'mic' && bytes.length >= 44 && Buffer.from(bytes.subarray(0, 4)).toString('ascii') === 'RIFF'
+            const rel = kind === 'screen' ? RAW_SCREEN : kind === 'camera' ? RAW_CAMERA : pcm ? RAW_MIC_PCM : RAW_MIC
             const path = await resolveProjectFile(s.dir, rel)
-            const handle = await open(path, 'a')
+            const handle = await open(path, pcm ? 'wx+' : 'a')
             slot = { handle, bytes: 0, path }
             s.files.set(kind, slot)
           }
-          await slot.handle.write(bytes)
+          const pcm = slot.path.endsWith('mic.wav')
+          if (pcm && (await slot.handle.stat()).nlink > 1) throw new Error('O bruto PCM tem um link físico para outro arquivo; a escrita foi recusada.')
+          let written = 0
+          while (written < bytes.length) {
+            const result = await slot.handle.write(bytes, written, bytes.length - written, pcm ? slot.bytes + written : null)
+            if (result.bytesWritten === 0) throw new Error('O disco não aceitou o pedaço do microfone.')
+            written += result.bytesWritten
+          }
           slot.bytes += bytes.byteLength
+          if (pcm) {
+            if (slot.bytes === bytes.length) await validatePcmHeader(slot.handle)
+            await checkpointPcm(slot.handle, slot.bytes)
+          }
           s.hadData = true
           // O último pedaço salva o limite conhecido; cair com a pausa aberta não alonga a mídia.
           s.manifest.lastChunkAt = rendererNow(s)

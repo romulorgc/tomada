@@ -139,6 +139,9 @@ export async function normalizeVideo(ff: Ffmpeg, o: NormalizeOptions): Promise<N
 // Áudio e miniatura
 
 export type ExtractAudioOptions = {
+  alignmentSamples?: number
+  durationMs?: number
+  losslessFloat?: boolean
   input: string
   output: string
   channels: 1 | 2
@@ -157,6 +160,9 @@ export async function extractAudio(ff: Ffmpeg, o: ExtractAudioOptions): Promise<
       input: o.input,
       output: o.output,
       channels: o.channels,
+      ...(o.losslessFloat ? { losslessFloat: true } : {}),
+      ...(o.alignmentSamples ? { alignmentSamples: o.alignmentSamples } : {}),
+      ...(o.durationMs ? { durationMs: o.durationMs } : {}),
       audioLeadingMs: Math.max(0, audioStart - start),
       ...(o.sampleRate ? { sampleRate: o.sampleRate } : {}),
       ...(o.track !== undefined ? { track: o.track } : {})

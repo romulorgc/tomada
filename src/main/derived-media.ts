@@ -23,6 +23,7 @@ import { LEVELS_VERSION, LEVEL_FRAME_MS, alignLevels, computeLevels, type Levels
 import { mediaUrl } from '@shared/media-url'
 import { PEAKS_PER_SECOND, PEAKS_VERSION, computePeaks, pcmFromBytes, type PeaksFile } from '@shared/peaks'
 import { projectDurationMs } from '@shared/project'
+import { parseTranscript, TRANSCRIPT_FILE } from '@shared/transcript'
 import type { Project } from '@shared/types'
 import { buildAudioArgs, buildAudioGraph, buildMeasureArgs, parseLoudnormMeasure } from './audio-graph'
 import type { Ffmpeg } from './ffmpeg'
@@ -31,6 +32,7 @@ import { pathExists } from './fs-utils'
 import type { Logger } from './logger'
 import { resolveProjectFile } from './project-files'
 import { commitToProject, createProjectTmpDir, removeTmpDir, writeProjectFile, type ExclusiveDir } from './safe-output'
+import { measureVoiceNoise } from './voice-noise'
 
 export const PEAKS_PATH = 'media/peaks.json'
 export const PREVIEW_AUDIO_PATH = 'media/voice-preview.m4a'
@@ -159,7 +161,7 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
   }
 
   // --- áudio da prévia -------------------------------------------------------------------------------
-  type PreviewInfo = { voiceMtimeMs: number | null; systemMtimeMs: number | null; voiceOffsetMs: number; systemOffsetMs: number; durationMs: number }
+  type PreviewInfo = { version: number; transcriptMtimeMs: number | null; voiceMtimeMs: number | null; systemMtimeMs: number | null; voiceOffsetMs: number; systemOffsetMs: number; durationMs: number }
 
   async function buildPreviewAudio(id: string): Promise<PreviewAudioData | null> {
     const { project, dir } = await deps.read(id)
@@ -172,7 +174,11 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
     if (voiceMtime === null && systemMtime === null) return null
 
     const durationMs = projectDurationMs(project)
+    const transcriptFile = await resolveProjectFile(dir, TRANSCRIPT_FILE)
+    const transcriptMtimeMs = await mtimeOf(transcriptFile)
     const want: PreviewInfo = {
+      version: 2, // invalida a prévia anterior, feita com piso fixo e compressor forte
+      transcriptMtimeMs,
       voiceMtimeMs: voiceMtime,
       systemMtimeMs: systemMtime,
       voiceOffsetMs: project.sync.cameraOffsetMs,
@@ -194,14 +200,22 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
       const system = systemMtime !== null ? { input: inputs.push(systemPath!) - 1, offsetMs: want.systemOffsetMs, channels: 2 as const } : null
       const kept = [{ start: 0, end: durationMs }]
       const opts = { signal: abort.signal, timeoutMs: 900_000 }
+      let words: ReturnType<typeof parseTranscript>['words'] | null = null
+      if (transcriptMtimeMs !== null) {
+        try { words = parseTranscript(await readFile(transcriptFile, 'utf8')).words }
+        catch (err) { logger.warn('Áudio da prévia: transcrição indisponível para medir silêncio; usando VAD local.', err) }
+      }
+      const noise = voice ? await measureVoiceNoise(ff, { voicePath: voicePath!, words, offsetMs: want.voiceOffsetMs, ...opts }) : null
+      const noiseFloorDb = noise?.noiseFloorDb ?? null
+      if (noise) logger.info(`Áudio da prévia: piso ${noise.measuredDb?.toFixed(2) ?? 'sem medição'} dBFS, ${noise.silenceMs} ms de silêncio (${noise.source}).`)
 
       const g1 = await tmp.file('medir.txt')
-      await writeFile(g1, buildAudioGraph({ kept, voice, system, mode: 'measure' }).graph, 'utf8')
+      await writeFile(g1, buildAudioGraph({ kept, voice, system, noiseFloorDb, mode: 'measure' }).graph, 'utf8')
       const measureRun = await ff.run(buildMeasureArgs({ inputs, graphFile: g1 }), opts)
       const measured = parseLoudnormMeasure(measureRun.stderr)
 
       const g2 = await tmp.file('final.txt')
-      await writeFile(g2, buildAudioGraph({ kept, voice, system, mode: 'final', measured }).graph, 'utf8')
+      await writeFile(g2, buildAudioGraph({ kept, voice, system, noiseFloorDb, mode: 'final', measured }).graph, 'utf8')
       const partial = await tmp.file('voice-preview.m4a')
       await ff.run(buildAudioArgs({ inputs, graphFile: g2, output: partial }), opts)
 
@@ -338,7 +352,15 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
 
   return {
     peaks: (id) => once(`peaks:${id}`, () => safe('a forma de onda', id, () => buildPeaks(id))),
-    previewAudio: (id) => once(`audio:${id}`, () => safe('o áudio da prévia', id, () => buildPreviewAudio(id))),
+    async previewAudio(id) {
+      const key = `audio:${id}`
+      const running = inflight.get(key)
+      // A transcrição pode chegar enquanto o primeiro áudio ainda usa VAD. Esperar e reler
+      // o cache evita devolver essa construção antiga ao pedido da transcrição nova.
+      if (running) await running.catch(() => undefined)
+      if (abort.signal.aborted) return null
+      return once(key, () => safe('o áudio da prévia', id, () => buildPreviewAudio(id)))
+    },
     thumbs: (id) => once(`thumbs:${id}`, () => safe('as miniaturas', id, () => buildThumbs(id))),
     levels: (id) => once(`levels:${id}`, () => safe('o nível do áudio', id, () => buildLevels(id))),
     cropSuggest: (id) => once(`crop:${id}`, () => safe('a sugestão de recorte', id, () => buildCropSuggestion(id))),

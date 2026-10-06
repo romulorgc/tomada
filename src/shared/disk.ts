@@ -10,7 +10,8 @@ export type DiskEstimate = {
 export function estimateRecordingBytes(input: { durationMs: number; screenBitrate: number; cameraBitrate: number; audioTracks: number }): number {
   const seconds = Math.max(0, input.durationMs) / 1000
   const video = (Math.max(0, input.screenBitrate) + Math.max(0, input.cameraBitrate)) / 8
-  const audio = Math.max(0, input.audioTracks) * (48_000 * 4 + 192_000 / 8)
+  // PCM bruto e voz float32 normalizada coexistem; a câmera pode conservar Opus de referência.
+  const audio = Math.max(0, input.audioTracks) * (48_000 * 4 * 2 + 192_000 / 8)
   return Math.ceil(seconds * (video * 3 + audio) * 1.2 + 100_000_000)
 }
 

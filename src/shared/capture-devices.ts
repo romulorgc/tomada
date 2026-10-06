@@ -8,7 +8,7 @@ import { CAMERA_PROFILES, cameraVideoConstraints, type CameraProfile } from './c
 export function deviceCaptureConstraints(cameraId: string | null, micId: string | null, prefs: { echoCancellation: boolean; noiseSuppression: boolean }, profile: CameraProfile = CAMERA_PROFILES.fhd) {
   return {
     video: cameraId ? { deviceId: { exact: cameraId }, ...cameraVideoConstraints(profile) } : false,
-    audio: micId ? { deviceId: { exact: micId }, autoGainControl: false, echoCancellation: prefs.echoCancellation, noiseSuppression: prefs.noiseSuppression } : false
+    audio: micId ? { deviceId: { exact: micId }, sampleRate: { ideal: 48000 }, channelCount: { ideal: 1 }, autoGainControl: false, echoCancellation: prefs.echoCancellation, noiseSuppression: prefs.noiseSuppression } : false
   }
 }
 export const isPhysicalDeviceId = (value: string | null | undefined): boolean => typeof value === 'string' && value.length > 0 && value.length <= 500 && !['default', 'communications'].includes(value)

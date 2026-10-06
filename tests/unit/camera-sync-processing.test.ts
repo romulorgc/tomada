@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -9,6 +9,7 @@ import type { RecordingManifest } from '../../src/main/manifest'
 import type { Ffmpeg } from '../../src/main/ffmpeg'
 import type { LipSyncDetector, LipSyncResult } from '../../src/main/lip-sync'
 import { parseProject } from '@shared/project'
+import { pcmWavHeader } from '@shared/pcm'
 
 const calibration = { cameraId: 'cam', micId: 'mic', offsetMs: 110, confidence: 5, calibratedAt: '2026-10-05' }
 
@@ -23,6 +24,9 @@ describe('correção por gravação e persistência do par de dispositivos', () 
       const dir = await mkdtemp(join(tmpdir(), 'tomada-sync-doc-'))
       await mkdir(join(dir, 'raw'))
       try {
+        await mkdir(join(dir, 'media'))
+        const samples = new Float32Array(48_000)
+        await writeFile(join(dir, 'media/voice.wav'), Buffer.concat([Buffer.from(pcmWavHeader(48_000, samples.byteLength)), Buffer.from(samples.buffer)]))
         const manifest: RecordingManifest = { version: 1, sessionId: 'sync', folder: 'sync', title: 'Teste', createdAt: '2026-10-05', mode: 'camera', cameraId: 'cam', micId: scenario.micId, fps: 30, screen: null, camera: { file: 'raw/camera.webm', mime: null, hasVideo: true, hasAudio: true, size: null }, clock: null, pauses: [], endedAt: 3000, stopReason: 'user', recordedMs: 3000, notes: [], saved: { sync: { screenOffsetMs: 0, cameraOffsetMs: 20 }, capture: { kind: 'screen', boundsPx: { x: 0, y: 0, w: 160, h: 90 }, scale: 1 }, stats: { cursor: 0, clicks: 0, keys: 0 } }, processedAt: null }
         const ctx = createProcessContext({ dir, manifest, rawEvents: null })
         STEP_ORDER.filter((id) => id !== 'project').forEach((id) => ctx.done.add(id))
@@ -51,7 +55,7 @@ describe('correção por gravação e persistência do par de dispositivos', () 
       const reopened = await createAppState({ file, env: {}, logger: createMemoryLogger() })
       expect(reopened.settings().cameraCalibrations).toEqual([{ ...calibration, micId: 'outro', offsetMs: -50 }, { ...calibration, offsetMs: 90 }])
       await expect(state.saveCameraCalibration({ ...calibration, offsetMs: 1000 })).rejects.toThrow()
-      await state.updateRecordPrefs({ noiseSuppression: false })
+      await state.updateRecordPrefs({ noiseSuppression: true })
       expect(state.settings().cameraCalibrations).toBeUndefined()
       await state.saveCameraCalibration(calibration)
       await state.updateRecordPrefs({ echoCancellation: true })

@@ -65,6 +65,16 @@ export async function createAppState(args: {
 }): Promise<AppState> {
   const env = args.env ?? process.env
   let current = await loadSettings(args.file, args.logger)
+  // O marco vai para o disco ANTES de oferecer os controles. Uma escolha deliberada depois desta
+  // abertura não pode ser desfeita pela próxima inicialização, mesmo que o usuário volte a ligar o filtro.
+  if (!(typeof current.record?.audioPrefsVersion === 'number' && current.record.audioPrefsVersion >= 1)) {
+    const changed = current.record?.noiseSuppression === true
+    current = { ...current, record: { ...current.record, ...normalizeRecordPrefs(current.record), audioPrefsVersion: 1, noiseSuppression: false } }
+    // A latência da supressão antiga não vale para o novo modo sem filtros.
+    if (changed) delete current.cameraCalibrations
+    await saveSettings(args.file, current)
+    args.logger.info('Supressão de ruído do microfone migrada uma vez para o padrão desligado.', { version: 1, changed })
+  }
   if (current.shortcuts) {
     try { current.shortcuts = validateRecordingShortcuts(current.shortcuts, normalizeRecordPrefs(current.record).retakeShortcut) }
     catch (err) { args.logger.warn('Atalhos guardados têm conflito; usando os padrões.', err); delete current.shortcuts }

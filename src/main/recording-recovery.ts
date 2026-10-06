@@ -1,8 +1,9 @@
-import { readFile, readdir, stat } from 'node:fs/promises'
+import { open, readFile, readdir, stat } from 'node:fs/promises'
 import type { InterruptedRecording } from '@shared/recovery'
 import { elapsedMs, normalizeIntervals } from '@shared/recording'
 import type { Ffmpeg } from './ffmpeg'
-import { readManifest, RAW_CAMERA, RAW_MIC, RAW_SCREEN, type RecordingManifest } from './manifest'
+import { readManifest, RAW_CAMERA, RAW_MIC, RAW_MIC_PCM, RAW_SCREEN, type RecordingManifest } from './manifest'
+import { checkpointPcm, validatePcmHeader } from './pcm-file'
 import { resolveProjectFile } from './project-files'
 import { assertProjectId } from './projects'
 import type { Logger } from './logger'
@@ -11,7 +12,7 @@ import { MANIFEST_PATH } from './manifest'
 /** Só nomes fixos e caminhos conferidos; nunca segue um nome vindo do manifesto rejeitado. */
 async function rawInfo(dir: string): Promise<{ bytes: number; active: boolean }> {
   let bytes = 0, active = false
-  for (const rel of [RAW_SCREEN, RAW_CAMERA, RAW_MIC]) {
+  for (const rel of [RAW_SCREEN, RAW_CAMERA, RAW_MIC, RAW_MIC_PCM]) {
     const file = await resolveProjectFile(dir, rel)
     const info = await stat(file).catch((err: NodeJS.ErrnoException) => { if (err.code === 'ENOENT') return null; throw err })
     if (!info?.isFile()) continue
@@ -49,9 +50,9 @@ export async function loadRecovery(root: string, id: string): Promise<{ dir: str
   const dir = await resolveProjectFile(root, id)
   const manifest = await readManifest(dir)
   if (manifest.screen && manifest.screen.file !== RAW_SCREEN) throw new Error('Caminho de tela inválido no manifesto de gravação.')
-  if (manifest.camera && ![RAW_CAMERA, RAW_MIC].includes(manifest.camera.file)) throw new Error('Caminho de câmera inválido no manifesto de gravação.')
+  if (manifest.camera && ![RAW_CAMERA, RAW_MIC, RAW_MIC_PCM].includes(manifest.camera.file)) throw new Error('Caminho de câmera inválido no manifesto de gravação.')
   let bytes = 0
-  for (const rel of [manifest.screen?.file, manifest.camera?.file]) {
+  for (const rel of new Set([manifest.screen?.file, manifest.camera?.file, ...(manifest.micPcm ? [RAW_MIC_PCM] : [])])) {
     if (!rel) continue
     const path = await resolveProjectFile(dir, rel)
     const info = await stat(path).catch((err: NodeJS.ErrnoException) => { if (err.code === 'ENOENT') return null; throw err })
@@ -116,11 +117,22 @@ async function rawDuration(ff: Ffmpeg, path: string): Promise<number> {
 export async function finalizeInterrupted(dir: string, manifest: RecordingManifest, ff: Ffmpeg): Promise<void> {
   if (!manifest.clock) throw new Error('A gravação não tem o relógio de início. Os pedaços foram preservados em raw/.')
   let mediaMs = 0
-  for (const rel of [manifest.screen?.file, manifest.camera?.file]) {
+  for (const rel of new Set([manifest.screen?.file, manifest.camera?.file, ...(manifest.micPcm ? [RAW_MIC_PCM] : [])])) {
     if (!rel) continue
     const path = await resolveProjectFile(dir, rel)
     const info = await stat(path).catch(() => null)
     if (!info || info.size === 0) continue
+    if (rel === RAW_MIC_PCM) {
+      if (info.nlink > 1) throw new Error('O bruto PCM tem um link físico para outro arquivo; a recuperação foi recusada.')
+      const handle = await open(path, 'r+')
+      try {
+        await validatePcmHeader(handle)
+        // Queda no meio da escrita: restaura o tamanho real, até a última amostra completa.
+        const complete = 44 + Math.floor((info.size - 44) / 4) * 4
+        await handle.truncate(complete)
+        await checkpointPcm(handle, complete)
+      } finally { await handle.close() }
+    }
     mediaMs = Math.max(mediaMs, await rawDuration(ff, path))
   }
   if (mediaMs <= 0) throw new Error('Não consegui encontrar duração nos pedaços gravados. O bruto foi preservado em raw/.')

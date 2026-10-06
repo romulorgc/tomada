@@ -7,7 +7,7 @@ import {
   buildMeasureArgs,
   buildMuxArgs,
   buildSilentAudioArgs,
-  cadeiaDeVoz,
+  voiceChainCompensated,
   loudnormFilter,
   parseLoudnormMeasure,
   segmentChain,
@@ -55,14 +55,14 @@ describe('trecho de áudio', () => {
 
 describe('grafo de áudio', () => {
   it('voz + som do sistema: asplit, atrim, concat, limpeza só na voz, −9 dB no sistema, mistura e loudnorm', () => {
-    const g = buildAudioGraph({ kept, voice, system, mode: 'final', measured: measure })
+    const g = buildAudioGraph({ kept, voice, system, mode: 'final', measured: measure, noiseFloorDb: -53.2 })
     expect(g.out).toBe('aout')
     expect(g.graph).toContain('[0:a]asplit=3[vs0][vs1][vs2]')
     expect(g.graph).toContain('[1:a]asplit=3[ys0][ys1][ys2]')
     expect(g.graph.match(/concat=n=3:v=0:a=1/g)).toHaveLength(2)
     // a limpeza da voz desconta a latência do afftdn (1200 amostras) e fecha na duração exata (2000 + 2500 + 3200 ms)
     expect(g.graph).toContain(
-      'highpass=f=80,afftdn=nr=12:nf=-45,atrim=start_sample=1200,asetpts=PTS-STARTPTS,deesser=i=0.4,acompressor=threshold=-18dB:ratio=3:attack=15:release=180,apad=whole_dur=7.700000,atrim=end=7.700000,asetpts=PTS-STARTPTS,pan=stereo|c0=c0|c1=c0[voz]'
+      'highpass=f=80,apad=pad_len=1200,afftdn=nr=6:nf=-53.20:gs=5,atrim=start_sample=1200,asetpts=PTS-STARTPTS,deesser=i=0.15:m=0.25,acompressor=threshold=-18dB:ratio=1.5:attack=20:release=180,apad=whole_dur=7.700000,atrim=end=7.700000,asetpts=PTS-STARTPTS,pan=stereo|c0=c0|c1=c0[voz]'
     )
     expect(g.graph).toContain('highpass=f=60,volume=-9dB[sis]')
     expect(g.graph).not.toMatch(/\[ycat\]highpass=f=80/) // o som do sistema não leva compressor nem deesser
@@ -112,18 +112,17 @@ describe('grafo de áudio', () => {
     expect((g.graph.match(/concat=n=600/g) ?? []).length).toBe(2)
   })
 
-  it('argumentos: medição, AAC 48 kHz 384 kbps, trilha muda e mux com faststart', () => {
+  it('argumentos: medição, AAC 48 kHz 320 kbps nos dois formatos, trilha muda e mux com faststart', () => {
     const measureArgs = buildMeasureArgs({ inputs: ['C:/t/v.wav'], graphFile: 'C:/t/g.txt' })
     expect(measureArgs).toEqual(expect.arrayContaining(['-loglevel', 'info', '-f', 'null']))
     expect(measureArgs.indexOf('-loglevel')).toBeLessThan(measureArgs.indexOf('-i'))
     const audio = buildAudioArgs({ inputs: ['C:/t/v.wav'], graphFile: 'C:/t/g.txt', output: 'C:/t/a.m4a' })
-    expect(audio).toEqual(expect.arrayContaining(['-c:a', 'aac', '-b:a', '384k', '-ar', '48000']))
+    expect(audio).toEqual(expect.arrayContaining(['-c:a', 'aac', '-b:a', '320k', '-ar', '48000']))
     expect(audio[audio.length - 1]).toBe('C:/t/a.m4a')
     const vertical = buildAudioArgs({ inputs: ['C:/t/v.wav'], graphFile: 'C:/t/g.txt', output: 'C:/t/a.m4a', bitrate: VERTICAL_AUDIO_BITRATE })
-    expect(VERTICAL_AUDIO_BITRATE).toBe('192k') // o vertical (TikTok, Reels, Shorts) leva AAC a 192 kbps
-    expect(vertical).toEqual(expect.arrayContaining(['-b:a', '192k', '-ar', '48000']))
+    expect(vertical).toEqual(expect.arrayContaining(['-b:a', '320k', '-ar', '48000']))
     expect(vertical).not.toContain('384k')
-    expect(buildSilentAudioArgs({ durationMs: 1000, output: 'C:/t/s.m4a', bitrate: VERTICAL_AUDIO_BITRATE })).toContain('192k')
+    expect(buildSilentAudioArgs({ durationMs: 1000, output: 'C:/t/s.m4a', bitrate: VERTICAL_AUDIO_BITRATE })).toContain('320k')
     const silent = buildSilentAudioArgs({ durationMs: 12_345, output: 'C:/t/s.m4a' })
     expect(silent).toEqual(expect.arrayContaining(['anullsrc=r=48000:cl=stereo', '12.345000']))
     const mux = buildMuxArgs({ video: 'C:/t/v.mp4', audio: 'C:/t/a.m4a', output: 'C:/t/f.mp4' })
@@ -150,13 +149,20 @@ describe('loudnorm', () => {
     expect(loudnormFilter()).toBe('loudnorm=I=-14:TP=-1:LRA=11')
   })
 
-  it('a cadeia de voz é a mesma do legado (cadeiaDeVoz de legado/lib/composicao.mjs)', async () => {
-    // o legado é JavaScript sem tipos: o caminho em variável evita o erro de declaração do TypeScript
-    const caminho = '../../legado/lib/composicao.mjs'
-    const legado = (await import(/* @vite-ignore */ caminho)) as { cadeiaDeVoz: (o?: unknown) => string }
-    expect(cadeiaDeVoz()).toBe(legado.cadeiaDeVoz())
-    expect(cadeiaDeVoz({ ganhoDb: 3 })).toBe(legado.cadeiaDeVoz({ ganhoDb: 3 }))
-    const medido = { input_i: '-20', input_tp: '-3', input_lra: '4', input_thresh: '-30', target_offset: '0.5' }
-    expect(cadeiaDeVoz({ medido })).toBe(legado.cadeiaDeVoz({ medido }))
+  it('sem silêncio confiável preserva as primeiras amostras e não inventa piso de ruído', () => {
+    for (const floor of [undefined, null, NaN, -Infinity]) {
+      const chain = voiceChainCompensated(1000, floor)
+      expect(chain).not.toContain('afftdn')
+      expect(chain).not.toContain('start_sample=1200')
+      expect(chain).toContain('highpass=f=80')
+      expect(chain).toContain('atrim=end=1.000000')
+    }
+  })
+
+  it('desconta latência uma vez quando o piso medido habilita o redutor', () => {
+    const chain = voiceChainCompensated(1000, -61.25)
+    expect(chain).toContain('nf=-61.25')
+    expect(chain.match(/afftdn=/g)).toHaveLength(1)
+    expect(chain.match(/start_sample=1200/g)).toHaveLength(1)
   })
 })

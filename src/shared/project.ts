@@ -8,6 +8,7 @@
  * não existe (a v1 era outro formato, em `legado/`).
  */
 import { z } from 'zod'
+import { audioQualitySchema } from './audio-quality'
 import { videoScriptSchema } from './script'
 import { retakeMarkSchema } from './retake-marker'
 import { pipelineSchema } from './autopilot'
@@ -283,6 +284,8 @@ const screenCropSchema = z.looseObject({
 })
 
 export const projectSchema = z.looseObject({
+  audioQuality: audioQualitySchema.optional(),
+  pcmSyncWarning: z.boolean().optional(),
   autoExclusions:autoExclusionsSchema.optional(),
   version: z.number().int().min(CURRENT_PROJECT_VERSION),
   id: z.string().min(1),

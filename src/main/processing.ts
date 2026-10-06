@@ -21,7 +21,7 @@ import type { LipSyncDetector } from './lip-sync'
 import { writeFileAtomic } from './fs-utils'
 import type { Ffmpeg } from './ffmpeg'
 import type { Logger } from './logger'
-import { writeManifest, type RecordingManifest } from './manifest'
+import { RAW_MIC_PCM, writeManifest, type RecordingManifest } from './manifest'
 import { extractAudio, makeThumbnail, normalizeVideo } from './normalize'
 import { PROJECT_FILE, THUMB_PATH } from './projects'
 import { applyOwnerEditingDefaults, type OwnerEditingDefaults } from '@shared/settings-defaults'
@@ -30,6 +30,9 @@ import { prepareEvents } from '@shared/scene'
 import { generateAutoZooms, zoomPresetFor } from '@shared/zoom'
 import { resolveProjectFile } from './project-files'
 import { commitToProject, createProjectTmpDir, removeTmpDir } from './safe-output'
+import { inspectProjectAudioQuality, audioQualityWarningMessages } from './audio-quality'
+import { measurePcmAlignment } from './pcm-alignment'
+import { audioQualityPtBR } from '@shared/audio-quality-messages'
 
 /** Estado que sobrevive entre uma tentativa e a seguinte (mesma sessão do app). */
 export type ProcessContext = {
@@ -67,7 +70,7 @@ export function stepsFor(manifest: RecordingManifest): ProcessStepId[] {
       case 'camera':
         return Boolean(manifest.camera?.hasVideo)
       case 'voice':
-        return Boolean(manifest.camera?.hasAudio)
+        return Boolean(manifest.micPcm || manifest.camera?.hasAudio)
       case 'system':
         return Boolean(manifest.screen?.hasSystemAudio)
       default:
@@ -208,7 +211,17 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
 
     async voice() {
       const cam = manifest.camera!
-      const probe = await produce('media/voice.wav', (out) => extractAudio(deps.ff, { input: rawPath(cam.file), output: out, channels: 1, sampleRate: 48_000 }))
+      if (manifest.micPcm) delete manifest.pcmAlignment
+      const input = await resolveProjectFile(dir, manifest.micPcm ? RAW_MIC_PCM : cam.file)
+      if (manifest.micPcm && cam.hasVideo && cam.hasAudio) {
+        const beforePauseMs = manifest.pauses[0] && manifest.clock ? manifest.pauses[0].start - manifest.clock.t0 - 150 : 8000
+        const alignment = await measurePcmAlignment(deps.ff, dir, cam.file, logger, beforePauseMs)
+        if (alignment) {
+          manifest.pcmAlignment = alignment
+          logger.info(`Voz PCM alinhada à referência de tempo do microfone: ${alignment.offsetMs.toFixed(3)} ms; correlação ${alignment.correlation.toFixed(5)}.`)
+        } else note(audioQualityPtBR.pcmSyncWarning)
+      }
+      const probe = await produce('media/voice.wav', (out) => extractAudio(deps.ff, { input, output: out, channels: 1, sampleRate: 48_000, ...(manifest.micPcm ? { losslessFloat: true, alignmentSamples: Math.round((manifest.pcmAlignment?.offsetMs ?? 0) * 48), durationMs: expectedMs } : {}) }))
       ctx.sources.voice = { path: 'media/voice.wav', w: 0, h: 0, fps: 0, durationMs: probe.durationMs }
       return undefined
     },
@@ -283,6 +296,12 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
       if (manifest.script) project.script = manifest.script
       if (manifest.cameraStyle) project.cameraStyle = manifest.cameraStyle
       project.retakeMarks = manifest.retakeMarks ?? []
+      if (manifest.micPcm && ((manifest.camera?.hasVideo && manifest.camera.hasAudio && !manifest.pcmAlignment)
+        || manifest.notes.some(message => message.startsWith('O áudio do microfone perdeu')))) project.pcmSyncWarning = true
+      if (project.sources.voice) {
+        project.audioQuality = await inspectProjectAudioQuality(dir, manifest.micPcm ? RAW_MIC_PCM : project.sources.voice.path)
+        for (const message of audioQualityWarningMessages(project.audioQuality)) note(message)
+      }
       const text = serializeProject(project)
       parseProject(text) // o que escrevemos precisa passar pelo mesmo esquema de quem lê
       await writeFileAtomic(join(dir, PROJECT_FILE), text)

@@ -32,6 +32,7 @@ import { assertDocumentPaths, resolveProjectFile } from './project-files'
 import type { ProjectStore } from './projects'
 import type { RecordingService } from './recording-service'
 import type { CameraService } from './camera/service'
+import type { MicVolumeService } from './mic-volume'
 import { CAMERA_KINDS, type CameraKind } from '@shared/camera-analysis'
 import type { TranscriptionService } from './transcription/service'
 import type { AppState } from './state'
@@ -47,6 +48,8 @@ import { stat } from 'node:fs/promises'
 import { defaultStyle } from '@shared/project'
 
 export type HandlerDeps = {
+  /** Volume de entrada do Windows dos microfones (a tela Gravar lê e, a pedido, sobe sozinha). Ausente = sem suporte. */
+  micVolume?: MicVolumeService
   diagnostics?: DiagnosticSystem
   calibration?: CameraCalibrationService
   autopilot?: AutopilotService
@@ -107,6 +110,19 @@ function cameraForce(force: unknown): boolean {
   if (force === undefined) return false
   if (typeof force !== 'boolean') throw new Error('Pedido de análise da câmera inválido (refazer).')
   return force
+}
+
+/** O rótulo do microfone vindo da interface: texto curto, sem caracteres de controle. Só serve para ESCOLHER entre os aparelhos da lista do Windows. */
+function micLabel(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 300) throw new Error('Nome de microfone inválido.')
+  return value.replace(/[\x00-\x1f\x7f]/g, ' ')
+}
+
+/** Ganho em dB pedido pela interface; o serviço ainda o limita à faixa do aparelho. */
+function micGainDb(value: unknown): number {
+  const db = finiteNumber(value, 'ganho do microfone')
+  if (db < -200 || db > 200) throw new Error('Ganho do microfone fora da faixa.')
+  return db
 }
 
 const CHUNK_KINDS: readonly ChunkKind[] = ['screen', 'camera', 'mic']
@@ -289,6 +305,8 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'record:status': async () => recording.status(),
     'record:mark-retake': () => recording.markRetake(),
     'record:preflight': () => recording.preflight(),
+    'record:mic-volume': (label) => deps.micVolume ? deps.micVolume.read(micLabel(label)) : Promise.resolve(null),
+    'record:mic-volume-set': (label, db) => deps.micVolume ? deps.micVolume.setDb(micLabel(label), micGainDb(db)) : Promise.resolve(null),
     'process:retry': (sessionId) => recording.retry(sessionId),
 
     'export:start': (request) => exporter.start(exportRequestSchema.parse(request)),
