@@ -152,7 +152,7 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
       dirty = true
       if (get().saveStatus !== 'saving') set({ saveStatus: 'saving' })
       if (timer !== undefined) clearTimeout(timer)
-      timer = setTimeout(() => void get().flush(), debounceMs)
+      timer = setTimeout(() => void get().flush().catch(() => undefined), debounceMs)
     }
 
     const fixSelection = (doc: Project): Pick<EditorState, 'selection'> | Record<string, never> =>
@@ -265,22 +265,25 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
         if (timer !== undefined) clearTimeout(timer)
         timer = undefined
         if (!dirty) return inflight
-        dirty = false
-        const doc = get().doc
         set({ saveStatus: 'saving' })
-        inflight = inflight.then(async () => {
+        inflight = inflight.catch(() => undefined).then(async () => {
+          const doc = get().doc
+          dirty = false
           try {
             await deps.save(doc, lastSubmitted)
             lastSubmitted = doc
+            dirty = get().doc !== doc
             if (!dirty) set({ saveStatus: 'saved', saveError: null })
           } catch (err) {
             dirty = true // a próxima mudança (ou um novo flush) tenta de novo
             const message = messageOf(err)
             set({ saveStatus: 'error', saveError: message })
             deps.onSaveError?.(message)
+            throw err
           }
         })
-        return inflight
+        // Uma edição durante o save também precisa chegar ao disco antes de liberar a exportação.
+        return inflight.then(() => dirty ? get().flush() : undefined)
       },
 
       dispose() {

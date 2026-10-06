@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, realpath, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readManifest, writeManifest, type RecordingManifest } from '../../src/main/manifest'
@@ -22,6 +22,8 @@ async function seed(root: string, over: Partial<RecordingManifest> = {}) {
     ...over
   }
   await writeManifest(dir, manifest)
+  const old = new Date(Date.now() - 20000)
+  await utimes(join(dir, 'raw/camera.webm'), old, old)
   return { dir, folder }
 }
 
@@ -33,11 +35,11 @@ describe('gravações interrompidas', () => {
     await world.service.started({ t0: 1_000_000, screenStartAt: 1_000_000, cameraStartAt: null, frame: { w: 640, h: 360 }, clockOffsetMs: 0, clockRttMs: 1, screenMime: 'video/webm', cameraMime: null, screenHasAudio: false, cursorHidden: false, cameraHasVideo: false, cameraHasAudio: false, cameraSize: null, startEventLagMs: { screen: 0, camera: null } })
     const dir = join(root, prepared.folder)
     await world.service.chunk('screen', new Uint8Array([1, 2, 3]))
-    expect((await readManifest(dir)).lastChunkAt).toBeGreaterThan(1_000_000)
+    await expect.poll(async () => (await readManifest(dir)).lastChunkAt).toBeGreaterThan(1_000_000)
     await world.service.pause(1_000_100)
-    expect((await readManifest(dir)).openPauseAt).toBe(1_000_100)
+    await expect.poll(async () => (await readManifest(dir)).openPauseAt).toBe(1_000_100)
     await world.service.resume(1_000_200)
-    expect((await readManifest(dir)).pauses).toEqual([{ start: 1_000_100, end: 1_000_200 }])
+    await expect.poll(async () => (await readManifest(dir)).pauses).toEqual([{ start: 1_000_100, end: 1_000_200 }])
     await world.service.pause(1_000_300)
     await world.service.shutdown()
     expect((await readManifest(dir)).openPauseAt).toBe(1_000_300)
@@ -77,6 +79,8 @@ describe('gravações interrompidas', () => {
   it('recupera WebM aberto cujo cabeçalho não tem Duration, só pelos pacotes gravados', async () => {
     const root = tmp(), { dir, folder } = await seed(root)
     await ff.run(['-i', FIX.camera, '-t', '1.2', '-c', 'copy', '-live', '1', join(dir, 'raw/camera.webm')])
+    const old = new Date(Date.now() - 20000)
+    await utimes(join(dir, 'raw/camera.webm'), old, old)
     expect((await ff.probe(join(dir, 'raw/camera.webm'))).durationMs).toBe(0)
     const world = createFakeWorld({ root, ffmpeg: ff })
     await world.service.recoverInterrupted(folder)

@@ -8,6 +8,8 @@ import type { ExportService } from '../../src/main/export-service'
 import type { TranscriptionService } from '../../src/main/transcription/service'
 import type { LlmManager } from '../../src/main/llm/manager'
 import { createMemoryLogger } from '../../src/main/logger'
+import { createMockProvider } from '../../src/main/llm/mock'
+import type { LlmProvider } from '../../src/main/llm/provider'
 import { DEFAULT_AUTOPILOT, newPipeline } from '../../src/shared/autopilot'
 import { createProject } from '../../src/shared/project'
 import { itemOf, reviewDocument, type ReviewItem } from '../../src/shared/review'
@@ -36,7 +38,7 @@ function addClip(doc: Project): void {
   doc.clips = [{ id: 'clip-1', title: 'Agenda', hook: 'Organize agora', ranges: [{ start: 0, end: 20_000 }], score: 80, reason: 'Demonstração sintética', format: 'vertical', layoutV: 'auto', source: 'manual' }]
 }
 
-async function world(initial: Project) {
+async function world(initial: Project, provider: LlmProvider | null = null) {
   const dir = tmp()
   await Promise.all(['media', 'events', 'exports'].map((folder) => mkdir(join(dir, folder), { recursive: true })))
   let stored = structuredClone(initial)
@@ -69,13 +71,38 @@ async function world(initial: Project) {
     exporter: exporter as unknown as ExportService,
     transcription: transcription as unknown as TranscriptionService,
     derived: { levels: async () => null, peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, idle: async () => undefined, shutdown: () => undefined },
-    llm: { provider: () => null } as unknown as LlmManager,
+    llm: { provider: () => provider } as unknown as LlmManager,
     logger: createMemoryLogger(), prefs: () => prefs, emit: vi.fn(), ready
   })
   return { service, dir, start, rendered, ready, prefs, read, write, project: () => structuredClone(stored) }
 }
 
 describe('integração dos ajustes e da retomada do piloto automático', () => {
+  it('sem título da IA, publicação usa o título que o usuário já deu', async () => {
+    const doc = baseProject()
+    doc.title = 'Título escolhido pelo usuário'
+    const w = await world(doc)
+    w.prefs.mode = 'prepare'
+    for (const key of Object.keys(w.prefs.steps) as (keyof typeof w.prefs.steps)[]) w.prefs.steps[key] = key === 'publish'
+    await w.service.start(id)
+    expect(w.project().meta?.youtube?.titles?.[0]).toBe('Título escolhido pelo usuário')
+    expect(w.project().title).toBe('Título escolhido pelo usuário')
+  })
+  it.each([['', 'Veja a agenda.'], ['Título do usuário', 'Título do usuário']])('fallback de publicação respeita título %s ou usa a transcrição', async (title, expected) => {
+    const doc = baseProject(); doc.title = title
+    const w = await world(doc)
+    w.prefs.mode = 'prepare'; w.prefs.steps = Object.fromEntries(['transcribe','clean','zooms','layouts','captions','youtube','clips','clipExports','notify'].map(k => [k, false]))
+    await w.service.start(id)
+    expect(w.project().title).toBe(expected)
+  })
+  it('título da publicação recebido da IA precede título provisório de projeto e roteiro', async () => {
+    const doc = baseProject()
+    doc.script = { title: 'Roteiro provisório', hook: 'Teste', topics: ['Um','Dois','Três'], closing: 'Fim' }
+    const w = await world(doc, createMockProvider())
+    w.prefs.mode = 'prepare'; w.prefs.steps = Object.fromEntries(['transcribe','clean','zooms','layouts','captions','youtube','clips','clipExports','notify'].map(k => [k, false]))
+    await w.service.start(id)
+    expect(w.project().title).toBe('Título de teste')
+  })
   it('desligar a etapa de zoom remove segmentos automáticos dos dois formatos e conserva os manuais', async () => {
     const doc = baseProject()
     const auto = {id:'auto',start:1000,end:3000,scale:1.4,focus:'auto' as const,origin:'auto' as const}

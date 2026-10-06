@@ -1,6 +1,6 @@
 /** Uma hora REAL de mídia sintética + eventos 120 Hz + 9.000 palavras, sem dado do usuário. */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { createProject, serializeProject } from '../../src/shared/project'
@@ -54,12 +54,15 @@ test('na próxima abertura oferece recuperar o bruto, pede descarte explícito e
     const dir = join(session.projects, id)
     mkdirSync(join(dir, 'raw'), { recursive: true })
     execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', join(FIXTURES_DIR, 'camera.webm'), '-t', '1.2', '-c', 'copy', '-live', '1', join(dir, 'raw/camera.webm')], { windowsHide: true })
+    const old = new Date(Date.now() - 20000)
+    utimesSync(join(dir, 'raw/camera.webm'), old, old)
     writeFileSync(join(dir, 'raw/recording.json'), JSON.stringify({ version: 1, sessionId: id, folder: id, title: id, createdAt: '2026-10-05T12:00:00Z', mode: 'camera', fps: 30, screen: null, camera: { file: 'raw/camera.webm', mime: 'video/webm', hasVideo: true, hasAudio: true, size: { w: 640, h: 360 } }, clock: { t0: 100_000, cameraStartAt: 100_000, screenStartAt: null, offsetMs: 0, rttMs: 1 }, pauses: [], openPauseAt: 101_500, lastChunkAt: 101_500, endedAt: null, stopReason: null, recordedMs: null, notes: [], saved: null, processedAt: null }))
   }
   await session.close({ keep: true })
   // Mantém a referência: afterEach também limpa a base caso o segundo lançamento falhe.
   session = await launchTomada({ base, env: { TOMADA_TEST_FAIL_STEP: 'camera' } })
   await expect(session.page.getByTestId('recovery-prompt')).toBeVisible()
+  await expect(session.page.getByTestId('recovery-item').first()).toContainText('cursor, cliques e teclas')
   await session.page.getByTestId('recovery-later').click()
   await expect(session.page.getByTestId('recovery-prompt')).toHaveCount(0)
   expect(existsSync(join(session.projects, 'Recuperar teste', 'raw/camera.webm'))).toBe(true)

@@ -466,10 +466,14 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     } catch (err) {
       if (run.protectionInvalidated) {
         // Só arquivos novos criados por ESTA execução; placeFinal/writeTextBeside jamais sobrescrevem.
-        if (run.placedFinal) await rm(run.finalPath, { force: true }).catch(() => undefined)
-        if (run.placedText) await rm(run.placedText, { force: true }).catch(() => undefined)
+        const remaining: string[] = []
+        for (const file of [run.placedFinal ? run.finalPath : null, run.placedText]) {
+          if (!file) continue
+          try { await rm(file, { force: true }) }
+          catch (removeError) { logger.warn(`Não consegui apagar a saída invalidada ${file}.`, removeError); remaining.push(`Apague ${file}; ele saiu sem a proteção nova.`) }
+        }
         logger.warn(`Exportação ${run.id} invalidada porque a proteção de dados mudou.`)
-        setPhase(run, 'error', { message: PROTECTION_CHANGED_MESSAGE, outputPath: undefined, textPath: undefined, report: undefined })
+        setPhase(run, 'error', { message: [PROTECTION_CHANGED_MESSAGE, ...remaining].join(' '), outputPath: undefined, textPath: undefined, report: undefined })
       } else if (run.cancelled || err instanceof CancelledError) {
         logger.info(`Exportação ${run.id} cancelada.`)
         setPhase(run, 'cancelled', { message: 'Exportação cancelada.' })

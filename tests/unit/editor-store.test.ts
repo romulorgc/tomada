@@ -194,7 +194,7 @@ describe('salvamento automático', () => {
     store.getState().change(setTitle('B')) // durante a primeira gravação
     release()
     await vi.advanceTimersByTimeAsync(0)
-    expect(store.getState().saveStatus).toBe('saving') // B ainda não foi
+    expect(store.getState().saveStatus).toBe('saved') // flush também espera B, que chegou durante A
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     expect(calls).toEqual(['A', 'B'])
     expect(store.getState().saveStatus).toBe('saved')
@@ -258,7 +258,7 @@ describe('salvamento automático', () => {
     const { store, saved, fail } = harness()
     fail.value = new Error('sem permissão')
     store.getState().change(setTitle('A'))
-    await store.getState().flush()
+    await expect(store.getState().flush()).rejects.toThrow('sem permissão')
     expect(store.getState().saveStatus).toBe('error')
     fail.value = null
     await store.getState().flush()

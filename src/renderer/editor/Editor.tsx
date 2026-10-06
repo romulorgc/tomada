@@ -185,7 +185,10 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
     () =>
       createClipQueue({
         projectId: detail.id,
-        flush: () => store.getState().flush(),
+        flush: async () => {
+          await store.getState().flush()
+          if (store.getState().saveStatus !== 'saved') throw new Error(t.editor.export.saveFailed)
+        },
         startExport: (req) => window.tomada.exporter.start(req),
         cancelExport: (id) => window.tomada.exporter.cancel(id),
         onProgress: (listener) => window.tomada.on('export:progress', listener),
@@ -513,13 +516,18 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   }, [transcript.status, transcript.data, detail.id, store, durationMs, notify])
 
   // --- exportação ---------------------------------------------------------------------------------------------
-  const flush = useCallback(() => store.getState().flush(), [store])
+  const flush = useCallback(async () => {
+    try {
+      await store.getState().flush()
+      if (store.getState().saveStatus !== 'saved') throw new Error(t.editor.export.saveFailed)
+    } catch (err) { throw new Error(`${t.editor.export.saveFailed}. ${err instanceof Error ? err.message : String(err)}`) }
+  }, [store])
   const exporter = useExportController(detail.id, flush,itemId)
 
   // Ao fechar o projeto, o que ainda não foi gravado vai para o disco.
   useEffect(
     () => () => {
-      void store.getState().flush()
+      void store.getState().flush().catch(() => undefined)
       store.getState().dispose()
     },
     [store]
@@ -530,6 +538,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       .getState()
       .flush()
       .then(() => go(itemId ? { name:'review',id:detail.id } : { name: 'library' }))
+      .catch(() => undefined)
   }, [store, go, itemId, detail.id])
 
   const value = useMemo<EditorCtx>(

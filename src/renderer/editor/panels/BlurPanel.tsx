@@ -15,6 +15,7 @@ export function BlurPanel() {
   const selected = selection?.kind === 'blur' ? regions?.find(r => r.id === selection.id) : undefined
   const ops = useEditorOps()
   return <div className="panel" data-testid="blur-panel">
+    <p className="ctl-note">{T.limits}</p>
     <Section title={T.title}>
       <p className="ctl-note">{T.hint}</p>
       <button className="btn btn-wide" type="button" disabled={!hasScreen} aria-pressed={drawing} data-testid="blur-draw" onClick={() => { engineRef.current?.pause(); store.getState().setBlurDrawing(!drawing) }}>{drawing ? T.drawing : T.draw}</button>

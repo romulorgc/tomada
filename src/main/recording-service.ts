@@ -47,7 +47,7 @@ import type { PreflightResult } from '@shared/preflight'
 import { estimateRecordingBytes, type DiskEstimate } from '@shared/disk'
 import type { InterruptedRecording } from '@shared/recovery'
 import { checkDiskSpace, diskWarning } from './disk-space'
-import { finalizeInterrupted, isInterrupted, listRecoveries, loadRecovery } from './recording-recovery'
+import { assertRawInactive, finalizeInterrupted, isInterrupted, listRecoveries, loadRecovery, unreadableRecoveryDir } from './recording-recovery'
 import { checkPreflight } from './preflight'
 import { assertProjectId } from './projects'
 import { resolveProjectFile } from './project-files'
@@ -195,6 +195,14 @@ type Session = {
   closed: boolean
   /** Fila das escritas aceitas: fechar a sessão espera esta fila esvaziar antes de fechar os arquivos. */
   writes: Promise<unknown>
+  eventsTimer?: ReturnType<typeof setInterval>
+  eventsSaving?: boolean
+  eventWrites?: Promise<void>
+  manifestWrites?: Promise<void>
+  manifestSaving?: boolean
+  checkpointRequested?: boolean
+  checkpointFailedAt?: number
+  checkpointWarned?: boolean
 }
 
 const COUNTDOWN_SECONDS = 3
@@ -252,7 +260,10 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
   /** Encerra a sessão para novas escritas, espera as que já foram aceitas e fecha os arquivos. */
   async function closeFiles(s: Session): Promise<void> {
     s.closed = true
+    if (s.eventsTimer) clearInterval(s.eventsTimer)
     await s.writes
+    await s.manifestWrites
+    await s.eventWrites
     for (const slot of s.files.values()) {
       try {
         await slot.handle.sync().catch(() => undefined)
@@ -265,6 +276,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
   }
 
   async function stopTrackerQuietly(s: Session): Promise<TrackerResult | null> {
+    if (s.eventsTimer) clearInterval(s.eventsTimer)
     if (!s.tracker) return null
     try {
       const r = await s.tracker.stop()
@@ -276,6 +288,43 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     } finally {
       s.tracker = null
     }
+  }
+
+  async function saveRawEvents(s: Session, raw: RawEvents): Promise<void> {
+    const file = await resolveProjectFile(s.dir, 'raw/events.json')
+    await writeFileAtomic(file, JSON.stringify(raw))
+  }
+
+  async function checkpointManifest(s: Session): Promise<void> {
+    try {
+      await writeManifest(s.dir, s.manifest)
+      s.checkpointFailedAt = undefined
+      s.checkpointWarned = false
+    } catch (err) {
+      logger.warn('Falha no checkpoint do manifesto; vou tentar no próximo pedaço.', err)
+      s.checkpointFailedAt ??= deps.clock()
+      if (!s.checkpointWarned && deps.clock() - s.checkpointFailedAt >= 30_000) {
+        s.checkpointWarned = true
+        deps.emit('record:notice', { kind: 'info', text: 'A gravação continua, mas não consegui salvar os metadados há 30 s. A recuperação pode perder os últimos ajustes de pausa.', detail: messageOf(err) })
+      }
+    }
+  }
+
+  /** Coalesce o estado mais recente sem reter pedaços de vídeo atrás do metadado. */
+  function queueManifestCheckpoint(s: Session): Promise<void> {
+    s.checkpointRequested = true
+    if (!s.manifestSaving) {
+      s.manifestSaving = true
+      s.manifestWrites = (async () => {
+        try {
+          do {
+            s.checkpointRequested = false
+            await checkpointManifest(s)
+          } while (s.checkpointRequested)
+        } finally { s.manifestSaving = false }
+      })()
+    }
+    return s.manifestWrites!
   }
 
   function leaveRecordingUi(): void {
@@ -300,7 +349,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     }
   }
 
-  async function startProcessing(s: Session, rawEvents: TrackerResult['raw'] | null): Promise<void> {
+  async function startProcessing(s: Session, rawEvents: TrackerResult['raw'] | null, manifestError: string | null = null): Promise<void> {
     const ff = deps.ffmpeg()
     const ctx = createProcessContext({ dir: s.dir, manifest: s.manifest, rawEvents })
     processing = { ctx, snapshot: { sessionId: s.id, folder: s.folder, status: 'running', steps: [], notes: [] }, running: true }
@@ -314,6 +363,11 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       return
     }
     processing.running = false
+    if (manifestError) {
+      processing.snapshot = { ...processing.snapshot, status: 'failed', error: { step: 'save', message: `Não consegui salvar o manifesto final: ${manifestError}. O bruto está preservado; clique em "Tentar de novo".` } }
+      deps.emit('process:progress', processing.snapshot)
+      return
+    }
     if (!ff) {
       const message = 'Não encontrei o ffmpeg. A gravação bruta está salva em raw/; escolha o ffmpeg nos Ajustes e clique em "Tentar de novo".'
       processing.snapshot = {
@@ -416,6 +470,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
   function recoverInterrupted(id: string): Promise<{ sessionId: string }> {
     return recoveryAction(async () => {
       const { dir, manifest, bytes } = await loadRecovery(deps.projectsRoot(), id)
+      await assertRawInactive(dir)
       if (!isInterrupted(manifest) || bytes === 0) throw new Error('Essa gravação não tem pedaços interrompidos para recuperar.')
       const ff = deps.ffmpeg()
       if (!ff) throw new Error('Não encontrei o ffmpeg. Escolha-o nos Ajustes e tente recuperar de novo; os pedaços continuam no disco.')
@@ -680,6 +735,18 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
         })
       }
       s.shortcuts = { stop: hotkeys.stop, pause: hotkeys.pause }
+      s.eventsTimer = setInterval(() => {
+        if (s.closed) return
+        // Pausado também precisa repetir o metadado que falhou, mesmo sem novos pedaços.
+        if (s.checkpointFailedAt !== undefined) {
+          void queueManifestCheckpoint(s)
+        }
+        // Um checkpoint lento é coalescido e não ocupa a fila de mídia.
+        if (!s.tracker || s.eventsSaving) return
+        s.eventsSaving = true
+        const raw = s.tracker.snapshot()
+        s.eventWrites = saveRawEvents(s, raw).catch(err => logger.warn('Não consegui salvar o checkpoint de cursor, cliques e teclas.', err)).finally(() => { s.eventsSaving = false })
+      }, 1000)
       barSnapshot = makeBarState(s, 'recording')
       deps.windows.showBar(barSnapshot, s.source?.displayBoundsDip ?? null)
       if (prompter) {
@@ -702,7 +769,6 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
       // Escritas em fila: fechar a sessão (parar, descartar, sair) espera as aceitas e recusa as novas.
       const job = s.writes.then(async () => {
-        if (s.closed) return
         try {
           let slot = s.files.get(kind)
           if (!slot) {
@@ -719,7 +785,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           s.manifest.lastChunkAt = rendererNow(s)
           s.manifest.pauses = [...s.pauses]
           s.manifest.openPauseAt = s.openPause
-          await writeManifest(s.dir, s.manifest)
+          void queueManifestCheckpoint(s)
         } catch (err) {
           const message = messageOf(err)
           if (!s.writeError) {
@@ -740,7 +806,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       s.openPause = at
       s.manifest.openPauseAt = at
       s.manifest.pauses = [...s.pauses]
-      await writeManifest(s.dir, s.manifest)
+      void queueManifestCheckpoint(s)
       s.tracker?.pause()
       setStatus('paused')
       pushBar('paused')
@@ -753,7 +819,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       s.openPause = null
       s.manifest.openPauseAt = null
       s.manifest.pauses = [...s.pauses]
-      await writeManifest(s.dir, s.manifest)
+      void queueManifestCheckpoint(s)
       s.tracker?.resume()
       setStatus('recording')
       pushBar('recording')
@@ -786,14 +852,18 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       if (s.writeError) s.manifest.notes.push(`Erro de escrita em disco: ${s.writeError}`)
       if (tracked?.error) s.manifest.notes.push(`O rastreador do mouse falhou durante a gravação: ${tracked.error.split('\n')[0]}`)
       if (tracked?.windowGone) s.manifest.notes.push('A janela gravada foi fechada durante a gravação.')
-      await writeManifest(s.dir, s.manifest)
+      let manifestError: string | null = null
+      try { await writeManifest(s.dir, s.manifest) } catch (err) {
+        manifestError = messageOf(err)
+        logger.warn('Não consegui salvar o manifesto final; o processamento permitirá tentar de novo.', err)
+      }
       logger.info(`Gravação parada (${info.reason}): ${s.folder}, ${s.manifest.recordedMs === null ? '?' : (s.manifest.recordedMs / 1000).toFixed(1)} s gravados, ${pauses.length} pausa(s).`)
 
       const id = s.id
       session = null
       setStatus('idle')
       // O processamento corre em segundo plano; a interface acompanha por `process:progress`.
-      void startProcessing(s, tracked?.raw ?? null).catch((err) => logger.error('Falha inesperada no processamento.', err))
+      void startProcessing(s, tracked?.raw ?? null, manifestError).catch((err) => logger.error('Falha inesperada no processamento.', err))
       return { sessionId: id }
     },
 
@@ -830,7 +900,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     recover,
     diskSpace: recordingDiskSpace,
     async listInterrupted() {
-      const items = await listRecoveries(deps.projectsRoot())
+      const items = await listRecoveries(deps.projectsRoot(), logger)
       return items.filter((item) => item.sessionId !== session?.id).map((item) => {
         const error = processing?.ctx.manifest.sessionId === item.sessionId ? processing.snapshot.error?.message : undefined
         return error ? { ...item, error } : item
@@ -839,7 +909,15 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     recoverInterrupted,
     discardInterrupted(id) {
       return recoveryAction(async () => {
-        const { dir, manifest } = await loadRecovery(deps.projectsRoot(), id)
+        let loaded: Awaited<ReturnType<typeof loadRecovery>>
+        try { loaded = await loadRecovery(deps.projectsRoot(), id) } catch (err) {
+          const dir = await unreadableRecoveryDir(deps.projectsRoot(), id)
+          logger.warn('Descartando bruto com manifesto ilegível após confirmação.', err)
+          await deps.trash(dir)
+          return
+        }
+        const { dir, manifest } = loaded
+        await assertRawInactive(dir)
         if (!isInterrupted(manifest)) throw new Error('Essa gravação já foi processada; apague o projeto pela Biblioteca.')
         await deps.trash(dir)
         if (processing?.ctx.manifest.sessionId === manifest.sessionId) processing = null
@@ -878,12 +956,13 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       const s = session
       deps.windows.unregisterHotkeys()
       if (s) {
-        await stopTrackerQuietly(s)
+        const tracked = await stopTrackerQuietly(s)
         await closeFiles(s)
+        if (tracked) await saveRawEvents(s, tracked.raw).catch(err => logger.warn('Não consegui salvar cursor, cliques e teclas ao fechar.', err))
         s.manifest.pauses = [...s.pauses]
         s.manifest.openPauseAt = s.openPause
         s.manifest.notes.push('O app foi fechado durante a gravação; o bruto está em raw/.')
-        await writeManifest(s.dir, s.manifest).catch(() => undefined)
+        await writeManifest(s.dir, s.manifest).catch(err => logger.warn('Não consegui salvar o manifesto ao fechar.', err))
       }
     }
   }

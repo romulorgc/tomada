@@ -27,6 +27,9 @@ const vivo = pid => {
 
 // Bateria de quem não usa a fila. Wrappers esperando e shells que contêm chamadas
 // futuras não são runners; scripts/limpo executando o CLI e npm de e2e são.
+let falhasConsulta = 0
+let avisouConsulta = false
+let primeiraFalha = 0
 function outraBateria() {
   const ps = 'Get-CimInstance Win32_Process | Where-Object { $_.Name -in @("node.exe", "electron.exe", "cmd.exe", "npm.exe", "playwright.exe") } | Select-Object Name,CommandLine | ConvertTo-Json -Compress'
   try {
@@ -36,9 +39,22 @@ function outraBateria() {
       timeout: 20000
     })
     const metadata = JSON.parse(out.trim() || '[]')
+    falhasConsulta = 0
+    avisouConsulta = false
+    primeiraFalha = 0
     return hasTestRunner(Array.isArray(metadata) ? metadata : [metadata])
-  } catch {
-    return true // sem consulta confiável, continua esperando; não abre outra bateria
+  } catch (err) {
+    falhasConsulta++
+    if (falhasConsulta === 1) primeiraFalha = Date.now()
+    if (!avisouConsulta) {
+      console.warn(`[fila-pesada] não consegui consultar os processos: ${err instanceof Error ? err.message : String(err)}`)
+      avisouConsulta = true
+    }
+    if (falhasConsulta >= 8 || Date.now() - primeiraFalha >= 120000) {
+      console.warn(`[fila-pesada] a consulta falhou ${falhasConsulta} vezes seguidas; seguindo com a trava compartilhada. Confira se há bateria fora da fila.`)
+      return false
+    }
+    return true
   }
 }
 

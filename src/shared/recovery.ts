@@ -7,4 +7,5 @@ export type InterruptedRecording = {
   recordedMs: number | null
   bytes: number
   error?: string
+  warning?: string
 }

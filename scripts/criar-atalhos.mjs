@@ -75,7 +75,7 @@ export function encodeVbs(script) {
   return Buffer.from(`\uFEFF${script}`, 'utf16le')
 }
 
-const psLiteral = value => `'${value.replace(/'/g, "''")}'`
+const psLiteral = value => `'${value.replace(/['\u2018\u2019\u201a\u201b]/gu, quote => quote + quote)}'`
 
 function assertOutsideApp(appDir, launchDir) {
   const relative = path.win32.relative(appDir.toLowerCase(), launchDir.toLowerCase())

@@ -29,6 +29,8 @@ export interface Tracker {
   start(): Promise<void>
   pause(): void
   resume(): void
+  /** Fotografia dos lotes já recebidos, sem parar a amostragem. */
+  snapshot(): RawEvents
   stop(): Promise<TrackerResult>
   readonly running: boolean
 }
@@ -140,6 +142,10 @@ export function createTracker(config: TrackerConfig, deps: TrackerDeps): Tracker
 
     resume() {
       Atomics.store(control, 1, 0)
+    },
+
+    snapshot() {
+      return structuredClone(raw)
     },
 
     async stop() {

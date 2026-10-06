@@ -13,13 +13,36 @@ import { createOutputDirs } from '../../src/main/path-guard'
 import { useTmpDir } from '../helpers/env'
 
 const tmp = useTmpDir('tomada-m5a-protecao-')
-const copyHook = vi.hoisted(() => ({ beforeCopy: null as null | (() => Promise<void>) }))
+const copyHook = vi.hoisted(() => ({ beforeCopy: null as null | (() => Promise<void>), afterLink: null as null | ((path: string) => void), refuseRm: null as string | null }))
 vi.mock('node:fs/promises', async (original) => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual, copyFile: async (...args: Parameters<typeof actual.copyFile>) => {
     await copyHook.beforeCopy?.()
     return actual.copyFile(...args)
-  } }
+  }, link: async (...args: Parameters<typeof actual.link>) => { await actual.link(...args); copyHook.afterLink?.(String(args[1])) },
+    rm: async (...args: Parameters<typeof actual.rm>) => { if (String(args[0]) === copyHook.refuseRm) throw new Error('EPERM: arquivo bloqueado'); return actual.rm(...args) } }
+})
+
+it('arquivo invalidado que não pode ser apagado aparece com caminho e causa no log', async () => {
+  const dir = tmp(); await mkdir(join(dir, 'media'))
+  await writeFile(join(dir, 'media/screen.mp4'), 'Fonte sintética')
+  const base = createProject({ id: 'invalidado', title: 'Sintético', sources: { screen: { path: 'media/screen.mp4', w: 1920, h: 1080, fps: 30, durationMs: 2000 } } })
+  const logger = createMemoryLogger()
+  const ff = { run: async (args: string[]) => { await writeFile(args.at(-1)!, 'Saída sintética'); return { stderr: '', stdout: '' } },
+    probe: async () => ({ durationMs: 2000, streams: [{ type: 'video', durationMs: 2000, width: 1920, height: 1080, fps: 30, rFps: 30, nbFrames: 60 }, { type: 'audio', durationMs: 2000 }] }) } as unknown as Ffmpeg
+  let service!: ExportService
+  let finalPath = ''
+  service = createExportService({ logger, read: async () => ({ dir, project: base }), outputDirs: createOutputDirs(), ffmpeg: () => ff, words: async () => null, now: () => performance.now(), emit: () => undefined,
+    openExporterWindow: id => { setTimeout(() => service.finish(id, { ok: true, frames: 60, encoder: 'simulado' }), 0); return { destroy: () => undefined } } })
+  copyHook.afterLink = path => { finalPath = path; copyHook.refuseRm = path; service.protectionChanged(base.id) }
+  try {
+    const { exportId } = await service.start({ projectId: base.id, resolution: '1080p', fps: 30 })
+    await service.idle()
+    expect(finalPath).not.toBe('')
+    expect(service.status(exportId)?.message).toContain(`Apague ${finalPath}; ele saiu sem a proteção nova`)
+    expect(logger.entries.some(e => e.level === 'warn' && e.message.includes(finalPath) && e.detail?.includes('EPERM'))).toBe(true)
+    expect(await readFile(finalPath, 'utf8')).toBe('Saída sintética')
+  } finally { copyHook.afterLink = null; copyHook.refuseRm = null; await service.shutdown() }
 })
 
 it('proteção salva enquanto uma exportação está em voo impede publicar o arquivo da fotografia anterior', async () => {

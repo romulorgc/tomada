@@ -72,10 +72,13 @@ export function useExportController(projectId: string, flush: () => Promise<void
     async (options: ExportOptions) => {
       setCancelling(false)
       setProgress(null)
+      let saved = false
       try {
         await flush()
+        saved = true
         await window.tomada.exporter.start(requestFor(options))
       } catch (err) {
+        if (!openRef.current) notify({ kind: 'error', text: saved ? t.editor.export.failedTitle : t.editor.export.saveFailed, detail: messageOf(err) })
         setProgress({
           exportId: '',
           projectId,
@@ -90,7 +93,7 @@ export function useExportController(projectId: string, flush: () => Promise<void
         })
       }
     },
-    [flush, projectId, requestFor]
+    [flush, projectId, requestFor, notify]
   )
 
   const cancel = useCallback(async () => {

@@ -16,6 +16,13 @@ export function RecoveryPrompt() {
   const notify = useApp((s) => s.notify)
   const load = useCallback(async () => { setError(null); try { setItems(await window.tomada.recovery.list()) } catch (err) { setError(messageOf(err)) } }, [])
   useEffect(() => { void load() }, [load])
+  // Uma queda recém-ocorrida pode cair na proteção de 5 s contra bruto ainda em uso.
+  // Reconfere a oferta após esse intervalo, sem exigir outra abertura do app.
+  useEffect(() => {
+    if (items.length || error || busy || later) return
+    const timer = window.setTimeout(() => void load(), 6000)
+    return () => window.clearTimeout(timer)
+  }, [items.length, error, busy, later, load])
   useEffect(() => { if (!busy && !later && (items.length || error)) dialog.current?.querySelector<HTMLButtonElement>('button')?.focus() }, [items, error, busy, later, discard])
   const recover = async (id: string) => {
     setBusy(id); useApp.getState().go({ name: 'processing' })
@@ -48,6 +55,7 @@ export function RecoveryPrompt() {
               <h3 className="break-words font-medium">{item.title}</h3>
               <p className="mt-1 text-sm text-muted">{item.recordedMs === null ? T.recovery.durationUnknown : formatDuration(item.recordedMs)} · {formatBytes(item.bytes)}</p>
               {item.error ? <p className="mt-2 break-words text-sm text-danger">{item.error}</p> : null}
+              {item.warning ? <p className="mt-2 text-sm text-muted">{item.warning}</p> : null}
               {discard === item.id ? (
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button type="button" className="btn text-danger" onClick={() => void remove(item.id)} data-testid="recovery-confirm-discard">{T.recovery.confirm}</button>

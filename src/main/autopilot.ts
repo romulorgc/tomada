@@ -246,8 +246,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           catch (err) { notice = `Textos pela IA falharam: ${err instanceof Error ? err.message : String(err)}. ` }
         } else notice = 'Sem IA: textos e capítulos gerados pela transcrição; confira antes de postar. '
         const body = t.words.filter((w) => !project.cuts.some((c) => c.enabled && c.start <= w.start && c.end >= w.end)).map((w) => w.text).join(' ')
-        if (!meta) meta = { youtube: { titles: [project.script?.title || titleFromText(body) || project.title], description: body.slice(0, 1200), tags: keywordsOf(body, 12), chapters: heuristicChapters(t.words, duration, project.cuts).chapters }, perClip: Object.fromEntries(project.clips.map((c) => [c.id, fallbackClipMeta(c,t.words)])) }
-        const updated = await change(id, (p) => p.review?.metaOrigin === 'manual' ? p : { ...p, title: p.review?.titleOrigin === 'manual' ? p.title : p.script?.title || meta?.youtube?.titles?.[0] || p.title, meta: { ...p.meta, ...meta, perClip: { ...p.meta?.perClip, ...meta?.perClip } }, review: { ...p.review, items: p.review?.items ?? {}, metaOrigin: 'auto' } })
+        if (!meta) meta = { youtube: { titles: [project.title.trim() || titleFromText(body)], description: body.slice(0, 1200), tags: keywordsOf(body, 12), chapters: heuristicChapters(t.words, duration, project.cuts).chapters }, perClip: Object.fromEntries(project.clips.map((c) => [c.id, fallbackClipMeta(c,t.words)])) }
+        const updated = await change(id, (p) => p.review?.metaOrigin === 'manual' ? p : { ...p, title: p.review?.titleOrigin === 'manual' ? p.title : meta?.youtube?.titles?.[0] || p.title.trim() || titleFromText(body), meta: { ...p.meta, ...meta, perClip: { ...p.meta?.perClip, ...meta?.perClip } }, review: { ...p.review, items: p.review?.items ?? {}, metaOrigin: 'auto' } })
         for (const [itemId,item] of Object.entries(updated.review?.items ?? {})) {
           if (!item.textPath) continue
           const file = await resolveProjectFile(dir,item.textPath)

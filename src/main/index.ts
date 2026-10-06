@@ -37,6 +37,10 @@ import { createAuxWindows } from './windows'
 // Testes isolam ajustes e logs do app real. Precisa vir antes de qualquer uso de userData.
 if (process.env[ENV_USER_DATA_DIR]) app.setPath('userData', process.env[ENV_USER_DATA_DIR])
 
+// A segunda abertura só devolve o foco; nunca inicializa recuperação/serviços sobre o bruto vivo.
+const primaryInstance = app.requestSingleInstanceLock()
+if (!primaryInstance) app.quit()
+
 // Registrar o esquema ANTES de `ready`. `stream` é o que deixa <video> usar o protocolo.
 protocol.registerSchemesAsPrivileged([
   {
@@ -136,6 +140,12 @@ async function main(): Promise<void> {
   }
 
   let mainWindow: BrowserWindow | null = null
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  })
   const emit = <K extends keyof IpcEvents>(channel: K, payload: IpcEvents[K]): void => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
   }
@@ -300,14 +310,18 @@ async function main(): Promise<void> {
     if (typeof level === 'number' && Number.isFinite(level)) recording.level(level)
   })
   let quitting = false
-  app.on('before-quit', () => {
+  app.on('before-quit', event => {
+    if (quitting) return
+    event.preventDefault()
     quitting = true
     autopilot?.shutdown()
-    void recording.shutdown()
-    void exporter.shutdown()
     transcription.shutdown()
     derived.shutdown()
     windows.closeAll()
+    void Promise.allSettled([recording.shutdown(), exporter.shutdown()]).then(results => {
+      for (const result of results) if (result.status === 'rejected') logger.warn('Falha ao encerrar e preservar o trabalho no disco.', result.reason)
+      app.quit()
+    })
   })
 
   registerIpc(
@@ -465,7 +479,7 @@ async function main(): Promise<void> {
   app.on('window-all-closed', () => app.quit())
 }
 
-main().catch((err) => {
+if (primaryInstance) main().catch((err) => {
   // Falha na partida: aparece para o usuário, não fica só no console.
   console.error(err)
   dialog.showErrorBox('O Tomada não conseguiu iniciar', err instanceof Error ? (err.stack ?? err.message) : String(err))

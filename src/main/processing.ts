@@ -347,7 +347,7 @@ async function saveEvents(ctx: ProcessContext, deps: ProcessDeps): Promise<strin
     mainToRenderer: -clock.offsetMs,
     pauses: manifest.pauses
   })
-  if (!raw) addNote(ctx, deps, 'O rastreador do mouse não entregou eventos: o vídeo foi salvo sem cursor e cliques.')
+  if (!raw) addNote(ctx, deps, 'Os eventos de cursor, cliques e teclas não estavam disponíveis no bruto. O cursor capturado na imagem permanece; os efeitos e zooms por atividade podem faltar.')
   if (built.sizeMismatch) {
     logger.warn(
       `O quadro capturado (${screen.frame?.w}×${screen.frame?.h}) difere do retângulo do Win32 (${built.rectSource}) em ${built.sizeMismatch.dw}×${built.sizeMismatch.dh} px; a normalização usa o quadro real.`

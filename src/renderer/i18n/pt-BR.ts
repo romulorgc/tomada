@@ -157,6 +157,7 @@ export const ptBR = {
     blur: {
       title: 'Proteger dado sensível', draw: 'Selecionar região na prévia', drawing: 'Arraste sobre o dado sensível',
       hint: 'A região acompanha a tela, o zoom e todos os cortes. Os pixels originais são removidos do vídeo exportado. O bruto continua no projeto.',
+      limits: 'Fala, legenda e texto de publicação não são protegidos.',
       none: 'Nenhuma região protegida', region: 'Região', mode: 'Proteção', modes: { blur: 'Desfoque forte', pixelate: 'Pixelado', solid: 'Tarja sólida' },
       untilEnd: 'Desfocar até o fim', remove: 'Apagar região', start: 'Início (ms)', end: 'Fim (ms)',
       x: 'Esquerda', y: 'Topo', w: 'Largura', h: 'Altura', empty: 'Selecione uma região na prévia ou arraste nesta trilha.',
@@ -678,6 +679,7 @@ export const ptBR = {
     },
 
     export: {
+      saveFailed: 'Não consegui salvar o projeto; nada foi exportado',
       title: 'Exportar vídeo',
       subtitle: 'MP4 para o YouTube, feito neste computador.',
       subtitleVertical: 'MP4 vertical para TikTok, Reels e Shorts, feito neste computador.',

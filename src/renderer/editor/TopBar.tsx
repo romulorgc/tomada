@@ -33,7 +33,7 @@ function SaveStatus() {
         <>
           <AlertIcon size={13} />
           <span title={error ? T.saveTip(error) : undefined}>{T.save.error}</span>
-          <button type="button" className="link" data-testid="save-retry" onClick={() => void store.getState().flush()}>
+          <button type="button" className="link" data-testid="save-retry" onClick={() => void store.getState().flush().catch(() => undefined)}>
             {T.save.retry}
           </button>
         </>
