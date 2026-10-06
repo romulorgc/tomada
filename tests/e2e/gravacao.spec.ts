@@ -78,8 +78,8 @@ test('grava ~6 s com dispositivos falsos, pausa, para pela barra, processa e abr
   await expect(bar.getByTestId('bar')).toHaveAttribute('data-status', 'recording')
   expect(await app.evaluate(({ globalShortcut }) => globalShortcut.isRegistered('CommandOrControl+Shift+R'))).toBe(true)
   expect(await app.evaluate(({ globalShortcut }) => globalShortcut.isRegistered('CommandOrControl+Shift+P'))).toBe(true)
-  // A janela principal minimizou.
-  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('#'))?.isMinimized() ?? null)).toBe(true)
+  // No e2e oculto não precisa minimizar; continua pintando os MediaRecorder sem aparecer.
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('#'))?.isMinimized() ?? null)).toBe(process.env.TOMADA_E2E_HIDDEN !== '1')
 
   await page.waitForTimeout(2500)
   const t1 = Number(await bar.getByTestId('bar-time').getAttribute('data-ms'))

@@ -49,9 +49,9 @@ for (const route of ['horizontal', 'fila', 'revisão'] as const) {
     await shot(page, `m5a-consertos-save-${route}`)
   })
 }
-test('segunda abertura sai e restaura a janela da instância existente', async () => {
+test('segunda abertura sai e respeita a visibilidade da instância existente', async () => {
   s = await launchTomada()
-  await s.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.minimize())
+  if (process.env.TOMADA_E2E_HIDDEN !== '1') await s.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.minimize())
   const env: NodeJS.ProcessEnv = { ...process.env, TOMADA_PROJECTS_DIR: s.projects, TOMADA_USER_DATA_DIR: s.userData }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(join(ROOT, 'node_modules/electron/dist/electron.exe'), ['.'], { cwd: ROOT, env, windowsHide: true, stdio: 'ignore' })
@@ -60,6 +60,7 @@ test('segunda abertura sai e restaura a janela da instância existente', async (
     const result = await Promise.race([ended, new Promise<string>(r => setTimeout(() => r('continua aberta'), 8000))])
     expect(result).toBe(0)
     await expect.poll(() => s!.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMinimized())).toBe(false)
+    if (process.env.TOMADA_E2E_HIDDEN === '1') expect(await s.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isVisible())).toBe(false)
   } finally { if (child.exitCode === null) child.kill() }
 })
 test('painel de proteção explica que fala e textos continuam expostos', async () => {

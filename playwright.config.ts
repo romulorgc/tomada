@@ -1,5 +1,8 @@
 import { defineConfig } from '@playwright/test'
 
+// Antes de criar qualquer processo Electron. As configurações real/prova não importam esta.
+process.env.TOMADA_E2E_HIDDEN ??= '1'
+
 export default defineConfig({
   testDir: 'tests/e2e',
   testMatch: '**/*.spec.ts',

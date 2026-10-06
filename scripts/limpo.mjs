@@ -30,7 +30,7 @@ if (env.Path !== undefined) {
 // Um comando só (e não argumentos soltos) com shell: o Windows precisa do shell para os .cmd de
 // node_modules/.bin, e passar argumentos junto com `shell: true` é depreciado (DEP0190).
 const quote = (a) => (/^[\w@%+=:,./\\-]+$/.test(a) ? a : `"${a.replace(/"/g, '\\"')}"`)
-const child = spawn([cmd, ...args.map(quote)].join(' '), { cwd: root, env, stdio: 'inherit', shell: true })
+const child = spawn([cmd, ...args.map(quote)].join(' '), { cwd: root, env, stdio: 'inherit', shell: true, windowsHide: true })
 child.on('error', (err) => {
   console.error(`falha ao iniciar "${cmd}": ${err.message}`)
   process.exit(1)

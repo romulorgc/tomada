@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { copyTree, FIXTURES_DIR, ROOT } from '../helpers/fs'
+import { startWindowAudit } from './window-audit'
 
 export { ROOT }
 export const EXAMPLE_FOLDER = '2026-10-04 1500 Projeto de exemplo'
@@ -95,10 +96,17 @@ export async function launchTomada(opts: LaunchOptions = {}): Promise<Session> {
   env.TOMADA_CAMERA = 'off' // a análise do rosto (M4c) é desligada por padrão; os testes dela ligam `mock`
   env.TOMADA_TOOLS_DIR = join(base, 'ferramentas')
   Object.assign(env, opts.env)
+  // Uma configuração e2e oculta não pode ser anulada por opções de um spec.
+  if (process.env.TOMADA_E2E_HIDDEN === '1') env.TOMADA_E2E_HIDDEN = '1'
 
   const args = ['.', ...(opts.realDevices ? [] : fakeDeviceArgs()), ...(opts.args ?? [])]
-  const app = await electron.launch({ args, cwd: ROOT, env })
-  const page = await app.firstWindow()
+  const audit = await startWindowAudit()
+  let app: ElectronApplication
+  try { app = await electron.launch({ args, cwd: ROOT, env }) }
+  catch (error) { await audit?.stop(); throw error }
+  let page: Page
+  try { page = await app.firstWindow() }
+  catch (error) { await app.close().catch(() => undefined); await audit?.stop(); throw error }
 
   const problems: string[] = []
   page.on('pageerror', (err) => problems.push(`pageerror: ${err.message}`))
@@ -114,7 +122,8 @@ export async function launchTomada(opts: LaunchOptions = {}): Promise<Session> {
     })
   })
 
-  await page.waitForLoadState('domcontentloaded')
+  try { await page.waitForLoadState('domcontentloaded') }
+  catch (error) { await app.close().catch(() => undefined); await audit?.stop(); throw error }
 
   return {
     app,
@@ -125,7 +134,8 @@ export async function launchTomada(opts: LaunchOptions = {}): Promise<Session> {
     problems,
     async close({ keep = false } = {}) {
       await app.close().catch(() => undefined)
-      if (!keep) rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+      try { await audit?.stop() }
+      finally { if (!keep) rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) }
     }
   }
 }

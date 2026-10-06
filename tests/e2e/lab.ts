@@ -27,11 +27,23 @@ export async function openLab(app: ElectronApplication): Promise<Page> {
     ({ BrowserWindow }, { preload, file }) => {
       const win = new BrowserWindow({
         show: false,
+        skipTaskbar: true,
+        paintWhenInitiallyHidden: true,
         width: 1280,
         height: 720,
-        webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false }
+        webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, offscreen: process.env.TOMADA_E2E_HIDDEN === '1' }
       })
+      // Electron exige referência forte ao BrowserWindow; só o handle do Page
+      // no Playwright não impede a coleta durante carregamento/render assíncrono.
+      const globals = globalThis as typeof globalThis & { __tomadaTestLabWindows?: Map<number, InstanceType<typeof BrowserWindow>> }
+      const windows = globals.__tomadaTestLabWindows ??= new Map()
+      const id = win.id
+      const keepPainting = (globalThis as { __tomadaE2eKeepPainting?: (window: InstanceType<typeof BrowserWindow>) => void }).__tomadaE2eKeepPainting
+      keepPainting?.(win)
+      windows.set(id, win)
+      win.once('closed', () => windows.delete(id))
       void win.loadFile(file, { hash: 'export-lab' })
+      return id
     },
     { preload: join(ROOT, 'out', 'preload', 'index.js'), file: join(ROOT, 'out', 'renderer', 'index.html') }
   )

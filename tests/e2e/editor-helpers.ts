@@ -2,12 +2,12 @@
  * Ajudantes dos testes do editor: abrir o projeto, e mexer na linha do tempo como a pessoa mexe (mouse e
  * teclado de verdade, nas posições que a escala atual da régua dá).
  */
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, type Page } from '@playwright/test'
 import type { Project } from '../../src/shared/types'
 import { parseProject } from '../../src/shared/project'
-import { EXAMPLE_FOLDER, type Session } from './helpers'
+import { EXAMPLE_FOLDER, ROOT, type Session } from './helpers'
 
 /** Abre o primeiro projeto da biblioteca e espera a prévia desenhar o primeiro quadro. */
 export async function openEditor(session: Session): Promise<void> {
@@ -97,7 +97,26 @@ export async function outputMs(page: Page): Promise<number> {
 
 /** Pixels do canvas da prévia (o que a pessoa vê), reduzidos: serve para provar que "mudou". */
 export async function previewShot(page: Page): Promise<Buffer> {
-  return page.getByTestId('preview-canvas').screenshot({ type: 'png' })
+  const canvas = page.getByTestId('preview-canvas')
+  const shot = await canvas.screenshot({ type: 'png' })
+  if (process.env.TOMADA_E2E_PAINT_DEBUG === '1') {
+    const data = await canvas.evaluate(c => {
+      const canvas = c as HTMLCanvasElement
+      let raw: string | null = null, rawError: string | null = null
+      try { raw = canvas.toDataURL('image/png') } catch (error) { rawError = String(error) }
+      return { raw, rawError, width: canvas.width, height: canvas.height, dataset: { ...canvas.dataset }, dpr: devicePixelRatio,
+        visibility: document.visibilityState, fonts: document.fonts.status,
+        media: [...document.querySelectorAll('video')].map(v => ({ id: v.dataset.testid, currentTime: v.currentTime, readyState: v.readyState, seeking: v.seeking })) }
+    })
+    const dir = join(ROOT, 'test-results', 'acabamento')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, `preview-pintura-${Date.now()}`)
+    writeFileSync(`${file}-chromium.png`, shot)
+    writeFileSync(`${file}-pagina.png`, await page.screenshot({ type: 'png' }))
+    if (data.raw) writeFileSync(`${file}-canvas.png`, Buffer.from(data.raw.split(',')[1]!, 'base64'))
+    writeFileSync(`${file}.json`, JSON.stringify({ ...data, raw: undefined }, null, 2))
+  }
+  return shot
 }
 
 /** A reprodução da prévia agora (o botão de tocar diz; o canvas guarda quantos pedidos de tocar já houve e de onde veio o último). */

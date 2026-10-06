@@ -134,7 +134,7 @@ test('descartar pela barra apaga a gravação e devolve a janela; recomeçar des
     app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('#'))?.isMinimized() ?? null)
 
   let bar = await startRecording(s, { camera: true })
-  expect(await mainMinimized()).toBe(true)
+  expect(await mainMinimized()).toBe(process.env.TOMADA_E2E_HIDDEN !== '1')
   expect(projectFolders(s)).toHaveLength(1)
   await page.waitForTimeout(1500)
 

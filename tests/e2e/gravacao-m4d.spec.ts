@@ -18,10 +18,32 @@ async function waitPrompter(session: Session): Promise<Page> {
 }
 
 async function proveCaptureProtection(session: Session): Promise<void> {
+  if (process.env.TOMADA_E2E_HIDDEN === '1') {
+    // A prova visual exige HWND visível. OSR não expõe afinidade nativa: o spy
+    // delega de verdade, sem inventar isContentProtected; o auditor prova ocultação.
+    const prompter = await waitPrompter(session)
+    const state = async () => session.app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('#teleprompter'))!
+      const calls = (globalThis as { __tomadaTestProtectionCalls?: { id: number; enabled: boolean }[] }).__tomadaTestProtectionCalls ?? []
+      return { visible: win.isVisible(), offscreen: win.webContents.isOffscreen(), throttled: win.webContents.getBackgroundThrottling(), requested: calls.filter(c => c.id === win.id).map(c => c.enabled) }
+    })
+    expect(await state()).toEqual({ visible: false, offscreen: true, throttled: false, requested: [true] })
+    await expect(prompter.getByText('Teleprompter · fora da captura', { exact: true })).toBeVisible()
+    const png = PNG.sync.read(await prompter.screenshot({ path: join(SCREENS_DIR, 'm4d-teleprompter-oculto.png') }))
+    expect(png.width).toBeGreaterThan(500)
+    expect(png.data.some((value, i) => i % 4 !== 3 && value > 100), 'o teleprompter oculto pinta texto').toBe(true)
+    await session.app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('#teleprompter'))!
+      win.setContentProtection(false)
+      win.setContentProtection(true)
+    })
+    expect(await state()).toEqual({ visible: false, offscreen: true, throttled: false, requested: [true, false, true] })
+    return
+  }
   // Fundo sintético cobrindo a tela: a prova nunca registra a área de trabalho do usuário.
   const setup = await session.app.evaluate(async ({ BrowserWindow, screen }) => {
     const display = screen.getPrimaryDisplay()
-    const backdrop = new BrowserWindow({ ...display.bounds, frame: false, show: false, alwaysOnTop: true, backgroundColor: '#17b83b', webPreferences: { sandbox: true, nodeIntegration: false } })
+    const backdrop = new BrowserWindow({ ...display.bounds, frame: false, show: false, skipTaskbar: true, paintWhenInitiallyHidden: true, alwaysOnTop: true, backgroundColor: '#17b83b', webPreferences: { sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
     await backdrop.loadURL('data:text/html,<html><body style="margin:0;background:%2317b83b;width:100vw;height:100vh"></body></html>')
     backdrop.showInactive()
     return { id: backdrop.id }
@@ -70,6 +92,19 @@ test('roteiro editável, preflight, teleprompter protegido e marca errei com pau
   test.setTimeout(120_000)
   s = await launchTomada({ seed: false, env: { TOMADA_TEST_AUTOSOURCE: 'screen' } })
   const { page, app } = s
+  if (process.env.TOMADA_E2E_HIDDEN === '1') {
+    test.info().annotations.push({ type: 'exige janela visível', description: 'A prova visual da exclusão da captura Windows exige HWND visível. OSR não expõe essa afinidade. No modo oculto as chamadas reais são delegadas, o renderer/pixels são conferidos e EnumWindows prova invisibilidade. O ramo visível original fica para a prova noturna.' })
+    await app.evaluate(({ BrowserWindow }) => {
+      const original = BrowserWindow.prototype.setContentProtection
+      const calls: { id: number; enabled: boolean }[] = []
+      const globals = globalThis as { __tomadaTestProtectionCalls?: typeof calls }
+      globals.__tomadaTestProtectionCalls = calls
+      BrowserWindow.prototype.setContentProtection = function (enabled: boolean): void {
+        calls.push({ id: this.id, enabled })
+        Reflect.apply(original, this, [enabled])
+      }
+    })
+  }
   await page.getByTestId('nav-record').click()
   await expect(page.getByTestId('camera-preview')).toHaveAttribute('data-live', 'true', { timeout: 20_000 })
   await expect(page.getByTestId('preflight-mic')).not.toHaveAttribute('data-status', 'listening', { timeout: 20_000 })
@@ -84,10 +119,12 @@ test('roteiro editável, preflight, teleprompter protegido e marca errei com pau
   await page.getByTestId('teleprompter-open').click()
   let prompter = await waitPrompter(s)
   await expect(prompter.getByTestId('teleprompter-text')).toContainText('Organize a sua agenda em segundos.')
-  expect(await app.evaluate(({ BrowserWindow }) => {
+  const native = await app.evaluate(({ BrowserWindow }) => {
     const w = BrowserWindow.getAllWindows().find((v) => v.webContents.getURL().endsWith('#teleprompter'))
-    return w ? { protected: w.isContentProtected(), top: w.isAlwaysOnTop(), y: w.getBounds().y } : null
-  })).toMatchObject({ protected: true, top: true })
+    return w ? { protected: w.isContentProtected(), top: w.isAlwaysOnTop(), y: w.getBounds().y, visible: w.isVisible(), offscreen: w.webContents.isOffscreen() } : null
+  })
+  if (process.env.TOMADA_E2E_HIDDEN === '1') expect(native).toMatchObject({ visible: false, offscreen: true, top: true })
+  else expect(native).toMatchObject({ protected: true, top: true })
   await prompter.getByTestId('teleprompter-pause').click()
   await expect(prompter.getByTestId('teleprompter')).toHaveAttribute('data-paused', 'true')
   await prompter.getByTestId('teleprompter-next').click()
