@@ -46,6 +46,8 @@ const hwndOf = (win: BrowserWindow): number => {
 
 export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
   const { logger } = deps
+  // Provas de áudio não disputam tela/foco com o trabalho do usuário.
+  const hiddenTest = process.env.TOMADA_TEST_HIDDEN === '1'
   let bar: BrowserWindow | null = null
   let bubble: BrowserWindow | null = null
   let countdownWin: BrowserWindow | null = null
@@ -113,6 +115,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
       if (!main || main.isDestroyed()) return
       if (minimized) main.minimize()
       else {
+        if (hiddenTest) return
         if (main.isMinimized()) main.restore()
         main.show()
         main.focus()
@@ -152,7 +155,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
         // Esc cancela sem precisar de foco (a contagem não pode roubar o foco do que será gravado).
         if (!globalShortcut.register('Escape', () => done(false))) logger.warn('Não consegui registrar o Esc para cancelar a contagem.')
         win.on('closed', () => done(false))
-        win.webContents.once('did-finish-load', () => win.showInactive())
+        win.webContents.once('did-finish-load', () => { if (!hiddenTest) win.showInactive() })
         win.webContents.on('did-fail-load', (_e, code, description) => {
           logger.error(`A contagem não carregou (${code}: ${description}).`)
           done(false)
@@ -169,7 +172,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
       placeBottomCenter(win, display)
       win.webContents.once('did-finish-load', () => {
         win.webContents.send('bar:state', state)
-        win.showInactive()
+        if (!hiddenTest) win.showInactive()
       })
       win.on('closed', () => {
         if (bar === win) bar = null
@@ -200,7 +203,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
         return { x: b.x, y: b.y, w: b.width, h: b.height }
       })()
       win.setPosition(Math.round(d.x + MARGIN), Math.round(d.y + d.h - BUBBLE_SIZE.h - MARGIN * 2))
-      win.webContents.once('did-finish-load', () => win.showInactive())
+      win.webContents.once('did-finish-load', () => { if (!hiddenTest) win.showInactive() })
       win.on('closed', () => {
         if (bubble === win) bubble = null
       })
@@ -220,7 +223,7 @@ export function createAuxWindows(deps: AuxWindowsDeps): AuxWindows {
       prompter = win
       hardenOverlay(win)
       win.setPosition(Math.round(d.x + (d.w - width) / 2), Math.round(d.y + 16))
-      win.webContents.once('did-finish-load', () => { win.webContents.send('teleprompter:state', state); win.showInactive() })
+      win.webContents.once('did-finish-load', () => { win.webContents.send('teleprompter:state', state); if (!hiddenTest) win.showInactive() })
       win.on('closed', () => {
         if (prompter === win) {
           prompter = null

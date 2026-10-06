@@ -1,0 +1,4 @@
+{
+  "extends": "../../tsconfig.e2e.json",
+  "include": ["audio-prova.spec.ts", "audio-metrics.ts", "audio-prova.config.ts", "../../src/renderer/env.d.ts"]
+}

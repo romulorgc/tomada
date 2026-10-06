@@ -475,7 +475,7 @@ async function main(): Promise<void> {
         backgroundThrottling: false
       }
     })
-    win.once('ready-to-show', () => win.show())
+    win.once('ready-to-show', () => { if (process.env.TOMADA_TEST_HIDDEN !== '1') win.show() })
     win.webContents.on('did-fail-load', (_e, code, description, url) =>
       logger.error(`A interface não carregou (${code}: ${description}) em ${url}`)
     )
