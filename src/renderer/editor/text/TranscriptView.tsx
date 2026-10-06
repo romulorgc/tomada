@@ -16,6 +16,7 @@ import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { useStore } from 'zustand'
 import { isHesitationWord, suggestedCrutchIndexes } from '@shared/clean'
 import { formatDuration, formatSpan } from '@shared/format'
+import { correctedTranscriptWords } from '@shared/dictionary-corrections'
 import { PAUSE_CHIP_MIN_MS, buildParagraphs, findMatches, pauseAfter, struckWords, wordIndexAt, type Paragraph } from '@shared/text-edit'
 import type { Word } from '@shared/types'
 import { t } from '../../i18n/pt-BR'
@@ -108,10 +109,26 @@ export function TranscriptView({ words, durationMs }: { words: Word[]; durationM
   const ops = useEditorOps()
   const cuts = useDoc((s) => s.project.cuts)
   const fixes = useDoc((s) => s.project.wordFixes)
+  const corrections = useDoc((s) => s.project.review?.dictionaryCorrections)
   const selection = useStore(text, (s) => s.selection)
   const query = useStore(text, (s) => s.query)
   const matchAt = useStore(text, (s) => s.matchAt)
   const searchOpen = useStore(text, (s) => s.searchOpen)
+
+  // Os controles continuam apontando para as posições originais. Só a apresentação agrupa o nome corrigido.
+  const display = useMemo(() => {
+    const positions = new Map(words.map((w, k) => [w.i, k]))
+    const corrected = correctedTranscriptWords(words, fixes, corrections)
+    const spans = new Map<number, { word: Word; first: number; last: number }>()
+    const owners: number[] = []
+    corrected.forEach((word, k) => {
+      const first = positions.get(word.i)!
+      const last = k + 1 < corrected.length ? positions.get(corrected[k + 1]!.i)! - 1 : words.length - 1
+      spans.set(first, { word, first, last })
+      for (let source = first; source <= last; source++) owners[source] = first
+    })
+    return { spans, owners }
+  }, [words, fixes, corrections])
 
   const paragraphs = useMemo(() => buildParagraphs(words), [words])
   const struck = useMemo(() => struckWords(words, cuts), [words, cuts])
@@ -250,7 +267,8 @@ export function TranscriptView({ words, durationMs }: { words: Word[]; durationM
 
   useEffect(() => {
     const update = (sourceMs: number): void => {
-      const idx = wordIndexAt(words, sourceMs)
+      const sourceIdx = wordIndexAt(words, sourceMs)
+      const idx = display.owners[sourceIdx] ?? sourceIdx
       if (idx === nowRef.current) return
       nowRef.current = idx
       paintNow()
@@ -263,7 +281,7 @@ export function TranscriptView({ words, durationMs }: { words: Word[]; durationM
       lastMs = s.sourceMs
       update(s.sourceMs)
     })
-  }, [words, playback, paintNow, follow])
+  }, [words, playback, paintNow, follow, display])
 
   // o React pode recriar as palavras (a janela anda): a acesa volta; e as alturas reais corrigem as estimadas
   useLayoutEffect(() => {
@@ -315,9 +333,10 @@ export function TranscriptView({ words, durationMs }: { words: Word[]; durationM
       // palavra selecionada e zoom/trecho/intervalo selecionado na linha do tempo não convivem: Delete teria dois alvos
       store.getState().setSelection(null)
       store.getState().setRange(null)
-      text.getState().select({ anchor, focus })
+      const a = display.spans.get(display.owners[anchor] ?? anchor), f = display.spans.get(display.owners[focus] ?? focus)
+      text.getState().select(anchor <= focus ? { anchor: a?.first ?? anchor, focus: f?.last ?? focus } : { anchor: a?.last ?? anchor, focus: f?.first ?? focus })
     },
-    [store, text]
+    [store, text, display]
   )
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
@@ -415,14 +434,17 @@ export function TranscriptView({ words, durationMs }: { words: Word[]; durationM
           const items: React.ReactNode[] = []
           for (let k = par.first; k <= par.last; k++) {
             const w = words[k]!
-            const fix = fixes?.[String(w.i)]
+            const span = display.spans.get(k)
+            if (!span) continue
+            let spanFlags = 0
+            for (let source = span.first; source <= span.last; source++) spanFlags |= flags[source]!
             items.push(
               <Fragment key={k}>
-                <WordSpan i={k} text={fix ?? w.text.trim()} flags={flags[k]!} gap={w.kind === 'gap-speech'} />{' '}
-                {pauseAfter(words, k) >= PAUSE_CHIP_MIN_MS ? (
+                <WordSpan i={k} text={span.word.text.trim()} flags={spanFlags} gap={w.kind === 'gap-speech'} />{' '}
+                {pauseAfter(words, span.last) >= PAUSE_CHIP_MIN_MS ? (
                   <>
-                    <button type="button" className="tx-pause" data-pause={k} data-struck={pauseStruck[k] ? '' : undefined} title={pauseStruck[k] ? T.pauseTip.restore : T.pauseTip.cut} data-testid="pause-chip">
-                      {T.pause(formatSpan(pauseAfter(words, k)))}
+                    <button type="button" className="tx-pause" data-pause={span.last} data-struck={pauseStruck[span.last] ? '' : undefined} title={pauseStruck[span.last] ? T.pauseTip.restore : T.pauseTip.cut} data-testid="pause-chip">
+                      {T.pause(formatSpan(pauseAfter(words, span.last)))}
                     </button>{' '}
                   </>
                 ) : null}
