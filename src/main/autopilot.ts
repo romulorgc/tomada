@@ -17,6 +17,7 @@ import { itemOf, updateReviewItem, reviewDocument, refreshReviewSnapshots, type 
 import { keptRanges, outputDuration } from '@shared/timeline'
 import type { Project, ProjectSummary, Transcript } from '@shared/types'
 import { autoVerticalLayouts, defaultVerticalEdit, speechRanges } from '@shared/vertical'
+import { cameraStyleLayouts } from '@shared/camera-style-layouts'
 import { generateAutoZooms, zoomPresetFor } from '@shared/zoom'
 import { deriveRetakeCuts } from '@shared/retake-marker'
 import type { CameraService } from './camera/service'
@@ -253,6 +254,16 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           const matte = await ensureMatte(id)
           hasMatte = matte.ok
           if (!matte.ok) notice = `O recorte do fundo falhou; usei o quadro ao lado. Motivo: ${matte.reason.replace(/[.\s]+$/, '')}. No editor: Câmera → Recortar de novo. `
+        }
+        // O estilo escolhido vale no vídeo inteiro, nos dois formatos: sem alternância por atividade e sem bolinha. Segmentos que o usuário
+        // criou à mão ficam; só os automáticos de antes saem.
+        const styled = cameraStyleLayouts(project, hasMatte)
+        if (styled) {
+          await regenerate(id, (p) => {
+            const v = p.vertical ?? defaultVerticalEdit()
+            return { ...p, style: { ...p.style, defaultLayout: styled.horizontal }, layouts: p.layouts.filter((s) => s.origin !== 'auto'), vertical: { ...v, layout: styled.vertical, layouts: v.layouts.filter((s) => s.origin !== 'auto') } }
+          })
+          return `${notice}${styled.style === 'presenter' ? 'Apresentador recortado' : 'Quadro ao lado'} no vídeo inteiro: ${styled.style === 'presenter' ? 'Apresentador no 16:9 e V-D no 9:16' : 'lado a lado no 16:9 e câmera embaixo da tela no 9:16'}. A bolinha só por escolha sua.`
         }
         const automatic = autoVerticalLayouts({ ...(hasMatte ? { hasMatte } : {}), durationMs: duration, hasCamera: !!project.sources.camera && !project.style.camera.hidden, clicks: e.clicks, keys: e.keys, cursor: e.grid, speech: speechRanges(t?.words), kept: keptRanges(duration, project.cuts) })
         await regenerate(id, (p) => {

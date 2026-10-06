@@ -455,18 +455,20 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
   }
   /** Fala corrida de 1 s a 12 s, sem nada acontecendo na tela: o automático escolhe o layout com a câmera. */
   const talk: Transcript = { ...transcript, words: Array.from({ length: 36 }, (_, i) => ({ i, text: `p${i}`, start: 1000 + i * 300, end: 1000 + i * 300 + 280, prob: 1, kind: 'word' as const })), vad: [{ start: 1000, end: 12_000 }] }
-  const layoutsOf = (p: Project) => ({ horizontal: new Set(p.layouts.map((l) => l.layout)), vertical: new Set(p.vertical!.layouts.map((l) => l.layout)) })
+  /** O estilo vale no vídeo inteiro: o layout padrão de cada formato, e nenhum trecho automático por atividade. */
+  const layoutsOf = (p: Project) => ({ horizontal: p.style.defaultLayout, vertical: p.vertical!.layout, autoSegments: [...p.layouts, ...p.vertical!.layouts].filter((l) => l.origin === 'auto') })
   const detailOf = (p: Project) => p.autopilot!.steps.find((step) => step.id === 'layouts')!.detail ?? ''
 
-  it('Apresentador: pede o recorte do fundo ao começar, espera, e a fala sem atividade vira Apresentador (16:9) e V-D (9:16)', async () => {
+  it('Apresentador: pede o recorte do fundo ao começar, espera, e o vídeo inteiro é Apresentador (16:9) e V-D (9:16)', async () => {
     const doc = withCamera(baseProject(), 'presenter')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await w.service.start(id)
     expect(w.camera!.analyze).toHaveBeenCalledWith(id, 'matte')
     expect(w.camera!.idle).toHaveBeenCalled()
-    const { horizontal, vertical } = layoutsOf(w.project())
-    expect([...horizontal]).toEqual(['presenter'])
-    expect([...vertical]).toEqual(['presenter'])
+    const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
+    expect(autoSegments).toEqual([])
+    expect(horizontal).toBe('presenter')
+    expect(vertical).toBe('presenter')
     expect(detailOf(w.project())).not.toMatch(/recorte do fundo falhou/)
   })
   it('Quadro ao lado: lado a lado no 16:9 e V-B no 9:16, e nunca pede o recorte nem escolhe Apresentador, mesmo com um recorte antigo pronto', async () => {
@@ -474,9 +476,10 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await w.service.start(id)
     expect(w.camera!.analyze).not.toHaveBeenCalledWith(id, 'matte')
-    const { horizontal, vertical } = layoutsOf(w.project())
-    expect([...horizontal]).toEqual(['side-by-side'])
-    expect([...vertical]).toEqual(['stack'])
+    const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
+    expect(autoSegments).toEqual([])
+    expect(horizontal).toBe('side-by-side')
+    expect(vertical).toBe('stack')
   })
   it('projeto antigo, sem o campo do estilo, é Quadro ao lado', async () => {
     const doc = withCamera(baseProject())
@@ -484,17 +487,19 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await w.service.start(id)
     expect(w.camera!.analyze).not.toHaveBeenCalledWith(id, 'matte')
-    const { horizontal, vertical } = layoutsOf(w.project())
-    expect([...horizontal]).toEqual(['side-by-side'])
-    expect([...vertical]).toEqual(['stack'])
+    const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
+    expect(autoSegments).toEqual([])
+    expect(horizontal).toBe('side-by-side')
+    expect(vertical).toBe('stack')
   })
   it('Apresentador com o motor do recorte sem preparo: cai no quadro ao lado e V-B e a Revisão mostra o motivo e o caminho', async () => {
     const doc = withCamera(baseProject(), 'presenter')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ analyzeError: 'O recorte do fundo ainda não foi preparado neste computador.' }) })
     await w.service.start(id)
-    const { horizontal, vertical } = layoutsOf(w.project())
-    expect([...horizontal]).toEqual(['side-by-side'])
-    expect([...vertical]).toEqual(['stack'])
+    const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
+    expect(autoSegments).toEqual([])
+    expect(horizontal).toBe('side-by-side')
+    expect(vertical).toBe('stack')
     const detail = detailOf(w.project())
     expect(detail).toContain('O recorte do fundo falhou; usei o quadro ao lado.')
     expect(detail).toContain('ainda não foi preparado')
@@ -508,7 +513,50 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     const detail = detailOf(w.project())
     expect(detail).toContain('O recorte do fundo falhou; usei o quadro ao lado.')
     expect(detail).toContain('A placa de vídeo ficou sem memória.')
-    expect([...layoutsOf(w.project()).vertical]).toEqual(['stack'])
+    expect(layoutsOf(w.project()).vertical).toBe('stack')
+  })
+  /** O usuário do teste real: a tela tem atividade de mouse o tempo todo (clique a cada 1,2 s, cursor sempre andando). */
+  const busyScreen = async (dir: string): Promise<void> => {
+    const cursor = Array.from({ length: 400 }, (_, i) => ({ t: i * 50, x: 0.2 + 0.6 * ((i % 40) / 40), y: 0.3 + 0.4 * (Math.floor(i / 40) % 2 === 0 ? (i % 40) / 40 : 1 - (i % 40) / 40) }))
+    const clicks = Array.from({ length: 16 }, (_, i) => ({ t: 800 + i * 1200, x: 0.3 + 0.4 * ((i * 7) % 10) / 10, y: 0.4 + 0.3 * ((i * 3) % 10) / 10, button: 'left', upT: 880 + i * 1200 }))
+    const keys = Array.from({ length: 30 }, (_, i) => ({ t: 3000 + i * 150 }))
+    const lines = (items: object[]): string => items.map((item) => JSON.stringify(item)).join('\n') + '\n'
+    await writeFile(join(dir, 'events', 'cursor.jsonl'), lines(cursor))
+    await writeFile(join(dir, 'events', 'clicks.jsonl'), lines(clicks))
+    await writeFile(join(dir, 'events', 'keys.jsonl'), lines(keys))
+  }
+  it('Quadro ao lado com o mouse sempre em movimento: continua lado a lado (16:9) e V-B (9:16) do começo ao fim, sem bolinha nem V-A', async () => {
+    const doc = withCamera(baseProject(), 'side-by-side')
+    const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
+    await busyScreen(w.dir)
+    await w.service.start(id)
+    const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
+    expect(horizontal).toBe('side-by-side')
+    expect(vertical).toBe('stack')
+    expect(autoSegments).toEqual([])
+    const kinds = new Set([...w.project().layouts, ...w.project().vertical!.layouts].map((l) => l.layout))
+    expect(kinds.has('bubble')).toBe(false)
+    expect(kinds.has('screen-focus')).toBe(false)
+    expect(detailOf(w.project())).toMatch(/Quadro ao lado no vídeo inteiro/)
+  })
+  it('Apresentador recortado com o mouse sempre em movimento: Apresentador (16:9) e V-D (9:16) do começo ao fim', async () => {
+    const doc = withCamera(baseProject(), 'presenter')
+    const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
+    await busyScreen(w.dir)
+    await w.service.start(id)
+    const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
+    expect(horizontal).toBe('presenter')
+    expect(vertical).toBe('presenter')
+    expect(autoSegments).toEqual([])
+  })
+  it('sem câmera, nada é imposto: tela no 16:9 e o padrão do vertical', async () => {
+    const doc = baseProject()
+    const w = await world(doc, { transcript: talk })
+    await busyScreen(w.dir)
+    await w.service.start(id)
+    expect(w.project().style.defaultLayout).toBe(doc.style.defaultLayout)
+    expect(w.project().vertical!.layout).toBe('screen-center')
+    expect([...w.project().layouts, ...w.project().vertical!.layouts].filter((l) => l.origin === 'auto')).toEqual([])
   })
   it('as escolhas manuais de layout do usuário continuam preservadas nos dois estilos', async () => {
     for (const style of ['presenter', 'side-by-side'] as const) {
