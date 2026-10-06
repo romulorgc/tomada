@@ -266,7 +266,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         }
         const ordered = [...drafts].sort((a,b) => b.score-a.score)
         const qualified = ordered.filter((c) => c.score >= prefs.minScore)
-        const chosen = qualified.length >= 2 ? qualified.slice(0, prefs.maxClips) : ordered.filter((c) => c.score >= Math.min(50, prefs.minScore)).slice(0, 2)
+        const chosen = qualified.length >= 2 ? qualified.slice(0, prefs.maxClips) : ordered.filter((c) => c.score >= 50).slice(0, 2)
         const lowScore = chosen.some((c) => c.score < prefs.minScore)
         await regenerate(id, (p) => {
           const kept = p.clips.filter((c) => c.source === 'manual' || itemOf(p,c.id).origin === 'manual')
