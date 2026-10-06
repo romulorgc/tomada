@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from 'zustand'
 import { findMatches, struckWords } from '@shared/text-edit'
+import { correctedTranscriptWords } from '@shared/dictionary-corrections'
 import { AlertIcon, ChevronDownIcon, ChevronUpIcon, CrossIcon, SearchIcon, TextIcon } from '../../components/Icons'
 import { TranscriptionPrepare } from '../../components/TranscriptionPrepare'
 import { t } from '../../i18n/pt-BR'
@@ -78,17 +79,21 @@ function SearchBar({ count, onStep }: { count: number; onStep: (dir: 1 | -1) => 
   )
 }
 
-/** Barra da seleção: apagar, restaurar e (com uma palavra só) corrigir o texto dela. */
+/** Barra da seleção: apagar, restaurar e corrigir uma palavra apresentada (inclusive nome composto). */
 function SelectionBar() {
   const { text, transcript } = useEditor()
   const ops = useEditorOps()
   const selection = useStore(text, (s) => s.selection)
   const editing = useStore(text, (s) => s.editing)
   const fixes = useDoc((s) => s.project.wordFixes)
+  const corrections = useDoc((s) => s.project.review?.dictionaryCorrections)
   const words = transcript.data?.words ?? []
   const range = selectionRange(selection)
   const [draft, setDraft] = useState('')
-  const single = range !== null && range.from === range.to ? range.from : null
+  const shownWords = useMemo(() => correctedTranscriptWords(words, fixes, corrections), [words, fixes, corrections])
+  const first = range ? words[range.from] : undefined, last = range ? words[range.to] : undefined
+  const selectedWords = first && last ? shownWords.filter((w) => w.i >= first.i && w.i <= last.i) : []
+  const single = range && first && last && (range.from === range.to || (selectedWords.length === 1 && selectedWords[0]!.i === first.i && selectedWords[0]!.end === last.end)) ? range.from : null
 
   useEffect(() => {
     if (editing === null) return
@@ -104,7 +109,7 @@ function SelectionBar() {
   if (editing !== null && words[editing]) {
     const original = words[editing]!.text.trim()
     const save = (): void => {
-      ops.fixWord(editing, draft)
+      ops.fixWord(editing, draft, single === editing && range.to > range.from ? range.to : undefined)
       text.getState().edit(null)
     }
     return (

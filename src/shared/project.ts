@@ -320,7 +320,7 @@ export const projectSchema = z.looseObject({
   wordFixes: z.record(z.string(), z.string()).optional(),
   autoCleaned: z.boolean().optional(),
   autopilot: pipelineSchema.optional(),
-  review: z.looseObject({ items: z.record(z.string(), reviewItemSchema.extend({ edits: z.object({ cuts: z.array(cutSchema), zooms: z.array(zoomSchema), layouts: z.array(layoutSegSchema), captions: captionStyleSchema, style: styleSchema, autoExclusions:autoExclusionsSchema.optional(), wordFixes:z.record(z.string(),z.string()).optional(), mutes:z.array(muteSchema).optional(), meta:metaSchema.optional(), zoomPreset:z.enum(['subtle','moderate','intense','off']).optional() }).optional() })), metaOrigin: z.enum(['auto','manual']).optional(), titleOrigin: z.enum(['auto','manual']).optional(), dictionaryCorrections: z.array(dictionaryCorrectionSchema).max(10000).optional() }).optional(),
+  review: z.looseObject({ items: z.record(z.string(), reviewItemSchema.extend({ edits: z.object({ cuts: z.array(cutSchema), zooms: z.array(zoomSchema), layouts: z.array(layoutSegSchema), captions: captionStyleSchema, style: styleSchema, autoExclusions:autoExclusionsSchema.optional(), wordFixes:z.record(z.string(),z.string()).optional(), dictionaryCorrections:z.array(dictionaryCorrectionSchema).max(10000).optional(), mutes:z.array(muteSchema).optional(), meta:metaSchema.optional(), zoomPreset:z.enum(['subtle','moderate','intense','off']).optional() }).optional() })), metaOrigin: z.enum(['auto','manual']).optional(), titleOrigin: z.enum(['auto','manual']).optional(), dictionaryCorrections: z.array(dictionaryCorrectionSchema).max(10000).optional() }).optional(),
   meta: metaSchema.optional(),
   script: videoScriptSchema.optional(),
   retakeMarks: z.array(retakeMarkSchema).optional(),

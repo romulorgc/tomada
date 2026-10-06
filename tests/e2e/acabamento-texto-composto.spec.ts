@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { applyDictionaryCorrections } from '../../src/shared/dictionary-corrections'
+import { captionSourceOf, captionWords } from '../../src/shared/captions'
 import { parseProject } from '../../src/shared/project'
 import type { Transcript } from '../../src/shared/types'
 import { copyTree, FIXTURES_DIR } from '../helpers/fs'
@@ -21,7 +22,7 @@ test('a aba Texto mostra o produto composto uma vez e conserva os índices e o i
   const words: Transcript['words'] = ['Conheça', 'Jus', 'pronto.', 'Agora', 'cadastre', 'seu', 'cliente.'].map((text, i) => ({ i, text, start: i * 700 + 300, end: i * 700 + 900, prob: .99, kind: 'word' }))
   const transcript: Transcript = { words, segments: [], vad: [], durationMs: 20_000, engine: 'teste', model: 'sintético', language: 'pt', createdAt: '2026-10-06' }
   const doc = parseProject(readFileSync(join(dir, 'project.json'), 'utf8'))
-  doc.cuts = []; doc.mutes = []; doc.autoCleaned = true; doc.zoomPreset = 'off'; doc.zooms = []
+  doc.cuts = []; doc.mutes = []; doc.autoCleaned = true; doc.zoomPreset = 'off'; doc.zooms = []; doc.captions.enabled = true
   const corrected = applyDictionaryCorrections(doc, words, [{ i: 1, last: 2, before: 'Agen daí.', term: 'Agendaí', context: 'product', confidence: .99 }], ['Agendaí'])
   writeFileSync(join(dir, 'project.json'), JSON.stringify(corrected)); writeFileSync(join(dir, 'transcript.json'), JSON.stringify(transcript))
   session = await launchTomada({ base })
@@ -36,6 +37,24 @@ test('a aba Texto mostra o produto composto uma vez e conserva os índices e o i
   await expect.poll(async () => Math.abs(Number(await page.getByTestId('preview-canvas').getAttribute('data-source-ms')) - 2400)).toBeLessThan(150)
   await seekTo(page, 1800)
   await expect(page.locator('.tx-w[data-now]')).toHaveAttribute('data-i', '1')
+  await product.dblclick()
+  await expect(page.getByTestId('text-selection-count')).toHaveText('2 palavras selecionadas')
+  await expect(page.getByTestId('text-fix-open')).toBeVisible()
+  await page.getByTestId('text-fix-open').click()
+  await expect(page.getByTestId('text-fix-input')).toHaveValue('Agendaí.')
+  await page.getByTestId('text-fix-input').fill('Agendaí revisado')
+  await page.getByTestId('text-fix-save').click()
+  await expect(product).toHaveText('Agendaí revisado')
+  await expect(page.locator('.tx-w[data-i="2"]')).toHaveCount(0)
+  await waitSaved(session)
+  const manuallyEdited = readSaved(session)
+  expect(manuallyEdited.wordFixes?.['1']).toBe('Agendaí revisado')
+  expect(captionWords(words, captionSourceOf(manuallyEdited, 20_000)).filter((w) => w.i === 1 || w.i === 2)).toEqual([{ i: 1, text: 'Agendaí revisado', start: 1000, end: 2300 }])
+  expect(JSON.parse(readFileSync(join(dir, 'transcript.json'), 'utf8')).words).toEqual(words)
+  await shot(page, 'acabamento-texto-composto-manual')
+  await page.keyboard.press('Control+z')
+  await expect(product).toHaveText('Agendaí.')
+  await expect(page.locator('.tx-w[data-i="2"]')).toHaveCount(0)
   await product.dblclick()
   await expect(page.getByTestId('text-selection-count')).toHaveText('2 palavras selecionadas')
   await page.keyboard.press('Delete')

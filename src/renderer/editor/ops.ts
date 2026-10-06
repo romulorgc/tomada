@@ -7,6 +7,7 @@ import { useMemo } from 'react'
 import { addManualCut, restoreCut } from '@shared/cuts'
 import { createLayoutSeg, createZoom, createZoomAt, deleteLayoutSeg, deleteZoom, splitLayoutAt } from '@shared/edits'
 import { cutWords, restoreWords, togglePause } from '@shared/text-edit'
+import { markManualDictionarySpan } from '@shared/dictionary-corrections'
 import type { LayoutKind } from '@shared/types'
 import { createBlurRegion, deleteBlurRegion, resizeBlurRegion } from '@shared/blur'
 import { selectionRange } from './text/text-store'
@@ -56,19 +57,20 @@ export function useEditorOps() {
       },
 
       /** Corrige o texto de uma palavra (vale para a legenda, não para o áudio). Vazio ou igual ao original volta ao original. */
-      fixWord(i: number, value: string): boolean {
-        const original = words?.[i]?.text
-        if (original === undefined) return false
+      fixWord(i: number, value: string, last?: number): boolean {
+        const word = words?.[i]
+        if (!word) return false
+        const original = word.text
         const clean = value.replace(/\s+/g, ' ').trim()
         return st().change((p) => {
           const fixes = { ...(p.wordFixes ?? {}) }
-          if (clean.length === 0 || clean === original.trim()) delete fixes[String(i)]
-          else fixes[String(i)] = clean
-          if (JSON.stringify(fixes) === JSON.stringify(p.wordFixes ?? {})) return p
+          if (clean.length === 0 || clean === original.trim()) delete fixes[String(word.i)]
+          else fixes[String(word.i)] = clean
           const next = { ...p }
           if (Object.keys(fixes).length > 0) next.wordFixes = fixes
           else delete next.wordFixes
-          return next
+          const marked = markManualDictionarySpan(next, word.i, last === undefined ? undefined : words?.[last]?.i)
+          return JSON.stringify(fixes) === JSON.stringify(p.wordFixes ?? {}) && marked.review === p.review ? p : marked
         })
       },
 
