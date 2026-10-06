@@ -276,6 +276,26 @@ export function resolveScreenCrop(crop: ScreenCrop | undefined, samples: readonl
   return tl
 }
 
+/** Fração mínima da gravação de TELA em que a página do navegador precisa estar à frente para o piloto recortar sozinho. */
+export const AUTO_CROP_MIN_SHARE = 0.5
+
+/**
+ * Que fração da gravação (0..1) mostra a página de um navegador que não é a tela inteira? Cada medida vale até a seguinte e a última
+ * até `durationMs`; tela cheia (F11) ou outro programa à frente (medida "tela toda") não contam. Gravação de TELA: quem decide se o
+ * piloto recorta sozinho é esta fração (`AUTO_CROP_MIN_SHARE`); com o navegador só de passagem a tela inteira continua sendo a base.
+ */
+export function browserPageShare(samples: readonly ContentRectSample[], sourcePx: Size, durationMs: number): number {
+  if (!(durationMs > 0)) return 0
+  const steps = stabilizeContentRects(samples, sourcePx, 0)
+  let page = 0
+  for (let i = 0; i < steps.length; i++) {
+    const from = clamp(steps[i]!.t, 0, durationMs)
+    const to = clamp(i + 1 < steps.length ? steps[i + 1]!.t : durationMs, 0, durationMs)
+    if (to > from && !isFullRect(steps[i]!.rect, sourcePx)) page += to - from
+  }
+  return clamp(page / durationMs, 0, 1)
+}
+
 /** Chave estável do que o recorte do documento pede (para guardar o resultado em cache). */
 export function cropSignature(crop: ScreenCrop | undefined): string {
   if (!crop || crop.mode === 'off') return 'off'

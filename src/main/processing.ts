@@ -12,6 +12,7 @@ import { basename, join } from 'node:path'
 import type { ProcessSnapshot, ProcessStepId, ProcessStepState, Settings } from '@shared/ipc'
 import { createProject, parseProject, serializeProject } from '@shared/project'
 import { CONTENT_RECT_FILE } from '@shared/events'
+import { AUTO_CROP_MIN_SHARE, browserPageShare } from '@shared/crop'
 import { buildEvents, toJsonLines, type BuiltEvents, type RawEvents } from '@shared/recording'
 import type { CaptureInfo, Project, Src } from '@shared/types'
 import { calibrationForPair, type CameraCalibration } from '@shared/camera-sync'
@@ -249,8 +250,17 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
       }
       // Sem o cursor do sistema no vídeo, o editor precisa desenhar o sintético; com ele, só ripple/halo.
       project.style.cursor.mode = saved.capture.cursorHidden ? 'synthetic' : 'real'
-      // Janela de navegador com a página medida: o vídeo já sai só com a página. (Em gravação de tela o recorte é uma oferta do editor.)
+      // Janela de navegador com a página medida: o vídeo já sai só com a página.
       if (saved.capture.kind === 'window' && saved.capture.browser?.contentRect) project.screenCrop = { mode: 'auto' }
+      // Gravação de TELA com um navegador Chromium à frente a maior parte do tempo: o piloto também recorta para a página (sem abas,
+      // barra de endereço nem barra de tarefas). Se o programa trocar no meio, esse trecho volta à tela inteira pela transição do C1.
+      // Com o navegador só de passagem a tela inteira segue como base e o recorte fica como oferta do editor.
+      if (saved.capture.kind === 'screen' && saved.capture.browser?.contentRect && project.sources.screen) {
+        const text = await readFile(await resolveProjectFile(dir, EVENT_FILES.contentRect), 'utf8').catch(() => '')
+        const samples = eventsFromText({ contentRect: text }).contentRects
+        const { w, h, durationMs } = project.sources.screen
+        if (browserPageShare(samples, { w, h }, durationMs) >= AUTO_CROP_MIN_SHARE) project.screenCrop = { mode: 'auto' }
+      }
       if (project.sources.camera && project.sources.voice) {
         const measured = await deps.lipSync?.detect(dir, project)
         const calibration = calibrationForPair(deps.calibrations?.() ?? [], manifest.cameraId, manifest.micId)
