@@ -5,6 +5,8 @@ import type { Range } from './types'
 const BLOCK_MS = 20
 const CLIPPING_AMPLITUDE = 10 ** (-0.5 / 20)
 const MIN_ACTIVE_DBFS = -60
+/** Voz bruta abaixo disto (LUFS integrado) é baixa demais: o `loudnorm` do pós subiria ~26 dB ou mais e o chiado junto. */
+export const VERY_LOW_LUFS = -40
 
 export const audioQualitySchema = z.object({
   version: z.literal(1),
@@ -15,13 +17,17 @@ export const audioQualitySchema = z.object({
   activeMs: z.number().finite().nonnegative(),
   activeRmsDbfs: z.number().finite().nullable(),
   noiseFloorDbfs: z.number().finite().nullable(),
-  warnings: z.array(z.enum(['clipping', 'low-voice'])).max(2)
+  /** Volume integrado da voz BRUTA (antes do pós); ausente em projetos medidos antes deste campo. */
+  integratedLufs: z.number().finite().nullable().optional(),
+  warnings: z.array(z.enum(['clipping', 'low-voice', 'very-low-level'])).max(3)
 })
 export type AudioQualityReport = z.infer<typeof audioQualitySchema>
 export type AudioQualityOptions = {
   /** Fala já confirmada por VAD/transcrição, em tempo do ARQUIVO. [] = ausência de fala conhecida.
    * Sem esta opção, usa energia sobre o piso e periodicidade vocal; não reconhece palavras. */
   activeRanges?: readonly Range[]
+  /** LUFS integrado da voz bruta (ver `IntegratedLoudness`); `null` = silêncio ou curta demais. */
+  integratedLufs?: number | null
 }
 export type AudioQualityBlock = { sampleCount: number; sumSquares: number; peak: number; clippedSamples: number; periodicity: number }
 
@@ -113,7 +119,9 @@ export function analyzeAudioQualityBlocks(blocks: readonly AudioQualityBlock[], 
   // 300 ms evita converter um clique/estalo num diagnóstico de voz. A tolerância é só o
   // arredondamento Float32 no limiar exato; não altera o limiar acústico de -35 dBFS.
   if (activeMs >= 300 && activeRmsDbfs !== null && activeRmsDbfs < -35 - 1e-6) warnings.push('low-voice')
-  return { version: 1, sampleRate, durationMs: sampleCount * 1000 / sampleRate, peakDbfs: dbfs(peak), clippingMs, activeMs, activeRmsDbfs, noiseFloorDbfs, warnings }
+  const integratedLufs = options.integratedLufs ?? null
+  if (integratedLufs !== null && integratedLufs < VERY_LOW_LUFS) warnings.push('very-low-level')
+  return { version: 1, sampleRate, durationMs: sampleCount * 1000 / sampleRate, peakDbfs: dbfs(peak), clippingMs, activeMs, activeRmsDbfs, noiseFloorDbfs, ...(options.integratedLufs !== undefined ? { integratedLufs } : {}), warnings }
 }
 
 export function analyzeAudioQuality(samples: Float32Array, sampleRate: number, options: AudioQualityOptions = {}): AudioQualityReport {

@@ -66,7 +66,9 @@ describe('análise do WAV no projeto', () => {
     await writeFile(join(dir, 'media/voice.wav'), wav(3, samples))
     const quality = await inspectProjectAudioQuality(dir, 'media/voice.wav', { activeRanges: [{ start: 0, end: 1000 }] })
     expect(quality.activeRmsDbfs).toBeCloseTo(-40, 3)
-    expect(quality.warnings).toEqual(['low-voice'])
+    // -40 dBFS de RMS contínuo também é -40,7 LUFS: abaixo do limite de voz bruta muito baixa.
+    expect(quality.integratedLufs).toBeLessThan(-40)
+    expect(quality.warnings).toEqual(['low-voice', 'very-low-level'])
     await expect(inspectProjectAudioQuality(dir, '../../settings.json')).rejects.toThrow(/fora|relativo/i)
   }))
 

@@ -1,6 +1,7 @@
 /** Mede o WAV original sem ffmpeg, reprodução ou cópia de áudio. Retém só estatísticas por 20 ms. */
 import { open, type FileHandle } from 'node:fs/promises'
 import { analyzeAudioQualityBlocks, measureAudioQualityBlocks, type AudioQualityBlock, type AudioQualityOptions, type AudioQualityReport } from '@shared/audio-quality'
+import { IntegratedLoudness, LOUDNESS_SAMPLE_RATE } from '@shared/loudness'
 import { resolveProjectFile } from './project-files'
 export { audioQualityWarningMessages } from '@shared/audio-quality-messages'
 
@@ -65,12 +66,15 @@ export async function inspectProjectAudioQuality(dir: string, relativePath = 'me
     const perBlock = Math.max(1, Math.round(info.sampleRate * 0.02))
     const chunkBytes = perBlock * 50 * info.width
     const blocks: AudioQualityBlock[] = []
+    // Volume integrado da voz BRUTA: só a 48 kHz (a ponderação K é a desta taxa); outra taxa fica sem esse número.
+    const loudness = info.sampleRate === LOUDNESS_SAMPLE_RATE ? new IntegratedLoudness() : null
     for (let offset = 0; offset < info.dataSize; offset += chunkBytes) {
       const bytes = await readExact(file, Math.min(chunkBytes, info.dataSize - offset), info.dataAt + offset)
       const samples = new Float32Array(bytes.length / info.width)
       for (let i = 0; i < samples.length; i++) samples[i] = info.format === 3 ? bytes.readFloatLE(i * 4) : bytes.readInt16LE(i * 2) / 32768
+      loudness?.push(samples)
       for (const block of measureAudioQualityBlocks(samples, info.sampleRate)) blocks.push(block)
     }
-    return analyzeAudioQualityBlocks(blocks, info.sampleRate, options)
+    return analyzeAudioQualityBlocks(blocks, info.sampleRate, loudness ? { ...options, integratedLufs: loudness.finish() } : options)
   } finally { await file.close() }
 }

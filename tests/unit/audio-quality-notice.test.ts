@@ -24,6 +24,23 @@ describe('aviso de áudio salvo e visível', () => {
     expect(audioQualityWarningMessages(analyzeAudioQuality(new Float32Array(48_000), 48_000))).toEqual([])
   })
 
+  it('voz bruta abaixo de -40 LUFS (caso real: -58,3 LUFS, pico -38 dBFS) vira UM aviso com o número, o motivo e o que fazer, e sobrevive ao arquivo', () => {
+    const project = createProject({ title: 'Gravação sintética' })
+    const signal = new Float32Array(48_000).fill(0.01)
+    project.audioQuality = analyzeAudioQuality(signal, 48_000, { activeRanges: [{ start: 0, end: 1000 }], integratedLufs: -58.3 })
+    expect(project.audioQuality.warnings).toEqual(['low-voice', 'very-low-level'])
+    const reopened = parseProject(serializeProject(project))
+    expect(reopened.audioQuality?.integratedLufs).toBe(-58.3)
+    const messages = audioQualityWarningMessages(reopened.audioQuality!)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toContain('-58,3 LUFS')
+    expect(messages[0]).toMatch(/44 dB/)
+    expect(messages[0]).toContain('volume de ENTRADA do microfone no Windows')
+    expect(messages[0]).toContain('Ajustar sozinho')
+    // -40 LUFS ainda é aceitável: sem o aviso forte.
+    expect(analyzeAudioQuality(signal, 48_000, { integratedLufs: -40 }).warnings).not.toContain('very-low-level')
+  })
+
   it('rejeita métricas não finitas ou aviso desconhecido ao ler um projeto', () => {
     const project = createProject({ title: 'Gravação sintética' })
     project.audioQuality = analyzeAudioQuality(new Float32Array(4800).fill(0.95), 48_000)
