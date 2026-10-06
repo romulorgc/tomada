@@ -6,7 +6,9 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+import * as contentMapModule from '../../src/main/content-map'
+import { eventsFromText } from '../../src/shared/events'
 import { parseProject } from '../../src/shared/project'
 import type { ProcessSnapshot, StartedInfo, StopInfo } from '../../src/shared/ipc'
 import type { RawEvents, RecordRequest } from '../../src/shared/recording'
@@ -472,6 +474,25 @@ describe('a página do navegador na gravação (C1)', () => {
     expect(rects[0]!.h).toBeCloseTo(633 / 742, 4)
     expect(project.screenCrop).toEqual({ mode: 'auto' })
     expect(project.capture.browser).toEqual({ exe: 'chrome.exe', engine: 'chromium', contentRect: true })
+  }, 120_000)
+
+  it('o processamento mede o mapa de conteúdo da tela (events/content-map.jsonl) para o enquadramento do 9:16', async () => {
+    const { dir } = await run({ browser: { exe: 'chrome.exe', engine: 'chromium' }, raw: windowRaw(page) })
+    const map = eventsFromText({ contentMap: readFileSync(join(dir, 'events/content-map.jsonl'), 'utf8') }).contentMap!
+    expect(map.length).toBeGreaterThanOrEqual(1)
+    expect(map[0]!.t).toBe(0)
+    expect(map[0]!.cells.length).toBe(map[0]!.cols * map[0]!.rows)
+  }, 120_000)
+
+  it('se o mapa de conteúdo não puder ser medido, o processamento termina e a nota diz o que aconteceu (nada cai calado)', async () => {
+    const spy = vi.spyOn(contentMapModule, 'measureContentMap').mockRejectedValue(new Error('ffmpeg quebrou'))
+    try {
+      const { dir, snap } = await run({ browser: { exe: 'chrome.exe', engine: 'chromium' }, raw: windowRaw(page) })
+      expect(snap.notes.some((n) => n.includes('conteúdo da tela') && n.includes('ffmpeg quebrou') && n.includes('só os cliques'))).toBe(true)
+      expect(existsSync(join(dir, 'events/content-map.jsonl'))).toBe(false)
+    } finally {
+      spy.mockRestore()
+    }
   }, 120_000)
 
   it('a página muda no meio (DevTools): uma linha nova no instante certo', async () => {

@@ -30,7 +30,9 @@ import { EVENT_FILES, eventsFromText } from '@shared/events'
 import { prepareEvents } from '@shared/scene'
 import { generateAutoZooms, zoomPresetFor } from '@shared/zoom'
 import { resolveProjectFile } from './project-files'
-import { commitToProject, createProjectTmpDir, removeTmpDir } from './safe-output'
+import { commitToProject, createProjectTmpDir, removeTmpDir, writeProjectFile } from './safe-output'
+import { contentMapToJsonLines } from '@shared/content-map'
+import { measureContentMap } from './content-map'
 import { inspectProjectAudioQuality, audioQualityWarningMessages } from './audio-quality'
 import { measurePcmAlignment } from './pcm-alignment'
 import { audioQualityPtBR } from '@shared/audio-quality-messages'
@@ -176,6 +178,7 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
         note(`O vídeo da tela ficou com ${(result.probe.durationMs / 1000).toFixed(1)} s e a gravação durou ${(expectedMs / 1000).toFixed(1)} s: a captura de tela parou antes do fim.`)
       }
       ctx.sources.screen ={ path: 'media/screen.mp4', w: v.width ?? 0, h: v.height ?? 0, fps: manifest.fps, durationMs: result.probe.durationMs }
+      await saveContentMap(dir, deps, note)
       return `${result.encoder === 'h264_nvenc' ? 'NVENC' : 'libx264'}, ${v.width}×${v.height}`
     },
 
@@ -366,6 +369,22 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
   emit()
   logger.info(`Gravação processada: ${manifest.folder}`)
   return { ...snapshot, steps: steps.map((s) => ({ ...s })), notes: [...ctx.notes] }
+}
+
+/**
+ * O mapa de conteúdo da tela (`events/content-map.jsonl`): onde está o texto e o que vale ser visto, medido uma vez aqui (onde a tela já
+ * é lida) para a janela quadrada do 9:16 se enquadrar pela imagem e não só pelas ações. Falhar aqui não derruba o processamento: o
+ * enquadramento volta a usar só os cliques e a digitação, e o aviso vai para as notas da gravação (nada cai calado).
+ */
+async function saveContentMap(dir: string, deps: ProcessDeps, note: (message: string) => void): Promise<void> {
+  try {
+    const map = await measureContentMap(deps.ff, await resolveProjectFile(dir, 'media/screen.mp4'))
+    await mkdir(join(dir, 'events'), { recursive: true })
+    await writeProjectFile(dir, EVENT_FILES.contentMap, contentMapToJsonLines(map))
+    deps.logger.info(`Mapa de conteúdo da tela: ${map.length} imagens distintas.`)
+  } catch (err) {
+    note(`Não consegui medir onde está o conteúdo da tela (${messageOf(err)}). O enquadramento do 9:16 vai usar só os cliques e a digitação.`)
+  }
 }
 
 async function cleanupPartial(dir: string, id: ProcessStepId, logger: Logger): Promise<void> {

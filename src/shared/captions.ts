@@ -234,11 +234,54 @@ export function buildCaptionPages(words: readonly CaptionWord[], opts: CaptionPa
   return pages
 }
 
-/** A trilha de legendas de um projeto no formato (a visão do formato: `captions` já é a do 16:9 ou a do vertical). */
-export function buildCaptionTrack(words: readonly Word[] | null | undefined, project: Pick<Project, 'cuts' | 'mutes' | 'wordFixes' | 'captions' | 'review'>, durationMs: number): CaptionTrack | null {
+/** O título de gancho do vertical: o texto e até que instante de SAÍDA (ms) ele fica na tela. */
+export type HookOnScreen = { text: string; untilMs: number }
+
+/** A palavra como se compara com a do gancho: sem acento, sem pontuação, sem diferença de caixa ("PESSOALMENTE." = "pessoalmente"). */
+const hookToken = (text: string): string => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+
+/**
+ * As palavras da legenda que o gancho, enquanto está na tela, já mostra: trechos de palavras seguidas, ditas antes de o gancho sair,
+ * que repetem o gancho na mesma ordem (a primeira frase falada virou o gancho: "VOU MOSTRAR PRA VOCÊS, PESSOALMENTE."). Precisa ser um
+ * trecho de pelo menos 2 palavras (1, num gancho de uma palavra só): uma palavra solta em comum ("de", "que") não é repetição.
+ * Devolve os índices (em `words`) das palavras repetidas.
+ */
+export function wordsRepeatedByHook(words: readonly CaptionWord[], hook: HookOnScreen): Set<number> {
+  const covered = new Set<number>()
+  const hookWords = hook.text.split(/\s+/).map(hookToken).filter((t) => t !== '')
+  if (hookWords.length === 0) return covered
+  const minRun = Math.min(2, hookWords.length)
+  const tokens = words.map((w) => hookToken(w.text))
+  const onScreen = (k: number): boolean => words[k]!.start < hook.untilMs
+  for (let k = 0; k < words.length && onScreen(k); ) {
+    let run = 0
+    for (let h = 0; h < hookWords.length; h++) {
+      let n = 0
+      while (k + n < words.length && onScreen(k + n) && h + n < hookWords.length && tokens[k + n] === hookWords[h + n]) n++
+      run = Math.max(run, n)
+    }
+    if (run >= minRun) {
+      for (let i = 0; i < run; i++) covered.add(k + i)
+      k += run
+    } else k++
+  }
+  return covered
+}
+
+/**
+ * A trilha de legendas de um projeto no formato (a visão do formato: `captions` já é a do 16:9 ou a do vertical). Com o `hook` do
+ * vertical, a legenda NÃO repete o que o gancho já mostra enquanto ele está na tela: o gancho é o texto grande e fixo daquele
+ * trecho, e as mesmas palavras empilhadas embaixo, acendendo uma a uma, só repetiam a leitura (as legendas de arquivo SRT/VTT, que
+ * não passam por aqui, seguem com a fala inteira).
+ */
+export function buildCaptionTrack(words: readonly Word[] | null | undefined, project: Pick<Project, 'cuts' | 'mutes' | 'wordFixes' | 'captions' | 'review'>, durationMs: number, hook?: HookOnScreen): CaptionTrack | null {
   const cs = project.captions
   if (!cs.enabled) return null
-  const cw = captionWords(words, { cuts: project.cuts, mutes: project.mutes, wordFixes: project.wordFixes, dictionaryCorrections: project.review?.dictionaryCorrections, durationMs })
+  let cw = captionWords(words, { cuts: project.cuts, mutes: project.mutes, wordFixes: project.wordFixes, dictionaryCorrections: project.review?.dictionaryCorrections, durationMs })
+  if (hook && hook.text.trim() !== '') {
+    const repeated = wordsRepeatedByHook(cw, hook)
+    if (repeated.size > 0) cw = cw.filter((_, i) => !repeated.has(i))
+  }
   if (cw.length === 0) return null
   return { id: `t${++trackCounter}`, style: cs.style, pages: buildCaptionPages(cw, { style: cs.style, wordsPerLine: cs.wordsPerLine }) }
 }

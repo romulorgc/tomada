@@ -123,11 +123,12 @@ async function createContext(
   job: Pick<ExportJob, 'projectId' | 'project' | 'screenUrl' | 'cameraUrl' | 'eventUrls' | 'clipLayout'> & { words?: Word[] | null; faceUrl?: string | null; matteUrl?: string | null },
   format: FormatSpec
 ): Promise<Context> {
-  const [cursor, clicks, keys, contentRect, faceText] = await Promise.all([
+  const [cursor, clicks, keys, contentRect, contentMap, faceText] = await Promise.all([
     fetchText(job.eventUrls.cursor),
     fetchText(job.eventUrls.clicks),
     fetchText(job.eventUrls.keys),
     fetchText(job.eventUrls.contentRect),
+    fetchText(job.eventUrls.contentMap ?? null),
     fetchText(job.faceUrl ?? null)
   ])
   // A análise do rosto enquadra a câmera. Arquivo que existe e não abre é erro VISÍVEL (o enquadramento sairia diferente da prévia).
@@ -139,7 +140,7 @@ async function createContext(
       throw new Error(`Não consegui ler a análise do rosto da câmera (apague media/camera-face.json do projeto ou analise de novo): ${messageOf(err)}`)
     }
   }
-  const events = eventsFromText({ cursor, clicks, keys, contentRect })
+  const events = eventsFromText({ cursor, clicks, keys, contentRect, contentMap })
   const doc = job.project
   const durationMs = Math.max(doc.sources.screen?.durationMs ?? 0, doc.sources.camera?.durationMs ?? 0, doc.sources.voice?.durationMs ?? 0, doc.sources.system?.durationMs ?? 0)
   const data = prepareEvents(events, durationMs)

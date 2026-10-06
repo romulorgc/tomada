@@ -234,7 +234,8 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
           cursor: await eventUrl(EVENT_FILES.cursor),
           clicks: await eventUrl(EVENT_FILES.clicks),
           keys: await eventUrl(EVENT_FILES.keys),
-          contentRect: await eventUrl(EVENT_FILES.contentRect)
+          contentRect: await eventUrl(EVENT_FILES.contentRect),
+          contentMap: await eventUrl(EVENT_FILES.contentMap)
         },
         analysis: { face: await versionedUrl(FACE_FILE), matte: await currentMatteUrl(id, dir, project) }
       }
