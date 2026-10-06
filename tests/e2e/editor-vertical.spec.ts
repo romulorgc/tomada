@@ -152,7 +152,7 @@ test('legendas no 9:16: Natural (caixa mista) de partida, estilos e ajustes do v
   // o 16:9 tem a legenda dele: desligada, Natural
   await page.getByTestId('ratio-16-9').click()
   await expect(page.getByTestId('captions-show')).toHaveAttribute('aria-checked', 'false')
-  await expect(page.getByTestId('caption-style-karaoke')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId(`caption-style-${captions16.style}`)).toHaveAttribute('aria-pressed', 'true') // o estilo que o 16:9 já tinha (a fixture gerada hoje é Natural; a antiga era Karaokê)
   await expect(page.getByTestId('captions-format-note')).toContainText(/16:9/)
   await page.getByTestId('captions-show').click()
   await expect.poll(() => readSaved(s!).captions.enabled, { timeout: 10_000 }).toBe(true)
