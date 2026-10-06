@@ -54,7 +54,7 @@ export function ExportDialog() {
   const outMs = derived?.outputDurationMs ?? 0
   const sep = detail.dir.includes('\\') ? '\\' : '/'
   const shownDir = dir ?? `${detail.dir}${sep}exports`
-  const estimate = useMemo(() => formatBytes(((exportBitrate(resolution, fps, format) + (vertical ? 192_000 : 384_000)) * (outMs / 1000)) / 8), [resolution, fps, format, vertical, outMs])
+  const estimate = useMemo(() => formatBytes(((exportBitrate(resolution, fps, format) + 320_000) * (outMs / 1000)) / 8), [resolution, fps, format, outMs])
   // legenda ligada neste formato e nenhuma palavra para legendar: o vídeo sai sem legenda, e a pessoa precisa saber
   const captionsWithoutText = projectForFormat(doc, format).captions.enabled && (transcript.data?.words.length ?? 0) === 0
   // o layout Apresentador desenha a câmera pela máscara do fundo: sem ela o vídeo sairia diferente da prévia, então a exportação espera
