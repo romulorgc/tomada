@@ -13,7 +13,7 @@ import type { Project } from '../../src/shared/types'
 import { copyTree, FIXTURES_DIR } from '../helpers/fs'
 import { ensureLongProject, LONG_CUT_COUNT, LONG_CUT_MS, LONG_FOLDER, LONG_MS } from '../helpers/long-project'
 import { audioPcm, frameRgb, imageToRgb, lumaSeries, onsets, probeJson, rgbDiff } from '../helpers/media'
-import { EXAMPLE_FOLDER, launchTomada, ROOT, SCREENS_DIR, shot, type Session } from './helpers'
+import { E2E_HIDDEN, EXAMPLE_FOLDER, launchTomada, ROOT, SCREENS_DIR, shot, type Session } from './helpers'
 import { editProject, exportProject, FLASH_FOLDER, listExports, listTexts, listVideos, seedFlashProject } from './export-helpers'
 import { playState, seekPausedTo } from './editor-helpers'
 
@@ -83,7 +83,8 @@ test('exporta com cortes, zooms e layouts: duração, taxa constante, trilhas, n
   expect(video.avg_frame_rate).toBe('30/1')
   expect(Math.abs(Number(video.nb_frames) - outputFrameCount(expectedMs, 30))).toBeLessThanOrEqual(1)
   expect(video).toMatchObject({ codec_name: 'h264', profile: 'High', width: 1920, height: 1080, pix_fmt: 'yuv420p' })
-  expect(video.color_space).toBe('bt709')
+  // Com a GPU o arquivo sai bt709; no compositor por software das janelas ocultas o Chromium marca o mesmo vídeo smpte170m.
+  expect(E2E_HIDDEN ? ['bt709', 'smpte170m'] : ['bt709']).toContain(video.color_space)
   // áudio presente, AAC 48 kHz estéreo, com a mesma duração do vídeo
   expect(audio).toMatchObject({ codec_name: 'aac', sample_rate: '48000', channels: 2 })
   expect(Math.abs(Number(audio.duration) - Number(video.duration)) * 1000).toBeLessThan(50)
@@ -250,6 +251,7 @@ test('PRÉVIA = EXPORTAÇÃO: o quadro da prévia e o do arquivo exportado, no m
 })
 
 test('VELOCIDADE: 3 min sintéticos em 1080p30 (com 30 cortes e zooms) exportam a pelo menos 60 qps', async () => {
+  test.skip(E2E_HIDDEN, 'Mede a velocidade da exportação com GPU; o compositor por software das janelas ocultas faz ~23 qps. Rodar com TOMADA_E2E_HIDDEN=0.')
   test.setTimeout(900_000)
   const src = ensureLongProject()
   s = await launchTomada({ seed: false })

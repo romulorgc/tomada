@@ -10,7 +10,7 @@ import { expect, test } from '@playwright/test'
 import { outputDuration } from '../../src/shared/timeline'
 import { frameRgb, probeJson } from '../helpers/media'
 import { editProject, exportProject, listExports } from './export-helpers'
-import { EXAMPLE_FOLDER, launchTomada, ROOT, SCREENS_DIR, type Session } from './helpers'
+import { E2E_HIDDEN, EXAMPLE_FOLDER, launchTomada, ROOT, SCREENS_DIR, type Session } from './helpers'
 
 let s: Session | undefined
 test.afterEach(async () => {
@@ -91,7 +91,8 @@ test('exporta o vertical 1080×1920 com a legenda Destaque: arquivo conferido, p
   const video = probe.streams.find((x) => x.codec_type === 'video')!
   const audio = probe.streams.find((x) => x.codec_type === 'audio')!
   expect(video).toMatchObject({ codec_name: 'h264', profile: 'High', width: 1080, height: 1920, pix_fmt: 'yuv420p', r_frame_rate: '30/1', avg_frame_rate: '30/1' })
-  expect(video.color_space).toBe('bt709')
+  // Com a GPU o arquivo sai bt709; no compositor por software das janelas ocultas o Chromium marca o mesmo vídeo smpte170m.
+  expect(E2E_HIDDEN ? ['bt709', 'smpte170m'] : ['bt709']).toContain(video.color_space)
   expect(audio).toMatchObject({ codec_name: 'aac', sample_rate: '48000', channels: 2 })
   expect(Math.abs(Number(video.duration) * 1000 - expectedMs)).toBeLessThanOrEqual(FRAME_MS)
   expect(Math.abs(Number(audio.duration) - Number(video.duration)) * 1000).toBeLessThan(50)

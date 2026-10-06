@@ -18,6 +18,12 @@ import { startWindowAudit } from './window-audit'
 export { ROOT }
 export const EXAMPLE_FOLDER = '2026-10-04 1500 Projeto de exemplo'
 export const SCREENS_DIR = join(ROOT, 'test-results', 'screens')
+/**
+ * Bateria com janelas ocultas (padrão do playwright.config.ts): o compositor roda por software, sem GPU. Quase tudo vale igual;
+ * o que mede GPU (velocidade, orçamento por quadro, espaço de cor marcado pela placa) usa esta constante e é conferido na rodada
+ * visível: `TOMADA_E2E_HIDDEN=0 node scripts/fila-pesada.mjs npm run test:e2e -- <spec>`. Veja docs/etapas/acabamento-janelas.md.
+ */
+export const E2E_HIDDEN = process.env.TOMADA_E2E_HIDDEN === '1'
 
 export type LaunchOptions = {
   /** Testes das etapas anteriores ficam no editor; os do piloto usam o padrão do produto. */
