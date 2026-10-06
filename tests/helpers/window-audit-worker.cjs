@@ -19,6 +19,9 @@ const snapshot = kernel32.func('intptr_t __stdcall CreateToolhelp32Snapshot(uint
 const firstProcess = kernel32.func('int __stdcall Process32FirstW(intptr_t snapshot, _Inout_ TomadaAuditProcessEntry *entry)')
 const nextProcess = kernel32.func('int __stdcall Process32NextW(intptr_t snapshot, _Inout_ TomadaAuditProcessEntry *entry)')
 const closeHandle = kernel32.func('int __stdcall CloseHandle(intptr_t handle)')
+const FileTime = koffi.struct('TomadaAuditFileTime', { lo: 'uint32', hi: 'uint32' })
+const openProcess = kernel32.func('intptr_t __stdcall OpenProcess(uint32 access, int inherit, uint32 pid)')
+const processTimes = kernel32.func('int __stdcall GetProcessTimes(intptr_t handle, _Out_ TomadaAuditFileTime *created, _Out_ TomadaAuditFileTime *exited, _Out_ TomadaAuditFileTime *kernel, _Out_ TomadaAuditFileTime *user)')
 const WindowProc = koffi.proto('int __stdcall TomadaAuditEnumWindow(intptr_t hwnd, intptr_t data)')
 const enumWindows = user32.func('int __stdcall EnumWindows(TomadaAuditEnumWindow *callback, intptr_t data)')
 const windowPid = user32.func('uint32 __stdcall GetWindowThreadProcessId(intptr_t hwnd, _Out_ uint32 *pid)')
@@ -41,12 +44,39 @@ let targetPids = new Set()
 let lastSampleAt = startedAt
 let maxSampleGapMs = 0
 
+const birthCache = new Map()
+/** Instante de criação (FILETIME, BigInt) ou null quando o Windows não deixa abrir o processo. */
+function bornAt(row) {
+  const key = `${row.pid}|${row.parent}|${row.exe}`
+  if (birthCache.has(key)) return birthCache.get(key)
+  let born = null
+  const handle = openProcess(0x1000, 0, row.pid) // PROCESS_QUERY_LIMITED_INFORMATION
+  if (handle) {
+    try {
+      const created = {}
+      if (processTimes(handle, created, {}, {}, {})) born = BigInt(created.hi) * 4294967296n + BigInt(created.lo)
+    } finally { closeHandle(handle) }
+  }
+  // Só o instante conhecido fica guardado: uma falha de abertura (processo novo demais) é tentada de novo na próxima amostra.
+  if (born !== null) birthCache.set(key, born)
+  return born
+}
+
 function descendants(processes, parents) {
+  const byPid = new Map(processes.map(p => [p.pid, p]))
   const found = new Set(parents)
   let changed = true
   while (changed) {
     changed = false
-    for (const p of processes) if (found.has(p.parent) && !found.has(p.pid)) { found.add(p.pid); changed = true }
+    for (const p of processes) {
+      if (found.has(p.pid) || !found.has(p.parent)) continue
+      // O Windows reutiliza PIDs e o campo "pai" de um processo antigo continua apontando para o número. Um pai morto cujo
+      // PID voltou a ser de um Electron não adota o sistema inteiro: o filho precisa ter nascido depois do pai atual.
+      const parent = byPid.get(p.parent)
+      const child = bornAt(p), father = parent ? bornAt(parent) : null
+      if (child === null || father === null || child < father) continue
+      found.add(p.pid); changed = true
+    }
   }
   return found
 }
