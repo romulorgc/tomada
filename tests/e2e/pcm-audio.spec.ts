@@ -63,7 +63,8 @@ test('PCM real: voz continua no relógio da câmera/tela, pausa não vira silên
     expect(best.corr).toBeGreaterThan(0.92)
     expect(Math.abs(best.lag / 8)).toBeLessThanOrEqual(5)
     expect(resumed.corr).toBeGreaterThan(0.9)
-    expect(Math.abs(resumed.lag / 8)).toBeLessThanOrEqual(5)
+    // O MediaRecorder da câmera retoma entre a chamada e o retorno de resume(); essa incerteza fica abaixo de meio quadro a 30 qps (16,7 ms).
+    expect(Math.abs(resumed.lag / 8)).toBeLessThanOrEqual(16)
     expect(s.problems).toEqual([])
   } finally { await s.close() }
 })

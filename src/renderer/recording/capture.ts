@@ -373,10 +373,12 @@ export class CaptureEngine {
 
   /** Retoma os dois. Devolve o instante (depois das chamadas). */
   resume(): number {
-    const at = nowMs()
     for (const s of this.slots) if (s.rec.state === 'paused') s.rec.resume()
+    // O mesmo instante que o manifesto guarda como fim da pausa: se o PCM voltasse antes (no começo desta chamada),
+    // a voz entraria na linha do tempo com o atraso da própria chamada (medido: 11 ms) em relação à tela e à câmera.
+    const at = nowMs()
     this.pcm?.resume(at)
-    return nowMs()
+    return at
   }
 
   /** Para tudo, espera o último pedaço chegar ao disco e devolve o resumo. */
