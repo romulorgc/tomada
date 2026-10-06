@@ -39,6 +39,17 @@ function seed(): { root: string; trashDir: string; store: ProjectStore; log: Ret
 }
 
 describe('ProjectStore.list', () => {
+  it('informa transcrição e cortes prontos, e atualiza o selo se a transcrição sumir', async () => {
+    const { root, store } = seed()
+    const file = join(root, EXAMPLE_ID, 'project.json')
+    const doc = JSON.parse(readFileSync(file, 'utf8'))
+    doc.clips = [{ id: 'corte', title: 'Demonstração', hook: 'Agende em poucos cliques', ranges: [{ start: 0, end: 18000 }], score: 80, reason: 'Teste', format: 'vertical', layoutV: 'screen-focus' }]
+    writeFileSync(file, JSON.stringify(doc))
+    expect((await store.list())[0]).toMatchObject({ hasTranscript: true, clipCount: 1 })
+    const fs = await import('node:fs/promises')
+    await fs.rm(join(root, EXAMPLE_ID, 'transcript.json'))
+    expect((await store.list())[0]).toMatchObject({ hasTranscript: false, clipCount: 1 })
+  })
   it('lista o projeto de exemplo com título, duração, data e miniatura', async () => {
     const { store } = seed()
     const list = await store.list()

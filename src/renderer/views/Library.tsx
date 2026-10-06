@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ProjectSummary } from '@shared/types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { ErrorPanel } from '../components/Feedback'
@@ -20,6 +20,18 @@ export function Library() {
 
   const [toDelete, setToDelete] = useState<ProjectSummary | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [search, setSearch] = useState('')
+  const [order, setOrder] = useState('newest')
+  const visible = useMemo(() => {
+    const normalize = (value: string) => value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('pt-BR')
+    const query = normalize(search.trim())
+    return projects.filter((p) => normalize(p.title).includes(query)).sort((a, b) => {
+      if (order === 'title') return a.title.localeCompare(b.title, 'pt-BR', { numeric: true })
+      const age = Date.parse(a.createdAt) - Date.parse(b.createdAt)
+      if (order === 'duration') return b.durationMs - a.durationMs || -age
+      return order === 'oldest' ? age : -age
+    })
+  }, [projects, search, order])
 
   useEffect(() => {
     void loadProjects()
@@ -61,6 +73,20 @@ export function Library() {
         </button>
       </header>
 
+      <div className="library-tools">
+        <label className="library-search">
+          <span>{t.library.search}</span>
+          <input type="search" className="field" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t.library.searchPlaceholder} data-testid="library-search" />
+        </label>
+        <label className="library-sort">
+          <span>{t.library.order}</span>
+          <select className="field" value={order} onChange={(e) => setOrder(e.target.value)} data-testid="library-sort">
+            {Object.entries(t.library.orders).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </label>
+      </div>
+      {search.trim() && status === 'ready' ? <p className="mb-4 text-sm text-muted" role="status">{t.library.results(visible.length)}</p> : null}
+
       {status === 'error' ? (
         <ErrorPanel title={t.library.loadError} detail={error} onRetry={() => void loadProjects()} />
       ) : status === 'idle' || status === 'loading' ? (
@@ -74,9 +100,15 @@ export function Library() {
         </div>
       ) : projects.length === 0 ? (
         <EmptyState onRecord={() => go({ name: 'record' })} />
+      ) : visible.length === 0 ? (
+        <div className="library-no-results" data-testid="library-no-results">
+          <h2>{t.library.noResults}</h2>
+          <p>{t.library.noResultsHelp}</p>
+          <button className="btn mt-4" onClick={() => setSearch('')}>{t.library.clearSearch}</button>
+        </div>
       ) : (
         <div className="grid gap-x-6 gap-y-8" style={gridStyle} data-testid="library-grid">
-          {projects.map((p) => (
+          {visible.map((p) => (
             <div key={p.id}>
             <ProjectCard
               key={p.id}
@@ -109,7 +141,7 @@ export function Library() {
 }
 
 /** Cartões crescem com a janela: de 1280 a 2560 px de largura mantêm um tamanho confortável. */
-const gridStyle = { gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(16rem, 17vw, 24rem), 1fr))' } as const
+const gridStyle = { gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, clamp(20rem, 24vw, 28rem)), 1fr))' } as const
 
 function EmptyState({ onRecord }: { onRecord: () => void }) {
   return (

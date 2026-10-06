@@ -3,7 +3,7 @@ import { formatDate, formatDateTime, formatDuration } from '@shared/format'
 import type { ProjectSummary } from '@shared/types'
 import { t } from '../i18n/pt-BR'
 import { isJobActive, useTranscription } from '../transcription-store'
-import { CameraIcon, FolderIcon, PencilIcon, ScreenIcon, TrashIcon } from './Icons'
+import { CameraIcon, CheckIcon, FolderIcon, PencilIcon, ScreenIcon, TrashIcon } from './Icons'
 
 type Props = {
   project: ProjectSummary
@@ -113,6 +113,12 @@ export function ProjectCard({ project, onOpen, onRename, onReveal, onAskDelete }
       </div>
 
       <div className="min-w-0 px-0.5">
+        {project.hasTranscript || (project.clipCount ?? 0) > 0 ? (
+          <div className="project-badges" aria-label={t.library.card.progress}>
+            {project.hasTranscript ? <span data-testid="card-transcribed"><CheckIcon size={13} />{t.library.card.transcribed}</span> : null}
+            {(project.clipCount ?? 0) > 0 ? <span data-testid="card-clips-ready">{t.library.card.clipsReady(project.clipCount!)}</span> : null}
+          </div>
+        ) : null}
         {editing ? (
           <input
             ref={inputRef}

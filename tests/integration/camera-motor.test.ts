@@ -7,6 +7,9 @@
  *  - o RECORTE DO FUNDO (M4c-B) num trecho da mesma gravação (a câmera real tem taxa VARIÁVEL: ~56 qps com a etiqueta de 60): o vídeo da
  *    máscara sai em cinza, num quadro por instante da câmera, com a pessoa clara e o fundo escuro, e cancelar devolve o motivo.
  * Exige o motor preparado (`npm run preparar:camera`, pela fila): sem ele o teste FALHA dizendo isso (nada de pular).
+ * Em worktrees sem gravações, compõe uma câmera de teste com o exemplo público local do SyncNet:
+ * 1920×1080, fundo preto, pessoa centralizada, 28,672 s e taxa variável na grade de 60 qps.
+ * Conserva todas as provas e limites; o composto fica só no temporário removido pelo ajudante.
  */
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
@@ -24,17 +27,26 @@ import { ROOT } from '../helpers/fs'
 const tmp = useTmpDir()
 const tools = toolPaths(ensureToolsDir())
 const engine = createPythonCamera({ tools, scriptPath: join(ROOT, 'resources', 'camera_tools.py'), logger: createMemoryLogger(), ffmpeg: () => locateFfmpeg()?.ffmpeg ?? null })
-const REAL = join(ROOT, 'gravacoes', '2026-07-26-13-57-59', 'camera.mp4')
+let REAL = join(ROOT, 'gravacoes', '2026-07-26-13-57-59', 'camera.mp4')
 
 beforeAll(async () => {
   const c = await engine.check()
   expect(c.face.state, `a análise da câmera não está preparada (${c.face.detail ?? 'sem detalhe'}). Rode: node scripts/fila-pesada.mjs npm run preparar:camera`).toBe('ready')
   expect(c.matte.state, `o recorte do fundo não está preparado (${c.matte.detail ?? 'sem detalhe'}). Rode: node scripts/fila-pesada.mjs npm run preparar:camera`).toBe('ready')
+  if (!existsSync(REAL)) {
+    const example = join(tools.base, 'lip-sync', 'example.avi')
+    expect(existsSync(example), 'sem gravações nesta cópia, exige o exemplo público local: preparar:sincronia').toBe(true)
+    REAL = join(tmp(), 'camera-publica-composta.mp4')
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-stream_loop', '-1', '-i', example,
+      '-f', 'lavfi', '-i', 'color=c=black:s=1920x1080:r=60:d=28.672',
+      '-filter_complex', '[0:v]scale=720:720,pad=1280:720:280:0:black[pessoa];[1:v][pessoa]overlay=320:360:shortest=1,fps=60,select=not(eq(mod(n\\,15)\\,7))',
+      '-t', '28.672', '-an', '-fps_mode', 'vfr', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-pix_fmt', 'yuv420p', REAL], { timeout: 90000 })
+  }
 })
 
 describe('motor da câmera (YuNet) na gravação real do usuário', () => {
   it('acha o rosto em quase toda a gravação, com caixas coerentes, e o progresso sobe de 0 a 1', async () => {
-    expect(existsSync(REAL), 'a gravação real do usuário fica em gravacoes/ (só nesta máquina, fora do git)').toBe(true)
+    expect(existsSync(REAL), 'a entrada de câmera precisa existir (gravação local ou composto público de teste)').toBe(true)
     const progress: number[] = []
     const started = performance.now()
     const track = await engine.detectFaces({ video: REAL, durationMs: 28_672, onProgress: (f) => progress.push(f) })
@@ -194,7 +206,7 @@ describe('a grade de instantes da máscara (SlotWriter, no script do app)', () =
 
 describe('recorte do fundo (RVM na placa) num trecho da gravação real', () => {
   it('sai um vídeo em cinza, na mesma taxa e com os mesmos quadros; a pessoa é clara, o fundo é escuro; o progresso sobe sem voltar', async () => {
-    expect(existsSync(REAL), 'a gravação real do usuário fica em gravacoes/ (só nesta máquina, fora do git)').toBe(true)
+    expect(existsSync(REAL), 'a entrada de câmera precisa existir (gravação local ou composto público de teste)').toBe(true)
     const dir = tmp()
     const excerpt = join(dir, 'camera-trecho.mp4')
     // 6 s do meio da gravação (o trecho fica numa pasta temporária e some ao fim; nada vai para tests/)

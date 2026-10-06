@@ -36,6 +36,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { registerHooks } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -640,9 +641,17 @@ async function makeExampleProject(tmp, ctx) {
   writeFileSync(join(dir, 'transcript.json'), transcriptFrom(gabarito))
 
   // project.json pelo MESMO código do app (src/shared/project.ts): o Node 24 lê TypeScript direto.
-  const { createProject, serializeProject, parseProject } = await import(
-    pathToFileURL(join(ROOT, 'src', 'shared', 'project.ts')).href
-  )
+  // O Node lê .ts, mas não resolve os imports relativos sem extensão usados pelo bundler.
+  // A adaptação vale só durante a carga do núcleo, sem alterar os imports do aplicativo.
+  const sharedUrl = pathToFileURL(join(ROOT, 'src', 'shared') + '/').href
+  const hook = registerHooks({ resolve(specifier, context, nextResolve) {
+    if (context.parentURL?.startsWith(sharedUrl) && specifier.startsWith('.') && !/\.[a-z]+$/i.test(specifier)) return nextResolve(`${specifier}.ts`, context)
+    return nextResolve(specifier, context)
+  } })
+  let projectModule
+  try { projectModule = await import(pathToFileURL(join(ROOT, 'src', 'shared', 'project.ts')).href) }
+  finally { hook.deregister() }
+  const { createProject, serializeProject, parseProject } = projectModule
   const project = createProject({
     id: 'exemplo-0001',
     title: 'Projeto de exemplo',
