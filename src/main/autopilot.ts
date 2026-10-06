@@ -7,8 +7,8 @@ import { computeClean, DEFAULT_CLEAN } from '@shared/clean'
 import { protectionFingerprint, PROTECTION_CHANGED_MESSAGE } from '@shared/blur'
 import { planClean } from '@shared/clean-plan'
 import { heuristicClips, heuristicClipLabels, mergeSuggestedClips, titleFromText, type ClipDraft } from '@shared/clips'
-import { processCursor } from '@shared/cursor'
 import { eventsFromText, EVENT_FILES } from '@shared/events'
+import { applyScreenCrop, prepareEvents } from '@shared/scene'
 import { sanitizeFileName } from '@shared/export'
 import { uniqueName } from '@shared/recording'
 import { projectDurationMs } from '@shared/project'
@@ -117,14 +117,15 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     if(clip) return buildClipText({...clip,title:item.title ?? clip.title,hook:item.hook ?? clip.hook},p.meta?.perClip?.[itemId] ?? fallbackClipMeta(clip,words))
     return buildYoutubeText({title:p.title,titles:item.title ? [item.title,...(p.meta?.youtube?.titles ?? []).filter((t) => t !== item.title)].slice(0,3) : p.meta?.youtube?.titles ?? [],description:p.meta?.youtube?.description ?? '',tags:p.meta?.youtube?.tags ?? [],chapters:p.meta?.youtube?.chapters ?? [],kept:keptRanges(projectDurationMs(p),p.cuts)})
   }
-  const events = async (dir: string, durationMs: number) => {
+  const events = async (dir: string, durationMs: number, project: Pick<Project, 'screenCrop' | 'sources'>) => {
     const texts: Record<string, string> = {}
     for (const [key, rel] of Object.entries(EVENT_FILES)) {
       const file = await resolveProjectFile(dir, rel)
       if (await pathExists(file)) texts[key] = await readFile(file, 'utf8')
     }
-    const e = eventsFromText(texts)
-    return { ...e, grid: processCursor(e.cursor, e.clicks, { durationMs }) }
+    // O recorte da tela (C1) muda o espaço de coordenadas: zooms e layouts nascem do que o recorte mostra, como no editor (o cursor e os
+    // cliques no espaço dele; um clique fora do recorte, na barra de abas, não abre zoom e o foco de um zoom é lido dentro do recorte).
+    return applyScreenCrop(prepareEvents(eventsFromText(texts), durationMs), project)
   }
   async function exportItem(id: string, itemId: string): Promise<void> {
     // Cada exportação nasce de uma revisão da edição do item. Se o usuário ajustar durante a exportação (updateItem sobe a revisão
@@ -197,7 +198,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         return `${notice}${result.items.length} decisões de limpeza; ${marker.cuts.length} marca(s) de errei.${fallback ? ` ${fallback} marca(s) sem fronteira: últimos 6 s, confira na Revisão.` : ''}`
       }
       case 'zooms': {
-        const e = await events(dir, duration)
+        const e = await events(dir, duration, project)
         await regenerate(id, (p) => {
           const v = p.vertical ?? defaultVerticalEdit()
           const make = (kind: 'horizontal' | 'vertical', current: Project['zooms'], preset: Project['zoomPreset'], excluded?:string[]) => [...current.filter((z) => z.origin === 'manual'), ...(preset === 'off' ? [] : generateAutoZooms({ clicks: e.clicks, keys: e.keys, cursor: e.grid, duration, preset: zoomPresetFor(kind, preset ?? 'moderate') }).filter((z) => !excluded?.includes(z.id) && !current.some((m) => m.origin === 'manual' && m.start < z.end && m.end > z.start)))]
@@ -207,7 +208,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       }
       case 'layouts': {
         const t = await deps.transcription.getTranscript(id)
-        const e = await events(dir, duration)
+        const e = await events(dir, duration, project)
         // Quem decide é o ESTILO da câmera escolhido ao gravar, nunca a existência do recorte: Apresentador pede o recorte do fundo e a
         // fala sem atividade vira Apresentador (16:9) e V-D (9:16); Quadro ao lado (e projeto antigo) fica no lado a lado e no V-B.
         let hasMatte = false

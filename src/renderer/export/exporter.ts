@@ -36,7 +36,7 @@ import {
   type FrameSource,
   type RenderCache
 } from '@shared/render'
-import { deriveProject, evaluateScene, prepareEvents, type Derived, type FormatSpec } from '@shared/scene'
+import { applyScreenCrop, deriveProject, evaluateScene, prepareEvents, type Derived, type FormatSpec } from '@shared/scene'
 import type { Project, Word } from '@shared/types'
 import { ensureVertical, pinVerticalLayout, projectForFormat } from '@shared/vertical'
 import { captionFontsLoaded, ensureCaptionFonts } from '../fonts'
@@ -147,7 +147,7 @@ async function createContext(
   await ensureCaptionFonts()
   // O vertical nunca editado ganha os zooms (Intenso) e os layouts por atividade, como o editor faria ao entrar no 9:16;
   // depois, a visão do formato: é sobre ela que a cena é calculada (a mesma coisa que a prévia faz)
-  const ensured = format.kind === 'vertical' ? ensureVertical(doc, data, { durationMs, words: job.words, hasCursorEvents: Boolean(job.eventUrls.cursor), hasMatte: Boolean(job.matteUrl) }) : doc
+  const ensured = format.kind === 'vertical' ? ensureVertical(doc, applyScreenCrop(data, doc), { durationMs, words: job.words, hasCursorEvents: Boolean(job.eventUrls.cursor), hasMatte: Boolean(job.matteUrl) }) : doc
   // Um corte vertical com layout fixo (V-A, V-B, V-C ou só câmera) o usa no corte todo; o automático segue a atividade (depois do ensure)
   const edited = format.kind === 'vertical' && job.clipLayout ? pinVerticalLayout(ensured, job.clipLayout) : ensured
   const project = projectForFormat(edited, format.kind)

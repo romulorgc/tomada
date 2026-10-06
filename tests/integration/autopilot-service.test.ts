@@ -543,3 +543,34 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     expect(w.start).toHaveBeenCalledOnce()
   })
 })
+
+describe('piloto automático × recorte da tela (C1)', () => {
+  // O recorte muda o espaço da tela: o foco de um zoom é lido DENTRO do recorte e clique fora dele não abre zoom (como no editor).
+  const CROP = { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }
+  const jsonl = (rows: object[]): string => rows.map((r) => JSON.stringify(r)).join('\n') + '\n'
+  async function pilotZooms(withCrop: boolean) {
+    const doc = baseProject()
+    doc.sources.screen!.durationMs = 60_000 // folga entre os zooms (o Moderado funde o que está a menos de 6 s)
+    if (withCrop) doc.screenCrop = { mode: 'manual', manual: CROP }
+    const w = await world(doc)
+    await writeFile(join(w.dir, 'events', 'cursor.jsonl'), jsonl([{ t: 0, x: 0.4, y: 0.4 }, { t: 60_000, x: 0.4, y: 0.4 }]))
+    // um clique na página (0,4; 0,4 da tela = 0,3; 0,3 do recorte), uma digitação logo depois, e um clique FORA do recorte (a barra de abas)
+    await writeFile(join(w.dir, 'events', 'clicks.jsonl'), jsonl([{ t: 2000, x: 0.4, y: 0.4, button: 'left' }, { t: 30_000, x: 0.5, y: 0.05, button: 'left' }]))
+    await writeFile(join(w.dir, 'events', 'keys.jsonl'), jsonl(Array.from({ length: 10 }, (_, i) => ({ t: 14_000 + i * 120 }))))
+    w.prefs.mode = 'prepare'
+    w.prefs.steps = Object.fromEntries(['transcribe', 'clean', 'layouts', 'captions', 'youtube', 'clips', 'clipExports', 'publish', 'notify'].map((k) => [k, false]))
+    await w.service.start(id)
+    return w.project().zooms
+  }
+  it('sem recorte: o foco da digitação é o da tela e o clique no alto também abre zoom (controle)', async () => {
+    const zooms = await pilotZooms(false)
+    expect(zooms.some((z) => typeof z.focus === 'object' && Math.abs(z.focus.x - 0.4) < 0.01 && Math.abs(z.focus.y - 0.4) < 0.01)).toBe(true)
+    expect(zooms.some((z) => z.start < 30_000 && z.end > 30_000)).toBe(true)
+  })
+  it('com recorte: o foco fica no espaço do recorte e o clique fora do recorte não gera zoom', async () => {
+    const zooms = await pilotZooms(true)
+    expect(zooms.some((z) => typeof z.focus === 'object' && Math.abs(z.focus.x - 0.3) < 0.01 && Math.abs(z.focus.y - 0.3) < 0.01), JSON.stringify(zooms)).toBe(true)
+    expect(zooms.some((z) => typeof z.focus === 'object' && Math.abs(z.focus.x - 0.4) < 0.01), 'nenhum foco no espaço da tela inteira').toBe(false)
+    expect(zooms.some((z) => z.start < 30_000 && z.end > 30_000), 'o clique na barra de abas não abre zoom').toBe(false)
+  })
+})

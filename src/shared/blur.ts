@@ -52,10 +52,18 @@ export function resizeBlurRegion(p: Project, id: string, edge: 'start' | 'end', 
   return { ...p, blurRegions: p.blurRegions!.map(v => v.id === id ? { ...v, [edge]: at } : v) }
 }
 
-type ScreenTransform = { src: Rect; dest: Rect }
+/** `bar`: a moldura de navegador (C1) ocupa o topo do cartão; a tela gravada só é desenhada ABAIXO dela. */
+type ScreenTransform = { src: Rect; dest: Rect; bar?: { h: number } }
+/** A parte do cartão onde a tela gravada aparece (o cartão menos a barra da moldura, se houver). */
+function pageOf(s: ScreenTransform): Rect {
+  const barH = s.bar?.h ?? 0
+  return barH > 0 && barH < s.dest.h ? { x: s.dest.x, y: s.dest.y + barH, w: s.dest.w, h: s.dest.h - barH } : s.dest
+}
 export function sourcePoint(p: Point, s: ScreenTransform): Point {
-  return { x: clamp(s.src.x + (p.x - s.dest.x) / s.dest.w * s.src.w, 0, 1), y: clamp(s.src.y + (p.y - s.dest.y) / s.dest.h * s.src.h, 0, 1) }
+  const page = pageOf(s)
+  return { x: clamp(s.src.x + (p.x - page.x) / page.w * s.src.w, 0, 1), y: clamp(s.src.y + (p.y - page.y) / page.h * s.src.h, 0, 1) }
 }
 export function displayRect(r: Rect, s: ScreenTransform): Rect {
-  return { x: s.dest.x + (r.x - s.src.x) / s.src.w * s.dest.w, y: s.dest.y + (r.y - s.src.y) / s.src.h * s.dest.h, w: r.w / s.src.w * s.dest.w, h: r.h / s.src.h * s.dest.h }
+  const page = pageOf(s)
+  return { x: page.x + (r.x - s.src.x) / s.src.w * page.w, y: page.y + (r.y - s.src.y) / s.src.h * page.h, w: r.w / s.src.w * page.w, h: r.h / s.src.h * page.h }
 }
