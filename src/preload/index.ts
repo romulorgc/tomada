@@ -26,6 +26,8 @@ const api: TomadaApi = {
   autopilot: { start: (id) => invoke('autopilot:start', id), retry: (id,step) => invoke('autopilot:retry', id,step) },
   review: { update: (id,itemId,patch,reexport = true) => invoke('review:update', id,itemId,patch,reexport), export: (id,itemId) => invoke('review:export', id,itemId), post: (id) => invoke('review:post', id), ask: (id,itemId,instruction) => invoke('review:ask',id,itemId,instruction) },
   app: { info: () => invoke('app:info') },
+  diagnostics: { get: () => invoke('diagnostics:get'), permissions: (permissions) => invoke('diagnostics:permissions', permissions) },
+  recovery: { list: () => invoke('recovery:list'), recover: (id) => invoke('recovery:recover', id), discard: (id) => invoke('recovery:discard', id) },
   projects: {
     list: () => invoke('projects:list'),
     get: (id) => invoke('projects:get', id),
@@ -36,6 +38,8 @@ const api: TomadaApi = {
     pickBackground: (id) => invoke('projects:pick-background', id)
   },
   settings: {
+    setShortcuts: (prefs) => invoke('settings:set-shortcuts', prefs),
+    pickStyleBackground: () => invoke('settings:pick-style-background'),
     saveStyle: (id,itemId) => invoke('settings:save-style',id,itemId),
     get: () => invoke('settings:get'),
     update: (patch) => invoke('settings:update', patch),
@@ -47,6 +51,7 @@ const api: TomadaApi = {
     test: () => invoke('ffmpeg:test')
   },
   record: {
+    diskSpace: (request, durationMs) => invoke('record:disk-space', request, durationMs),
     sources: () => invoke('record:sources'),
     getPrefs: () => invoke('record:prefs-get'),
     setPrefs: (patch) => invoke('record:prefs-set', patch),
@@ -67,6 +72,7 @@ const api: TomadaApi = {
   },
   processing: { retry: (sessionId) => invoke('process:retry', sessionId) },
   exporter: {
+    diskSpace: (request) => invoke('export:disk-space', request),
     start: (request) => invoke('export:start', request),
     cancel: (exportId) => invoke('export:cancel', exportId),
     status: () => invoke('export:status'),
@@ -89,6 +95,7 @@ const api: TomadaApi = {
     cancel: (projectId) => invoke('transcription:cancel', projectId),
     getPrefs: () => invoke('transcription:get-prefs'),
     setPrefs: (patch) => invoke('transcription:set-prefs', patch),
+    setEngine: (engine) => invoke('transcription:set-engine', engine),
     get: (projectId) => invoke('transcript:get', projectId)
   },
   dictionary: { get: () => invoke('dictionary:get'), set: (terms) => invoke('dictionary:set', terms) },

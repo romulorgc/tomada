@@ -101,6 +101,9 @@ export function useEditorShortcuts(ops: EditorOps, enabled: boolean): void {
         case 'KeyZ':
           if (ops.zoomFromRange()) e.preventDefault()
           return
+        case 'KeyB':
+          if (ops.blurUntilEnd()) e.preventDefault()
+          return
         default:
       }
     }

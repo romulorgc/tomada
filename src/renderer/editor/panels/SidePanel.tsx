@@ -17,10 +17,12 @@ import { LayoutPanel } from './LayoutPanel'
 import { PublishPanel } from './PublishPanel'
 import { StylePanel } from './StylePanel'
 import { ZoomPanel } from './ZoomPanel'
+import { BlurPanel } from './BlurPanel'
 
-export type TabId = 'style' | 'camera' | 'zoom' | 'layout' | 'text' | 'captions' | 'clips' | 'publish' | 'ai'
+export type TabId = 'style' | 'camera' | 'zoom' | 'layout' | 'text' | 'captions' | 'clips' | 'publish' | 'ai' | 'blur'
 
 const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
+  { id: 'blur', label: t.editor.tabs.blur, icon: <LayoutGridIcon size={18} /> },
   { id: 'style', label: t.editor.tabs.style, icon: <PaletteIcon size={18} /> },
   { id: 'camera', label: t.editor.tabs.camera, icon: <CameraIcon size={18} /> },
   { id: 'zoom', label: t.editor.tabs.zoom, icon: <ZoomInIcon size={18} /> },
@@ -50,6 +52,7 @@ export function SidePanel() {
     if (key && key !== last.current) {
       if (selection?.kind === 'zoom') setTab('zoom')
       else if (selection?.kind === 'layout') setTab('layout')
+      else if (selection?.kind === 'blur') setTab('blur')
     }
     last.current = key
   }, [selection])
@@ -76,6 +79,7 @@ export function SidePanel() {
       </div>
       <div className="ed-panel-body" role="tabpanel" id={`tabpanel-${tab}`} aria-labelledby={`tab-${tab}`}>
         {tab === 'style' ? <StylePanel /> : null}
+        {tab === 'blur' ? <BlurPanel /> : null}
         {tab === 'camera' ? <CameraPanel /> : null}
         {tab === 'zoom' ? <ZoomPanel /> : null}
         {tab === 'layout' ? <LayoutPanel /> : null}

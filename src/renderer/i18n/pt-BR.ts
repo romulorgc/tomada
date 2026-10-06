@@ -3,7 +3,15 @@
  * Convenções: frase com inicial maiúscula só no começo; o botão diz o que acontece
  * (e a confirmação repete o mesmo verbo); erro explica o que houve e o que fazer.
  */
+import { m5Settings } from './m5-settings'
 export const ptBR = {
+  m5Settings,
+  diskSpace: {
+    title: 'Espaço no disco', low: 'Pouco espaço para concluir', unknown: 'Não consegui medir o disco',
+    estimate: (needed: string, duration: string) => `Estimativa para ${duration}: ${needed}.`,
+    free: (free: string) => `${free} livres.`,
+    recordingPeriod: 'A estimativa antes de gravar considera uma hora; o uso real varia com a duração e a atividade da tela.'
+  },
   autopilot: {
     hasErrors:'Há etapas com problema. Confira os motivos e tente novamente.',
     decisionHelp: 'As escolhas seguem a atividade da tela e a fala. Desmarque uma decisão para restaurar o trecho ou o enquadramento.', enableAll: 'Ligar categoria', resetText: 'Restaurar texto sugerido', resetAllTexts: 'Restaurar todos os textos', discardAll: 'Descartar todos os cortes', styleSaved: 'Estilo salvo para as próximas gravações.',
@@ -145,7 +153,15 @@ export const ptBR = {
       shortcuts: 'Atalhos do teclado'
     },
 
-    tabs: { label: 'Painel do editor', style: 'Estilo', camera: 'Câmera', zoom: 'Zoom', layout: 'Layout', text: 'Texto', captions: 'Legendas', clips: 'Cortes', publish: 'Publicar', ai: 'IA' },
+    tabs: { label: 'Painel do editor', style: 'Estilo', camera: 'Câmera', zoom: 'Zoom', layout: 'Layout', text: 'Texto', captions: 'Legendas', clips: 'Cortes', publish: 'Publicar', ai: 'IA', blur: 'Desfoque' },
+    blur: {
+      title: 'Proteger dado sensível', draw: 'Selecionar região na prévia', drawing: 'Arraste sobre o dado sensível',
+      hint: 'A região acompanha a tela, o zoom e todos os cortes. Os pixels originais são removidos do vídeo exportado. O bruto continua no projeto.',
+      none: 'Nenhuma região protegida', region: 'Região', mode: 'Proteção', modes: { blur: 'Desfoque forte', pixelate: 'Pixelado', solid: 'Tarja sólida' },
+      untilEnd: 'Desfocar até o fim', remove: 'Apagar região', start: 'Início (ms)', end: 'Fim (ms)',
+      x: 'Esquerda', y: 'Topo', w: 'Largura', h: 'Altura', empty: 'Selecione uma região na prévia ou arraste nesta trilha.',
+      selected: 'Região selecionada', move: 'Arraste para mover; use os cantos para redimensionar.'
+    },
 
     style: {
       title: 'Aparência',
@@ -653,6 +669,7 @@ export const ptBR = {
       search: 'Na aba Texto: buscar uma palavra ou frase',
       split: 'Dividir o layout no ponto da reprodução',
       zoom: 'Criar zoom no intervalo marcado',
+      blur: 'Desfocar até o fim (região selecionada)',
       undo: 'Desfazer',
       redo: 'Refazer',
       timelineZoom: 'Aproximar / afastar a linha do tempo',

@@ -11,6 +11,9 @@ import { ProjectView } from './views/ProjectView'
 import { Record } from './views/Record'
 import { Settings } from './views/Settings'
 import { Review } from './views/Review'
+import { SettingsOnboarding } from './views/SettingsOnboarding'
+import { RecoveryPrompt } from './components/RecoveryPrompt'
+import { m5Settings } from './i18n/m5-settings'
 
 /** Se uma tela quebrar, aparece o motivo e um botão - não uma janela em branco. */
 class Boundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -47,6 +50,8 @@ function CurrentView() {
       return <Processing />
     case 'settings':
       return <Settings />
+    case 'setup':
+      return <SettingsOnboarding />
   }
 }
 
@@ -56,6 +61,11 @@ export function App() {
   useEffect(() => useRecorder.getState().attach(), [])
   // O estado da transcrição (preparação e fila) também chega por evento e vale em qualquer tela.
   useEffect(() => useTranscription.getState().attach(), [])
+  useEffect(() => {
+    let alive = true
+    void window.tomada.diagnostics.get().then((snapshot) => { if (alive && snapshot.shouldGuide && useApp.getState().view.name === 'library') useApp.getState().go({ name: 'setup' }) }).catch((err: unknown) => { if (alive) useApp.getState().notify({ kind: 'error', text: m5Settings.setup.failed, detail: err instanceof Error ? err.message : String(err) }) })
+    return () => { alive = false }
+  }, [])
   useEffect(() => {
     const off = window.tomada.on('autopilot:progress',(state) => { const app = useApp.getState(); if (app.view.name === 'processing' || (app.view.name === 'review' && app.view.id === state.projectId)) app.go({ name: 'review', id: state.projectId }) })
     const ready = window.tomada.on('autopilot:ready',({ projectId }) => useApp.getState().go({ name: 'review',id: projectId }))
@@ -71,6 +81,7 @@ export function App() {
         </Boundary>
       </main>
       <Toasts />
+      <RecoveryPrompt />
     </div>
   )
 }

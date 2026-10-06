@@ -7,6 +7,7 @@
 import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { hasTestRunner } from './fila-processos.mjs'
 
 const LOCK = 'C:\\tmp\\tomada-pesado.lock'
 const cmd = process.argv.slice(2)
@@ -24,27 +25,20 @@ const vivo = pid => {
   }
 }
 
-// Bateria Playwright de quem não usa a fila. ⚠️ A consulta NÃO pode se contar: o próprio processo do
-// PowerShell tem 'playwright' e ' test' na linha de comando (05/10: com isso a fila nunca liberava ninguém).
-// Conta só cópias de trabalho de teste de verdade e ignora o servidor MCP do Playwright das outras sessões.
+// Bateria de quem não usa a fila. Wrappers esperando e shells que contêm chamadas
+// futuras não são runners; scripts/limpo executando o CLI e npm de e2e são.
 function outraBateria() {
-  const ps = [
-    '$n = @(Get-CimInstance Win32_Process | Where-Object {',
-    '$_.ProcessId -ne $PID -and $_.CommandLine -and',
-    "$_.CommandLine -notmatch 'Get-CimInstance' -and",
-    "$_.CommandLine -notmatch 'playwright-mcp|@playwright[\\\\/]mcp' -and",
-    "$_.CommandLine -match '@playwright[\\\\/]test[\\\\/]cli|playwright(\\.cmd)?.? test'",
-    '}).Count; $n'
-  ].join(' ')
+  const ps = 'Get-CimInstance Win32_Process | Where-Object { $_.Name -in @("node.exe", "electron.exe", "cmd.exe", "npm.exe", "playwright.exe") } | Select-Object Name,CommandLine | ConvertTo-Json -Compress'
   try {
     const out = execFileSync('powershell', ['-NoProfile', '-Command', ps], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 20000
     })
-    return Number(out.trim()) > 0
+    const metadata = JSON.parse(out.trim() || '[]')
+    return hasTestRunner(Array.isArray(metadata) ? metadata : [metadata])
   } catch {
-    return false
+    return true // sem consulta confiável, continua esperando; não abre outra bateria
   }
 }
 

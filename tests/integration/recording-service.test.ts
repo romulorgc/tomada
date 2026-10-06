@@ -301,11 +301,11 @@ describe('falhas visíveis, nunca silenciosas', () => {
     await rm(join(root, prepared.folder, 'raw'), { recursive: true, force: true })
     expect(existsSync(join(root, prepared.folder, 'raw'))).toBe(false)
     await expect(world.service.chunk('screen', rawScreen.subarray(0, 1000))).rejects.toThrow(/gravar em disco/)
-    const notice = world.emitted.find((e) => e.channel === 'record:notice')
+    const notice = world.emitted.find((e) => e.channel === 'record:notice' && (e.payload as { kind?: string }).kind === 'error')
     expect(notice?.payload).toMatchObject({ kind: 'error' })
     expect((notice!.payload as { detail?: string }).detail).toBeTruthy()
     await expect(world.service.chunk('screen', rawScreen.subarray(0, 1000))).rejects.toThrow() // continua falhando, sem engolir
-    const noticeCount = world.emitted.filter((e) => e.channel === 'record:notice').length
+    const noticeCount = world.emitted.filter((e) => e.channel === 'record:notice' && (e.payload as { kind?: string }).kind === 'error').length
     expect(noticeCount).toBe(1) // o aviso aparece uma vez só
     await world.service.stop(stopInfo({ reason: 'write-error' }))
     const snap = await waitDone(world)
@@ -319,7 +319,7 @@ describe('falhas visíveis, nunca silenciosas', () => {
   it('rastreador que não sobe: aviso visível, anotado no projeto, e o vídeo é gravado mesmo assim', async () => {
     const { world, root } = newWorld({ failTracker: true })
     const { prepared } = await record(world, baseRequest)
-    const notice = world.emitted.find((e) => e.channel === 'record:notice')
+    const notice = world.emitted.find((e) => e.channel === 'record:notice' && (e.payload as { kind?: string }).kind === 'error')
     expect(notice?.payload).toMatchObject({ kind: 'error' })
     expect((notice!.payload as { text: string }).text).toContain('rastreador')
     const snap = await waitDone(world)

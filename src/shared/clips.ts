@@ -458,15 +458,55 @@ export type HeuristicInput = {
   existing?: readonly Pick<Clip, 'ranges' | 'title'>[]
 }
 
-/** A frase com as primeiras palavras como título: sem conectivo no começo, no máximo 9 palavras, inicial maiúscula. */
+const HEURISTIC_FALLBACK = 'Veja a demonstração.'
+const TERMINAL_WORD = /[.!?]["'”’)\]]*$/u
+const ELLIPSIS_WORD = /(?:\.{2,}|…)["'”’)\]]*$/u
+const ABBREVIATION_WORD = /^(?:sr|sra|dr|dra|prof|profa|ex|etc|vs|fig|pág|pag|av|nº)\.$/iu
+
+/** Só a pontuação original fecha o texto: pausa, limite de palavras ou reticências não inventam uma conclusão. */
+function completeHeuristicSentences(text: string): string[] {
+  const sentences: string[] = []
+  let parts: string[] = []
+  for (const part of oneLine(text).split(' ').filter(Boolean)) {
+    parts.push(part)
+    if (!TERMINAL_WORD.test(part) || ELLIPSIS_WORD.test(part) || ABBREVIATION_WORD.test(part)) continue
+    sentences.push(parts.join(' '))
+    parts = []
+  }
+  return sentences
+}
+
+/** A vírgula identifica a muleta; "é importante", "bom atendimento" e "tipo de cadastro" conservam o sentido. */
+function cleanHeuristicSentence(text: string): string {
+  let clean = text.replace(/^(?:(?:é|hã|hum|ahn|então|entao|aí|ai|bom|bem|olha|tipo|né|ne)\s*[,;:]\s*)+/iu, '')
+  clean = clean.replace(/,\s*(?:tipo|né|ne|hã|hum|ahn)(?:\s*,\s*(?:tipo|né|ne|hã|hum|ahn))*\s*,\s*/giu, ' ')
+  clean = clean.replace(/,\s*(?:né|ne|tipo|hã|hum|ahn)\s*([.!?]["'”’)\]]*)$/iu, '$1')
+  clean = oneLine(clean)
+  return clean.charAt(0).toUpperCase() + clean.slice(1)
+}
+
+function heuristicCopy(text: string, maxCharacters: number, maxWords = Infinity): string {
+  for (const raw of completeHeuristicSentences(text)) {
+    const candidate = cleanHeuristicSentence(raw)
+    const words = wordCount(candidate)
+    const folded = fold(candidate)
+    if (words === 0 || words > maxWords || candidate.length > maxCharacters || (words === 1 && folded === 'e')) continue
+    if (/^(?:oi|ola|opa|entao|ai|tipo|ne|hum|ahn|mas|porque|pois)\b/u.test(folded) || /^(?:e|hã)\b/iu.test(candidate)) continue
+    const lastWord = folded.split(' ').at(-1) ?? ''
+    if (DANGLING.has(lastWord)) continue
+    return candidate
+  }
+  return HEURISTIC_FALLBACK
+}
+
+/** Uma frase inteira do corte como título, até 80 caracteres; nunca trunca a fala nem adiciona ponto. */
 export function titleFromText(text: string): string {
-  let parts = oneLine(text).split(' ').filter(Boolean)
-  while (parts.length > 3 && /^(e|ai|aí|então|entao|bom|bem|olha|então,|aí,|e,)$/iu.test(parts[0]!.replace(/[,.]/g, ''))) parts = parts.slice(1)
-  const head = parts.slice(0, 9)
-  while (head.length > 3 && DANGLING.has(head[head.length - 1]!.toLowerCase().replace(/[.,;:!?…]+$/u, ''))) head.pop()
-  let t = head.join(' ').replace(/[.,;:!?…\s]+$/u, '')
-  t = t.charAt(0).toUpperCase() + t.slice(1)
-  return limitTitle(t.length > 60 ? t.slice(0, 60).replace(/\s+\S*$/, '') : t)
+  return heuristicCopy(text, TITLE_MAX)
+}
+
+/** Título e gancho sem IA, inclusive para a versão completa de uma gravação curta. */
+export function heuristicClipLabels(text: string): { title: string; hook: string } {
+  return { title: titleFromText(text), hook: heuristicCopy(text, HOOK_TEXT_MAX, HOOK_MAX_WORDS) }
 }
 
 type Candidate = { a: number; b: number; draft: ClipDraft; range: Range }
@@ -475,7 +515,7 @@ type Candidate = { a: number; b: number; draft: ClipDraft; range: Range }
  * Cortes SEM IA: blocos de frases entre pausas, de 30 a 60 s, começando numa frase que não seja cumprimento nem conectivo
  * e terminando numa frase que fecha (ponto final e pausa depois). A nota vem da densidade de fala (2 a 3 palavras por
  * segundo), da atividade de tela (cliques e teclas por segundo) e de como o começo e o fim se apoiam em pausas. Não
- * entende o assunto: o título é o começo da primeira frase, e a nota é honesta sobre isso (`reason` diz "sem IA").
+ * entende o assunto: título e gancho vêm de frases inteiras do próprio trecho, e a nota é honesta (`reason` diz "sem IA").
  */
 export function heuristicClips(input: HeuristicInput): ClipValidation {
   const words = input.words
@@ -520,14 +560,13 @@ export function heuristicClips(input: HeuristicInput): ClipValidation {
       const flow = Math.round(clamp(0.6 * Math.min(100, closing) + 0.4 * (100 - Math.min(2, longPauses) * 25), 0, 100))
       const value = Math.round(clamp(0.5 * density + 0.5 * activity, 0, 100))
       const score = Math.round(0.4 * hook + 0.3 * flow + 0.3 * value)
-      const first = slice[0]!
+      const text = slice.map(sentence => sentence.text).join(' ')
       cands.push({
         a,
         b,
         range,
         draft: {
-          title: titleFromText(first.text),
-          hook: limitHook(first.text.replace(/[.!?…]+$/u, '')),
+          ...heuristicClipLabels(text),
           ranges: [range],
           score,
           notes: { hook, flow, value },

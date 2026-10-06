@@ -49,7 +49,7 @@ async function fetchText(url: string | null): Promise<string | undefined> {
 }
 
 const TIMELINE_KEY = 'tomada.editor.timelineHeight'
-const MIN_TIMELINE_PX = 176
+const MIN_TIMELINE_PX = 212
 
 function readSavedHeight(): number | null {
   try {
@@ -156,8 +156,14 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
     () =>
       createEditorStore({
         project: detail.project,
-        save: (p,lastSubmitted) => {
+        save: async (p,lastSubmitted) => {
           if (!itemId) return window.tomada.projects.save(detail.id,p,lastSubmitted)
+          // O editor da Revisão salva os demais ajustes por item. A proteção é comum:
+          // envia só essa diferença à escrita com merge, antes de reexportar o item.
+          if (JSON.stringify(p.blurRegions ?? []) !== JSON.stringify(lastSubmitted?.blurRegions ?? [])) {
+            const base = lastSubmitted ?? detail.project
+            await window.tomada.projects.save(detail.id, {...base, blurRegions:p.blurRegions ?? []}, base)
+          }
           const view = projectForFormat(p,itemId === 'youtube' ? 'horizontal' : 'vertical')
           return window.tomada.review.update(detail.id,itemId,{title:p.title,hook:view.vertical?.hook,edits:{cuts:view.cuts,zooms:view.zooms,layouts:view.layouts,captions:view.captions,style:view.style,wordFixes:view.wordFixes ?? {},mutes:view.mutes ?? [],meta:view.meta ?? {},zoomPreset:view.zoomPreset,autoExclusions:view.autoExclusions}})
         },

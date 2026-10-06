@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useStore } from 'zustand'
 import type { SourceInfo } from '@shared/ipc'
 import { videoScriptSchema, type VideoScript } from '@shared/script'
 import {
@@ -17,8 +18,29 @@ import { useRecorder } from '../recording/controller'
 import { useApp } from '../store'
 import { PreflightBanner } from '../recording/PreflightBanner'
 import { ScriptPanel } from '../recording/ScriptPanel'
+import { DiskSpaceNotice } from '../components/DiskSpaceNotice'
+import type { DiskEstimate } from '@shared/disk'
+import { DEFAULT_RECORDING_SHORTCUTS, matchesAccelerator } from '@shared/shortcuts-config'
+import { createRecordPrefsStore } from '../recording/prefs-store'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+function requestFromPrefs(prefs: RecordPrefs, script: VideoScript | null): RecordRequest | null {
+  const mode = effectiveMode(prefs)
+  if (mode === null) return null
+  return {
+    mode,
+    sourceId: mode === 'camera' ? null : prefs.sourceId,
+    fps: prefs.fps,
+    cameraId: mode === 'screen' ? null : prefs.cameraId,
+    micId: prefs.micId,
+    systemAudio: mode === 'camera' ? false : prefs.systemAudio,
+    showBubble: prefs.showBubble,
+    hideCursor: prefs.hideCursor,
+    retakeShortcut: prefs.retakeShortcut,
+    ...(script ? { script } : {})
+  }
+}
 
 function Segmented<T extends string | number>({
   label,
@@ -141,43 +163,51 @@ export function Record() {
   const startRecording = useRecorder((s) => s.start)
   const clearError = useRecorder((s) => s.clearError)
 
-  const [prefs, setPrefsState] = useState<RecordPrefs | null>(null)
+  const prefsStore = useMemo(() => createRecordPrefsStore({ save: (patch) => window.tomada.record.setPrefs(patch) }), [])
+  const { prefs, pending: pendingPrefs, error: prefsError } = useStore(prefsStore)
   const [sources, setSources] = useState<SourceInfo[] | null>(null)
   const [sourcesError, setSourcesError] = useState<string | null>(null)
   const [tab, setTab] = useState<'screens' | 'windows'>('screens')
   const [script, setScript] = useState<VideoScript | null>(null)
+  const [shortcuts, setShortcuts] = useState(DEFAULT_RECORDING_SHORTCUTS)
+  const [disk, setDisk] = useState<DiskEstimate | null>(null)
   const { lists, error: devicesError } = useDeviceLists()
 
   const idle = phase === 'idle'
+  useEffect(() => {
+    let alive = true
+    void window.tomada.settings.get().then((view) => { if (alive) setShortcuts(view.settings.shortcuts ?? DEFAULT_RECORDING_SHORTCUTS) }).catch((err: unknown) => window.tomada.log({level:'error',message:'Falha ao ler atalhos da gravação',detail:messageOf(err)}))
+    return () => { alive = false }
+  }, [])
 
   // --- Preferências (lembradas entre sessões)
   useEffect(() => {
     let alive = true
     window.tomada.record
       .getPrefs()
-      .then((p) => alive && setPrefsState(p))
+      .then((p) => alive && prefsStore.getState().load(p))
       .catch((err: unknown) => {
         window.tomada.log({ level: 'error', message: 'Falha ao ler as escolhas da tela Gravar', detail: messageOf(err) })
         if (alive) {
           useApp.getState().notify({ kind: 'error', text: t.record.deviceError, detail: messageOf(err) })
-          setPrefsState({ ...DEFAULT_RECORD_PREFS })
+          prefsStore.getState().load({ ...DEFAULT_RECORD_PREFS })
         }
       })
     return () => {
       alive = false
     }
-  }, [])
+  }, [prefsStore])
 
   const setPrefs = useCallback((patch: Partial<RecordPrefs>) => {
-    setPrefsState((p) => (p ? { ...p, ...patch } : p))
-    window.tomada.record.setPrefs(patch).catch((err: unknown) => {
-      window.tomada.log({ level: 'error', message: 'Falha ao guardar as escolhas da tela Gravar', detail: messageOf(err) })
-    })
-  }, [])
+    void prefsStore.getState().update(patch)
+  }, [prefsStore])
+  useEffect(() => {
+    if (prefsError) window.tomada.log({ level: 'error', message: 'Falha ao guardar as escolhas da tela Gravar', detail: prefsError })
+  }, [prefsError])
 
   // --- Primeira abertura: câmera e microfone padrão. Dispositivo que sumiu: volta para "sem".
   useEffect(() => {
-    if (!prefs || !lists) return
+    if (!prefs || !lists || prefsError) return
     const patch: Partial<RecordPrefs> = {}
     if (!prefs.setupDone) {
       patch.setupDone = true
@@ -188,7 +218,7 @@ export function Record() {
       if (prefs.micId && !lists.mics.some((m) => m.deviceId === prefs.micId)) patch.micId = null
     }
     if (Object.keys(patch).length > 0) setPrefs(patch)
-  }, [prefs, lists, setPrefs])
+  }, [prefs, lists, prefsError, setPrefs])
 
   // --- Telas e janelas (miniaturas atualizadas a cada 2,5 s enquanto a tela está à vista)
   const loadSources = useCallback(async () => {
@@ -212,20 +242,19 @@ export function Record() {
   // A última fonte pode não existir mais: cai na tela principal.
   const selectedSource = useMemo(() => sources?.find((s) => s.id === prefs?.sourceId) ?? null, [sources, prefs?.sourceId])
   useEffect(() => {
-    if (!prefs || !sources || sources.length === 0) return
+    if (!prefs || !sources || sources.length === 0 || prefsError) return
     if (prefs.mode === 'camera') return
     if (!selectedSource) {
       const fallback = sources.find((s) => s.kind === 'screen' && s.primary) ?? sources.find((s) => s.kind === 'screen') ?? sources[0]!
       setPrefs({ sourceId: fallback.id, sourceName: fallback.name })
     }
-  }, [prefs, sources, selectedSource, setPrefs])
+  }, [prefs, sources, selectedSource, prefsError, setPrefs])
   useEffect(() => {
     if (selectedSource) setTab(selectedSource.kind === 'window' ? 'windows' : 'screens')
     // só quando a seleção troca; não briga com o clique manual nas abas
   }, [selectedSource?.id])
 
   // --- Prévia (câmera + microfone) só enquanto está ocioso
-  const mode = prefs ? effectiveMode(prefs) : null
   const wantsCamera = prefs ? prefs.mode !== 'screen' : false
   const preview = useDevicePreview({
     cameraId: prefs && wantsCamera ? prefs.cameraId : null,
@@ -235,41 +264,39 @@ export function Record() {
     enabled: idle && Boolean(prefs) && Boolean(lists)
   })
 
-  const request: RecordRequest | null = useMemo(() => {
-    if (!prefs || mode === null) return null
-    return {
-      mode,
-      sourceId: mode === 'camera' ? null : prefs.sourceId,
-      fps: prefs.fps,
-      cameraId: mode === 'screen' ? null : prefs.cameraId,
-      micId: prefs.micId,
-      systemAudio: mode === 'camera' ? false : prefs.systemAudio,
-      showBubble: prefs.showBubble,
-      hideCursor: prefs.hideCursor,
-      retakeShortcut: prefs.retakeShortcut,
-      ...(script ? { script } : {})
-    }
-  }, [prefs, mode, script])
+  const request = useMemo(() => prefs ? requestFromPrefs(prefs, script) : null, [prefs, script])
 
   const problem = prefs ? (request ? validateRecordRequest(request) : 'no-camera') : 'no-source'
+  useEffect(() => {
+    if (!request || !idle || problem) { setDisk(null); return }
+    let alive = true
+    const refresh = (): void => { void window.tomada.record.diskSpace(request).then((estimate) => { if (alive) setDisk(estimate) }).catch((err: unknown) => window.tomada.log({level:'warn',message:'Falha ao medir o disco antes de gravar',detail:messageOf(err)})) }
+    refresh()
+    const timer = window.setInterval(refresh, 30_000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [request, idle, problem])
 
   const begin = useCallback(() => {
-    if (!prefs || !request || problem || !idle || (script && !videoScriptSchema.safeParse(script).success)) return
+    // Consulta o estado atual também no atalho: uma resposta IPC não pode deixar a função com escolhas antigas.
+    const state = prefsStore.getState()
+    if (!state.canStart() || !state.prefs || !idle || (script && !videoScriptSchema.safeParse(script).success)) return
+    const confirmedRequest = requestFromPrefs(state.prefs, script)
+    if (!confirmedRequest || validateRecordRequest(confirmedRequest)) return
     clearError()
-    void startRecording(request, { noiseSuppression: prefs.noiseSuppression, echoCancellation: prefs.echoCancellation })
-  }, [prefs, request, problem, idle, script, clearError, startRecording])
+    void startRecording(confirmedRequest, { noiseSuppression: state.prefs.noiseSuppression, echoCancellation: state.prefs.echoCancellation })
+  }, [prefsStore, idle, script, clearError, startRecording])
 
   // Ctrl+Shift+R também começa (dentro do app; o atalho global só existe durante a gravação).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyR') {
+      if (!e.repeat && matchesAccelerator(e, shortcuts.recordStop)) {
         e.preventDefault()
         begin()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [begin])
+  }, [begin, shortcuts.recordStop])
 
   if (!prefs || !lists) {
     return (
@@ -307,10 +334,10 @@ export function Record() {
         <h1 className="text-[1.75rem] font-[650] leading-none tracking-[-0.02em]">{t.record.title}</h1>
         <div className="flex flex-wrap items-center gap-3">
           <Segmented label={t.record.modes.label} value={prefs.mode} options={modeOptions} onChange={(mode) => setPrefs({ mode })} testPrefix="mode" disabled={!idle} />
-          <button type="button" className="btn btn-rec btn-big" onClick={begin} disabled={!idle || problem !== null || Boolean(script && !videoScriptSchema.safeParse(script).success)} data-testid="record-start">
+          <button type="button" className="btn btn-rec btn-big" onClick={begin} disabled={!idle || pendingPrefs > 0 || prefsError !== null || problem !== null || Boolean(script && !videoScriptSchema.safeParse(script).success)} data-testid="record-start">
             {phase === 'preparing' ? <span className="spinner" aria-hidden="true" /> : <RecordIcon size={20} />}
             {phase === 'preparing' ? t.record.starting : t.record.start}
-            {idle ? <kbd className="ml-1 text-[0.75rem] font-medium opacity-70">{t.record.startShortcut}</kbd> : null}
+            {idle ? <kbd className="ml-1 text-[0.75rem] font-medium opacity-70">{shortcuts.recordStop}</kbd> : null}
           </button>
         </div>
       </header>
@@ -330,9 +357,17 @@ export function Record() {
             {recorderError}
           </p>
         ) : null}
+        {pendingPrefs > 0 ? <p role="status" className="text-muted" data-testid="record-prefs-saving">{t.m5Settings.recordPrefs.saving}</p> : null}
+        {prefsError ? (
+          <div role="alert" className="mt-3 flex flex-wrap items-center justify-end gap-3 text-danger" data-testid="record-prefs-error">
+            <p className="whitespace-pre-wrap break-words">{t.m5Settings.recordPrefs.failed}: {prefsError}</p>
+            <button type="button" className="btn btn-quiet" disabled={pendingPrefs > 0} onClick={() => prefsStore.getState().useConfirmed()} data-testid="record-prefs-use-confirmed">{t.m5Settings.recordPrefs.useConfirmed}</button>
+          </div>
+        ) : null}
       </div>
 
-      <PreflightBanner stream={preview.stream} hasMic={Boolean(prefs.micId)} hasCamera={showCamera && Boolean(prefs.cameraId)} idle={idle} onRecord={begin} />
+      <PreflightBanner stream={preview.stream} hasMic={Boolean(prefs.micId)} hasCamera={showCamera && Boolean(prefs.cameraId)} idle={idle && pendingPrefs === 0 && !prefsError} onRecord={begin} />
+      {idle ? <div className="mb-5"><DiskSpaceNotice estimate={disk} recording /></div> : null}
       <div className="grid items-start gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,24rem)]">
         <div className="min-w-0">
           {showSource ? (

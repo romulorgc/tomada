@@ -27,6 +27,9 @@ test('transcreve o exemplo com o faster-whisper de verdade, limpa sozinho e apag
   // TOMADA_TOOLS_DIR vazio: vale a pasta de ferramentas do usuário (a que a preparação pela interface criou)
   s = await launchTomada({ env: { TOMADA_TRANSCRIBER: 'faster-whisper', TOMADA_TOOLS_DIR: '', TOMADA_LLM: 'off' } })
   const { page } = s
+  // O gabarito foi medido com o prompt-base: os nomes do usuário mudam a grafia
+  // de hesitações no Whisper. Este áudio sintético não usa esse vocabulário.
+  await page.evaluate(() => window.tomada.dictionary.set([]))
   const file = join(s.projects, EXAMPLE_FOLDER, 'transcript.json')
   rmSync(file)
   await openEditor(s)

@@ -28,6 +28,8 @@ import type {
 } from '@shared/ipc'
 import {
   elapsedMs,
+  screenBitrate,
+  cameraBitrate,
   normalizeIntervals,
   recordingFolderName,
   defaultRecordingTitle,
@@ -42,6 +44,10 @@ import { isPhysicalDeviceId } from '@shared/capture-devices'
 import { markRecordingTime, type RetakeMark } from '@shared/retake-marker'
 import type { TeleprompterAction, TeleprompterConfig, TeleprompterState } from '@shared/script'
 import type { PreflightResult } from '@shared/preflight'
+import { estimateRecordingBytes, type DiskEstimate } from '@shared/disk'
+import type { InterruptedRecording } from '@shared/recovery'
+import { checkDiskSpace, diskWarning } from './disk-space'
+import { finalizeInterrupted, isInterrupted, listRecoveries, loadRecovery } from './recording-recovery'
 import { checkPreflight } from './preflight'
 import { assertProjectId } from './projects'
 import { resolveProjectFile } from './project-files'
@@ -120,6 +126,7 @@ export type RecordingDeps = {
   minFreeBytes?: number
   lipSync?: ProcessDeps['lipSync']
   calibrations?: ProcessDeps['calibrations']
+  editingDefaults?: () => NonNullable<ProcessDeps['editingDefaults']>
 }
 
 export interface RecordingService {
@@ -142,6 +149,10 @@ export interface RecordingService {
   level(level: number): void
   markRetake(): Promise<RetakeMark | null>
   preflight(): Promise<PreflightResult>
+  diskSpace(request: RecordRequest, durationMs?: number): Promise<DiskEstimate>
+  listInterrupted(): Promise<InterruptedRecording[]>
+  recoverInterrupted(id: string): Promise<{ sessionId: string }>
+  discardInterrupted(id: string): Promise<void>
   showTeleprompter(config: TeleprompterConfig): void
   hideTeleprompter(): void
   teleprompterState(): TeleprompterState | null
@@ -173,6 +184,8 @@ type Session = {
   writeError: string | null
   /** Quantos ms o renderer está à frente do main (renderer = main − offset). */
   offsetMs: number
+  /** Combinações escolhidas por quem registrou os atalhos globais nesta sessão. */
+  shortcuts: { stop: string; pause: string }
   hadData: boolean
   /**
    * A sessão não aceita mais pedaços (parou, foi descartada ou o app está fechando). Um pedaço que ainda
@@ -222,8 +235,8 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       asOf: Date.now(),
       hasMic: Boolean(s.request.micId),
       hasCamera: s.request.mode !== 'screen' && Boolean(s.request.cameraId),
-      shortcutStop: 'Ctrl+Shift+R',
-      shortcutPause: 'Ctrl+Shift+P',
+      shortcutStop: s.shortcuts.stop,
+      shortcutPause: s.shortcuts.pause,
       shortcutRetake: s.request.retakeShortcut ?? 'Ctrl+Alt+Z',
       retakeCount: s.manifest.retakeMarks?.length ?? 0,
       ...(barSnapshot?.retakeAt ? { retakeAt: barSnapshot.retakeAt } : {})
@@ -326,6 +339,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     const processDeps: ProcessDeps = {
       ff,
       logger,
+      ...(deps.editingDefaults ? { editingDefaults: deps.editingDefaults() } : {}),
       ...(deps.lipSync ? { lipSync: deps.lipSync } : {}),
       ...(deps.calibrations ? { calibrations: deps.calibrations } : {}),
       onProgress: (snapshot) => {
@@ -380,10 +394,49 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     return job
   }
 
+  async function recordingDiskSpace(request: RecordRequest, durationMs = 3_600_000): Promise<DiskEstimate> {
+    const source = request.mode === 'camera' ? null : await deps.sources.resolve(request.sourceId!)
+    const estimatedBytes = estimateRecordingBytes({ durationMs,
+      screenBitrate: source ? screenBitrate(source.nativeSize, request.fps) : 0,
+      cameraBitrate: request.mode !== 'screen' && request.cameraId ? cameraBitrate({ w: 1920, h: 1080 }, 30) : 0,
+      audioTracks: Number(Boolean(request.micId)) + Number(request.systemAudio)
+    })
+    return checkDiskSpace(deps.projectsRoot(), estimatedBytes, durationMs, 'Estimativa para a gravação, a mídia normalizada e os arquivos temporários; a câmera usa até 1080p. O tamanho real depende da atividade da tela.')
+  }
+
+  async function recoveryAction<T>(action: () => Promise<T>): Promise<T> {
+    if (status !== 'idle' || session || processing?.running || recovery) throw new Error('Espere a gravação ou o processamento em andamento terminar.')
+    // A trava nasce ANTES da primeira leitura: descartar e recuperar não disputam o bruto.
+    const task = action()
+    const lock = task.then(() => undefined, () => undefined)
+    recovery = lock
+    try { return await task } finally { if (recovery === lock) recovery = null }
+  }
+
+  function recoverInterrupted(id: string): Promise<{ sessionId: string }> {
+    return recoveryAction(async () => {
+      const { dir, manifest, bytes } = await loadRecovery(deps.projectsRoot(), id)
+      if (!isInterrupted(manifest) || bytes === 0) throw new Error('Essa gravação não tem pedaços interrompidos para recuperar.')
+      const ff = deps.ffmpeg()
+      if (!ff) throw new Error('Não encontrei o ffmpeg. Escolha-o nos Ajustes e tente recuperar de novo; os pedaços continuam no disco.')
+      if (manifest.endedAt === null) {
+        await finalizeInterrupted(dir, manifest, ff)
+        await writeManifest(dir, manifest)
+      }
+      const eventsPath = await resolveProjectFile(dir, 'raw/events.json')
+      const rawEvents = await readFile(eventsPath, 'utf8').then((text) => JSON.parse(text) as RawEvents).catch(() => null)
+      const ctx = createProcessContext({ dir, manifest, rawEvents })
+      processing = { ctx, snapshot: { sessionId: manifest.sessionId, folder: id, status: 'running', steps: [], notes: [...manifest.notes] }, running: false }
+      logger.info(`Recuperando os pedaços gravados: ${id}.`)
+      await runOnce(ff)
+      return { sessionId: manifest.sessionId }
+    })
+  }
+
   function recover(): Promise<void> {
     if (recovery) return recovery
     recovery = (async () => {
-      if (session || processing?.running) return
+      if (status !== 'idle' || session || processing?.running) return
       const root = deps.projectsRoot()
       const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
       for (const entry of entries) {
@@ -439,12 +492,12 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       if (!deps.ffmpeg()) throw new Error('Não encontrei o ffmpeg: sem ele o Tomada não consegue processar a gravação. Instale-o ou escolha a pasta nos Ajustes.')
 
       const root = deps.projectsRoot()
-      await mkdir(root, { recursive: true })
-      const preflight = await checkPreflight(root, minFree)
-      if (preflight.disk === 'low') deps.emit('record:notice', { kind: 'info', text: 'Pouco espaço livre em disco. A gravação segue; confira a pasta dos projetos.' })
-
+      // Reserva a sessão antes da primeira operação assíncrona (disco/fonte).
       setStatus('preparing')
       try {
+        await mkdir(root, { recursive: true })
+        const disk = await recordingDiskSpace(request)
+        if (disk.status !== 'ok') deps.emit('record:notice', { kind: 'info', text: diskWarning(disk) })
         let source: ResolvedSource | null = null
         if (request.mode !== 'camera') {
           source = await deps.sources.resolve(request.sourceId!)
@@ -495,6 +548,8 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           notes: [],
           saved: null,
           processedAt: null,
+          lastChunkAt: null,
+          openPauseAt: null,
           ...(request.script ? { script: request.script } : {}),
           retakeMarks: []
         }
@@ -515,6 +570,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           openPause: null,
           writeError: null,
           offsetMs: 0,
+          shortcuts: { stop: 'Ctrl+Shift+R', pause: 'Ctrl+Shift+P' },
           hadData: false,
           closed: false,
           writes: Promise.resolve()
@@ -611,8 +667,6 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       }
       await writeManifest(s.dir, s.manifest)
       setStatus('recording')
-      const state = makeBarState(s, 'recording')
-      barSnapshot = state
       const hotkeys = deps.windows.registerHotkeys({
         stop: () => command('stop', 'hotkey'),
         pause: () => command(status === 'paused' ? 'resume' : 'pause', 'hotkey'),
@@ -625,7 +679,9 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           text: 'Os atalhos globais não puderam ser registrados (outro programa pode estar usando). Use a barra flutuante.'
         })
       }
-      deps.windows.showBar({ ...state, shortcutStop: hotkeys.stop, shortcutPause: hotkeys.pause }, s.source?.displayBoundsDip ?? null)
+      s.shortcuts = { stop: hotkeys.stop, pause: hotkeys.pause }
+      barSnapshot = makeBarState(s, 'recording')
+      deps.windows.showBar(barSnapshot, s.source?.displayBoundsDip ?? null)
       if (prompter) {
         if (s.request.script) prompter = { ...prompter, script: s.request.script }
         deps.windows.showTeleprompter?.(prompter, s.source?.displayBoundsDip ?? null)
@@ -651,7 +707,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           let slot = s.files.get(kind)
           if (!slot) {
             const rel = kind === 'screen' ? RAW_SCREEN : kind === 'camera' ? RAW_CAMERA : RAW_MIC
-            const path = join(s.dir, rel)
+            const path = await resolveProjectFile(s.dir, rel)
             const handle = await open(path, 'a')
             slot = { handle, bytes: 0, path }
             s.files.set(kind, slot)
@@ -659,6 +715,11 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
           await slot.handle.write(bytes)
           slot.bytes += bytes.byteLength
           s.hadData = true
+          // O último pedaço salva o limite conhecido; cair com a pausa aberta não alonga a mídia.
+          s.manifest.lastChunkAt = rendererNow(s)
+          s.manifest.pauses = [...s.pauses]
+          s.manifest.openPauseAt = s.openPause
+          await writeManifest(s.dir, s.manifest)
         } catch (err) {
           const message = messageOf(err)
           if (!s.writeError) {
@@ -677,6 +738,9 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       const s = session
       if (!s || status !== 'recording') return
       s.openPause = at
+      s.manifest.openPauseAt = at
+      s.manifest.pauses = [...s.pauses]
+      await writeManifest(s.dir, s.manifest)
       s.tracker?.pause()
       setStatus('paused')
       pushBar('paused')
@@ -687,6 +751,9 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       if (!s || status !== 'paused' || s.openPause === null) return
       s.pauses.push({ start: s.openPause, end: at })
       s.openPause = null
+      s.manifest.openPauseAt = null
+      s.manifest.pauses = [...s.pauses]
+      await writeManifest(s.dir, s.manifest)
       s.tracker?.resume()
       setStatus('recording')
       pushBar('recording')
@@ -710,6 +777,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       const pauses = normalizeIntervals(s.pauses)
       const clock = s.manifest.clock
       s.manifest.pauses = pauses
+      s.manifest.openPauseAt = null
       s.manifest.endedAt = info.endedAt
       s.manifest.stopReason = info.reason
       s.manifest.recordedMs = clock ? Math.max(0, info.endedAt - clock.t0 - pauses.reduce((a, p) => a + (p.end - p.start), 0)) : null
@@ -760,6 +828,23 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     },
     markRetake,
     recover,
+    diskSpace: recordingDiskSpace,
+    async listInterrupted() {
+      const items = await listRecoveries(deps.projectsRoot())
+      return items.filter((item) => item.sessionId !== session?.id).map((item) => {
+        const error = processing?.ctx.manifest.sessionId === item.sessionId ? processing.snapshot.error?.message : undefined
+        return error ? { ...item, error } : item
+      })
+    },
+    recoverInterrupted,
+    discardInterrupted(id) {
+      return recoveryAction(async () => {
+        const { dir, manifest } = await loadRecovery(deps.projectsRoot(), id)
+        if (!isInterrupted(manifest)) throw new Error('Essa gravação já foi processada; apague o projeto pela Biblioteca.')
+        await deps.trash(dir)
+        if (processing?.ctx.manifest.sessionId === manifest.sessionId) processing = null
+      })
+    },
     preflight: () => checkPreflight(deps.projectsRoot(), minFree),
     showTeleprompter(config) {
       prompter = { ...config, paused: false, topicIndex: 0 }
@@ -779,6 +864,7 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
     },
 
     async retry(sessionId) {
+      if (recovery) throw new Error('Espere a recuperação ou o descarte em andamento terminar.')
       const p = processing
       if (!p || p.ctx.manifest.sessionId !== sessionId) throw new Error('Não encontrei essa gravação para tentar de novo.')
       if (p.running) return
@@ -794,6 +880,8 @@ export function createRecordingService(deps: RecordingDeps): RecordingService {
       if (s) {
         await stopTrackerQuietly(s)
         await closeFiles(s)
+        s.manifest.pauses = [...s.pauses]
+        s.manifest.openPauseAt = s.openPause
         s.manifest.notes.push('O app foi fechado durante a gravação; o bruto está em raw/.')
         await writeManifest(s.dir, s.manifest).catch(() => undefined)
       }

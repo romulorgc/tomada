@@ -12,6 +12,9 @@ import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
 import { Segmented } from './controls'
 import { useDoc, useEditor } from './context'
+import { DiskSpaceNotice } from '../components/DiskSpaceNotice'
+import type { DiskEstimate } from '@shared/disk'
+import { DEFAULT_EXPORT_DEFAULTS, type ExportDefaults } from '@shared/settings-defaults'
 
 const T = t.editor.export
 const RESOLUTIONS: ExportResolution[] = ['1080p', '1440p', '2160p']
@@ -41,6 +44,8 @@ export function ExportDialog() {
   const [fps, setFps] = useState<ExportFps>(30)
   const [name, setName] = useState<string | null>(null) // null = o nome padrão
   const [dir, setDir] = useState<string | null>(null) // null = exports/ do projeto
+  const [defaults, setDefaults] = useState<ExportDefaults>(DEFAULT_EXPORT_DEFAULTS)
+  const [disk, setDisk] = useState<DiskEstimate | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
 
   const stem = name ?? defaultExportStem(title, { resolution, fps, format })
@@ -50,6 +55,23 @@ export function ExportDialog() {
   const estimate = useMemo(() => formatBytes(((exportBitrate(resolution, fps, format) + (vertical ? 192_000 : 384_000)) * (outMs / 1000)) / 8), [resolution, fps, format, vertical, outMs])
   // legenda ligada neste formato e nenhuma palavra para legendar: o vídeo sai sem legenda, e a pessoa precisa saber
   const captionsWithoutText = projectForFormat(doc, format).captions.enabled && (transcript.data?.words.length ?? 0) === 0
+  useEffect(() => {
+    let alive = true
+    void window.tomada.settings.get().then((view) => {
+      if (!alive) return
+      const saved = view.settings.exportDefaults ?? DEFAULT_EXPORT_DEFAULTS
+      setDefaults(saved); setResolution(saved.horizontal.resolution); setFps(saved[openFormat].fps)
+    }).catch((err: unknown) => window.tomada.log({level:'warn',message:'Falha ao ler padrões de exportação',detail:messageOf(err)}))
+    return () => { alive = false }
+  }, [openFormat])
+  useEffect(() => {
+    if (progress) return
+    let alive = true
+    const timer = window.setTimeout(() => {
+      void exporter.diskSpace({resolution,fps,format,...(name !== null && name.trim() ? {fileName:name.trim()} : {}),...(dir ? {dir} : {})}).then((estimate) => { if (alive) setDisk(estimate) }).catch((err: unknown) => window.tomada.log({level:'warn',message:'Falha ao medir o disco antes de exportar',detail:messageOf(err)}))
+    }, 150)
+    return () => { alive = false; window.clearTimeout(timer) }
+  }, [exporter.diskSpace, resolution, fps, format, name, dir, progress, doc])
 
   // Esc fecha (a exportação segue rodando); o foco entra no diálogo ao abrir
   useEffect(() => {
@@ -117,6 +139,7 @@ export function ExportDialog() {
                 value={format}
                 onChange={(f) => {
                   setFormat(f)
+                  setFps(defaults[f].fps)
                   setName(null)
                 }}
                 options={[
@@ -199,6 +222,7 @@ export function ExportDialog() {
             <p className="export-summary tnum" data-testid="export-summary">
               {outMs > 0 ? T.summary(formatSpan(outMs), estimate) : T.nothing}
             </p>
+            <DiskSpaceNotice estimate={disk} />
             {captionsWithoutText ? (
               <p className="ctl-note" data-testid="export-captions-warning" role="status">
                 {T.captionsNoText}

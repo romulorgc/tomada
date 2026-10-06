@@ -76,6 +76,36 @@ async function world(initial: Project) {
 }
 
 describe('integração dos ajustes e da retomada do piloto automático', () => {
+  it('desligar a etapa de zoom remove segmentos automáticos dos dois formatos e conserva os manuais', async () => {
+    const doc = baseProject()
+    const auto = {id:'auto',start:1000,end:3000,scale:1.4,focus:'auto' as const,origin:'auto' as const}
+    const manual = {...auto,id:'manual',start:6000,end:8000,origin:'manual' as const}
+    doc.zooms = [auto,manual]
+    doc.vertical = {...defaultVerticalEdit(),zoomPreset:'intense',zooms:[{...auto,id:'auto-v'},{...manual,id:'manual-v'}]}
+    const w = await world(doc)
+    w.prefs.mode = 'nothing'
+    w.prefs.steps.zooms = false
+    await w.service.start(id)
+    expect(w.project().zoomPreset).toBe('off')
+    expect(w.project().vertical?.zoomPreset).toBe('off')
+    expect(w.project().zooms).toEqual([manual])
+    expect(w.project().vertical?.zooms).toEqual([{...manual,id:'manual-v'}])
+  })
+  it('desfoque vindo do editor de um corte salva no comum sem copiar cortes do item e invalida arquivos anteriores', async () => {
+    const base = baseProject(); addClip(base)
+    base.review = {items:{youtube:{decision:'approved',origin:'manual',phase:'ready',exportPath:'exports/antigo.mp4'},'clip-1':{decision:'approved',origin:'manual',phase:'ready',exportPath:'exports/corte-antigo.mp4'}}}
+    const w = await world(base)
+    const opened = reviewDocument(base,'clip-1')
+    const regions = [{id:'b1',start:0,end:20000,rect:{x:.3,y:.3,w:.4,h:.2},mode:'blur' as const}]
+    await w.service.saveProject(id,{...opened,blurRegions:regions},opened)
+    expect(w.project().cuts).toEqual(base.cuts)
+    expect(w.project().title).toBe(base.title)
+    for (const item of ['youtube','clip-1']) {
+      expect(reviewDocument(w.project(),item).blurRegions).toEqual(regions)
+      expect(itemOf(w.project(),item).exportPath).toBeUndefined()
+      expect(itemOf(w.project(),item).error).toContain('proteção')
+    }
+  })
   it('tentar salvar de novo recupera o documento aberto se só o project.json sumiu',async () => {
     const base = baseProject()
     const w = await world(base)

@@ -15,6 +15,7 @@ import { AlertIcon, FolderIcon, TargetIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
 import { useDoc, useEditor, usePlayback } from './context'
+import { BlurOverlay } from './BlurOverlay'
 
 type DragMode = { mode: 'camera' }
 
@@ -166,6 +167,7 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
         {/* As fontes de imagem e de som da prévia: ficam na página (precisam decodificar) mas não aparecem. */}
         <div ref={hostRef} className="preview-sources" aria-hidden="true" />
         {format === 'vertical' && safeGuide ? <SafeGuide /> : null}
+        {!previewId ? <BlurOverlay canvasRef={canvasRef} frameRef={frameRef} /> : null}
         {marker ? (
           <span className="focus-marker" data-testid="focus-marker" style={{ left: `${marker.left}%`, top: `${marker.top}%` }}>
             <TargetIcon size={22} />

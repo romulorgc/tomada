@@ -24,7 +24,7 @@ export type LaneItem = {
 }
 
 export type LaneApi = {
-  kind: 'zoom' | 'layout'
+  kind: 'zoom' | 'layout' | 'blur'
   items: LaneItem[]
   /** Documento depois de mover o segmento `id` por `delta` ms (a partir de `base`). */
   move(base: Project, id: string, delta: number): Project
@@ -49,7 +49,7 @@ export function SegmentLane({
   lane: LaneApi
   view: TimelineView
   /** Candidatos do ímã (instantes de origem), lidos na hora do gesto; `skip` tira o próprio item. */
-  getSnap: (skip?: { kind: 'zoom' | 'layout'; id: string }) => readonly number[]
+  getSnap: (skip?: { kind: 'zoom' | 'layout' | 'blur'; id: string }) => readonly number[]
   onSnapGuide: (ms: number | null) => void
   onSeek: (sourceMs: number) => void
 }) {

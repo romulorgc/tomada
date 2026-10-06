@@ -5,6 +5,9 @@
 export const DICTIONARY_MAX_TERMS = 200
 export const DICTIONARY_MAX_LENGTH = 80
 
+/** Vocabulário inicial do usuário; uma lista vazia salva é uma escolha e continua vazia. */
+export const DEFAULT_DICTIONARY: readonly string[] = ['Sintomax', 'Agendaí', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Claude', 'Supabase', 'WhatsApp']
+
 /** Limpa a lista: só texto, sem caracteres de controle, espaços juntos, sem vazios nem repetidos (sem ligar para a caixa). */
 export function normalizeDictionary(input: unknown): string[] {
   if (!Array.isArray(input)) return []

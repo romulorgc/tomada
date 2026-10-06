@@ -12,6 +12,7 @@ import { TranscriptionPrepare } from '../components/TranscriptionPrepare'
 import { Segmented } from '../editor/controls'
 import { t } from '../i18n/pt-BR'
 import { useApp } from '../store'
+import { m5Settings } from '../i18n/m5-settings'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -36,12 +37,15 @@ export function TranscriptionSettings() {
   const [draft, setDraft] = useState('')
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [engine, setEngine] = useState<'faster-whisper' | 'whisper-cpp'>('faster-whisper')
+  const [engineChanged, setEngineChanged] = useState(false)
 
   const load = useCallback(async () => {
     setLoadError(null)
     try {
-      const [p, d] = await Promise.all([window.tomada.transcription.getPrefs(), window.tomada.dictionary.get()])
+      const [p, d, s] = await Promise.all([window.tomada.transcription.getPrefs(), window.tomada.dictionary.get(), window.tomada.settings.get()])
       setPrefs(p)
+      setEngine(s.settings.transcription?.engine ?? 'faster-whisper')
       setSaved(d)
       setDraft(d.join('\n'))
     } catch (err) {
@@ -90,6 +94,7 @@ export function TranscriptionSettings() {
 
   return (
     <div className="grid gap-5" data-testid="settings-transcription-body">
+      <label className="grid gap-2 text-sm">{m5Settings.engine.label}<select className="rounded-control border border-line-strong bg-raised p-2" value={engine} data-testid="transcription-engine" onChange={(e) => { const next = e.target.value as typeof engine; void window.tomada.transcription.setEngine(next).then(() => { setEngine(next); setEngineChanged(true) }).catch((err: unknown) => notify({ kind: 'error', text: m5Settings.engine.failed, detail: messageOf(err) })) }}><option value="faster-whisper">{m5Settings.engine.primary}</option><option value="whisper-cpp">{m5Settings.engine.alternative}</option></select>{engineChanged ? <span className="text-muted" role="status">{m5Settings.engine.restart}</span> : null}</label>
       <div className="rounded-thumb border border-line bg-surface px-4 py-4">
         <TranscriptionPrepare />
       </div>
@@ -141,7 +146,7 @@ export function TranscriptionSettings() {
   )
 }
 
-export function AiSettings() {
+export function AiSettings({ changed }: { changed?: () => void } = {}) {
   const notify = useApp((s) => s.notify)
   const [status, setStatus] = useState<LlmStatus | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -167,6 +172,7 @@ export function AiSettings() {
     try {
       setStatus(await window.tomada.ai.setPrefs({ provider }))
       setTest(null)
+      changed?.()
     } catch (err) {
       notify({ kind: 'error', text: t.settings.ai.prefsFailed, detail: messageOf(err) })
     }
@@ -178,6 +184,7 @@ export function AiSettings() {
       setStatus(await window.tomada.ai.setKey(key.trim()))
       setKey('')
       setTest(null)
+      changed?.()
       notify({ kind: 'info', text: t.settings.ai.key.saved })
     } catch (err) {
       notify({ kind: 'error', text: t.settings.ai.key.failed, detail: messageOf(err) })
@@ -191,6 +198,7 @@ export function AiSettings() {
     try {
       setStatus(await window.tomada.ai.clearKey())
       setTest(null)
+      changed?.()
       notify({ kind: 'info', text: t.settings.ai.key.cleared })
     } catch (err) {
       notify({ kind: 'error', text: t.settings.ai.key.failed, detail: messageOf(err) })

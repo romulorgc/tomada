@@ -8,6 +8,11 @@ import type { AiEditResult, EditFormat } from './ai-edit'
 import type { CameraCalibration } from './camera-sync'
 import type { AutopilotPrefs, PipelineState, PipelineStepId } from './autopilot'
 import type { ReviewItem } from './review'
+import type { ExportDefaults, OnboardingPrefs, OwnerEditingDefaults } from './settings-defaults'
+import type { RecordingShortcuts } from './shortcuts-config'
+import type { DiagnosticSnapshot, MediaPermissions } from './diagnostics'
+import type { InterruptedRecording } from './recovery'
+import type { DiskEstimate } from './disk'
 import type { Levels } from './clean'
 import type { ClipsResult } from './clips'
 import type { ExportOptions } from './export'
@@ -31,7 +36,10 @@ export type AppInfo = {
 }
 
 /** Ajustes gravados em disco (todos opcionais; ausente = padrão). */
-export type Settings = {
+export type Settings = OwnerEditingDefaults & {
+  shortcuts?: RecordingShortcuts
+  exportDefaults?: ExportDefaults
+  onboarding?: OnboardingPrefs
   cameraCalibrations?: CameraCalibration[]
   autopilot?: AutopilotPrefs
   ownerStyle?: Project['style']
@@ -43,7 +51,7 @@ export type Settings = {
   record?: Partial<RecordPrefs>
   /** Dicionário: nomes próprios e termos que a transcrição deve acertar (vira prompt e `hotwords`). */
   dictionary?: string[]
-  /** Preferências da transcrição; `engine` só por arquivo (não há botão: o padrão é o que se mediu melhor). */
+  /** Preferências da transcrição; trocar de motor passa a valer na próxima abertura. */
   transcription?: Partial<TranscriptionPrefs> & { engine?: 'faster-whisper' | 'whisper-cpp' }
   /** IA de texto: qual usar e o modelo. A chave cifrada NUNCA sai do processo principal. */
   llm?: LlmStoredPrefs
@@ -331,6 +339,15 @@ export type IpcContract = {
   'projects:pick-background': { args: [id: string]; result: string | null }
 
   'settings:get': { args: []; result: SettingsView }
+  'diagnostics:get': { args: []; result: DiagnosticSnapshot }
+  'diagnostics:permissions': { args: [permissions: MediaPermissions]; result: void }
+  'settings:set-shortcuts': { args: [prefs: RecordingShortcuts]; result: SettingsView }
+  'settings:pick-style-background': { args: []; result: SettingsView | null }
+  'recovery:list': { args: []; result: InterruptedRecording[] }
+  'recovery:recover': { args: [id: string]; result: { sessionId: string } }
+  'recovery:discard': { args: [id: string]; result: void }
+  'record:disk-space': { args: [request: RecordRequest, durationMs?: number]; result: DiskEstimate }
+  'export:disk-space': { args: [request: ExportRequest]; result: DiskEstimate }
   'settings:save-style': { args: [id: string, itemId?: string]; result: SettingsView }
   'settings:update': { args: [patch: Partial<Settings>]; result: SettingsView }
   'settings:pick-projects-dir': { args: []; result: string | null }
@@ -387,6 +404,7 @@ export type IpcContract = {
   'transcription:cancel': { args: [projectId: string]; result: void }
   'transcription:get-prefs': { args: []; result: TranscriptionPrefs }
   'transcription:set-prefs': { args: [patch: Partial<TranscriptionPrefs>]; result: TranscriptionPrefs }
+  'transcription:set-engine': { args: [engine: 'faster-whisper' | 'whisper-cpp']; result: SettingsView }
   'transcript:get': { args: [projectId: string]; result: Transcript | null }
   'dictionary:get': { args: []; result: string[] }
   'dictionary:set': { args: [terms: string[]]; result: string[] }
@@ -469,6 +487,8 @@ export type TomadaApi = {
   autopilot: { start(id: string): Promise<void>; retry(id: string, step: PipelineStepId): Promise<void> }
   review: { update(id: string, itemId: string, patch: Partial<ReviewItem>, reexport?: boolean): Promise<Project>; export(id: string, itemId: string): Promise<void>; post(id: string): Promise<string>; ask(id: string, itemId: string, instruction: string): Promise<AiEditResult> }
   app: { info(): Promise<AppInfo> }
+  diagnostics: { get(): Promise<DiagnosticSnapshot>; permissions(permissions: MediaPermissions): Promise<void> }
+  recovery: { list(): Promise<InterruptedRecording[]>; recover(id: string): Promise<{ sessionId: string }>; discard(id: string): Promise<void> }
   projects: {
     list(): Promise<ProjectSummary[]>
     get(id: string): Promise<ProjectDetail>
@@ -479,6 +499,8 @@ export type TomadaApi = {
     pickBackground(id: string): Promise<string | null>
   }
   settings: {
+    setShortcuts(prefs: RecordingShortcuts): Promise<SettingsView>
+    pickStyleBackground(): Promise<SettingsView | null>
     saveStyle(id: string, itemId?: string): Promise<SettingsView>
     get(): Promise<SettingsView>
     update(patch: Partial<Settings>): Promise<SettingsView>
@@ -490,6 +512,7 @@ export type TomadaApi = {
     test(): Promise<FfmpegTestResult>
   }
   record: {
+    diskSpace(request: RecordRequest, durationMs?: number): Promise<DiskEstimate>
     sources(): Promise<SourceInfo[]>
     getPrefs(): Promise<RecordPrefs>
     setPrefs(patch: Partial<RecordPrefs>): Promise<RecordPrefs>
@@ -514,6 +537,7 @@ export type TomadaApi = {
   }
   processing: { retry(sessionId: string): Promise<void> }
   exporter: {
+    diskSpace(request: ExportRequest): Promise<DiskEstimate>
     start(request: ExportRequest): Promise<{ exportId: string }>
     cancel(exportId: string): Promise<void>
     status(): Promise<ExportProgress | null>
@@ -539,6 +563,7 @@ export type TomadaApi = {
     cancel(projectId: string): Promise<void>
     getPrefs(): Promise<TranscriptionPrefs>
     setPrefs(patch: Partial<TranscriptionPrefs>): Promise<TranscriptionPrefs>
+    setEngine(engine: 'faster-whisper' | 'whisper-cpp'): Promise<SettingsView>
     /** O transcript.json do projeto (null se ainda não há). */
     get(projectId: string): Promise<Transcript | null>
   }

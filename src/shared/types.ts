@@ -21,6 +21,9 @@ export type Point = { x: number; y: number }
 /** Intervalo [start, end) em ms. */
 export type Range = { start: number; end: number }
 
+/** Proteção de pixels da TELA de origem; compartilhada por YouTube e todos os cortes. */
+export type BlurRegion = Range & { id: string; rect: Rect; mode: 'blur' | 'pixelate' | 'solid' }
+
 /** Uma fonte de mídia do projeto. `path` é RELATIVO à pasta do projeto. */
 export type Src = {
   path: string
@@ -185,8 +188,8 @@ export type VerticalEdit = {
   cameraTop?: boolean
   /** Título de gancho (aparece nos 4 primeiros segundos de saída). Vazio = nenhum. */
   hook?: string
-  /** Legenda só do vertical (o resto, como as cores, vale para os dois formatos). */
-  captions?: Partial<Pick<CaptionStyle, 'enabled' | 'style' | 'wordsPerLine' | 'position' | 'box' | 'size' | 'positionY' | 'uppercase' | 'highlightWord'>>
+  /** Legenda só do vertical; cores ausentes herdam as do horizontal. */
+  captions?: Partial<CaptionStyle>
 }
 
 /** As três notas de um corte (0-100): gancho nos 3 primeiros segundos, fluxo (começo, meio e fim) e valor para quem assiste. */
@@ -274,6 +277,7 @@ export type Project = {
   }
   capture: CaptureInfo
   cuts: Cut[]
+  blurRegions?: BlurRegion[]
   /** Trechos de voz silenciada (muletas no modo "silenciar"). Ausente = nenhum. */
   mutes?: Mute[]
   zooms: Zoom[]

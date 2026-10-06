@@ -4,7 +4,7 @@
  */
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, safeStorage, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, protocol, safeStorage, session, shell, systemPreferences } from 'electron'
 import { createAutopilot, type AutopilotService } from './autopilot'
 import { resolveProjectFile } from './project-files'
 import { createGpuQueue } from './gpu-queue'
@@ -66,6 +66,9 @@ async function main(): Promise<void> {
   await app.whenReady()
   nativeTheme.themeSource = 'dark'
   Menu.setApplicationMenu(null)
+  if (process.platform === 'win32') app.setAppUserModelId('com.tomada.desktop')
+  const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, '../../resources')
+  const icon = join(resourcesDir, process.platform === 'win32' ? 'tomada.ico' : 'tomada.png')
 
   const userData = app.getPath('userData')
   const logger = createLogger(logsDir(userData), { echo: !app.isPackaged })
@@ -143,13 +146,12 @@ async function main(): Promise<void> {
     rendererUrl,
     rendererFile: join(__dirname, '../renderer/index.html'),
     getMain: () => mainWindow,
-    logger
+    logger, icon, shortcuts: () => state.recordingShortcuts()
   })
   const sources = createSourceProvider({ logger, ownHwnds: () => windows.ownHwnds(), env: process.env })
   sources.installDisplayMediaHandler(session.defaultSession)
 
   // --- Transcrição e IA ----------------------------------------------------------------------------------
-  const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, '../../resources')
   const syncToolsDir = ensureToolsDir(process.env)
   const lipSync = createLipSyncDetector({ toolsDir: syncToolsDir, scriptPath: join(resourcesDir, 'lip_sync.py'), ffmpeg: () => locateFfmpeg(state.ffmpegLocateOptions())?.ffmpeg ?? null, logger })
   const calibration = createCameraCalibration({ scratchDir: join(syncToolsDir, 'lip-sync', 'calibration'), detector: lipSync, save: (value) => state.saveCameraCalibration(value) })
@@ -202,6 +204,7 @@ async function main(): Promise<void> {
     logger,
     lipSync,
     calibrations: () => state.settings().cameraCalibrations ?? [],
+    editingDefaults: () => state.settings(),
     projectsRoot: () => state.projectsRoot(),
     ffmpeg: () => {
       const paths = locateFfmpeg(state.ffmpegLocateOptions())
@@ -263,8 +266,16 @@ async function main(): Promise<void> {
 
   autopilot = createAutopilot({
     store, transcription, derived, exporter, llm, logger,
-    prefs: () => {const settings = state.settings();return { ...DEFAULT_AUTOPILOT,...settings.autopilot,steps:{...(settings.transcription?.auto === undefined ? {} : {transcribe:settings.transcription.auto}),...(settings.transcription?.autoClean === undefined ? {} : {clean:settings.transcription.autoClean}),...settings.autopilot?.steps}}},
+    prefs: () => {
+      const settings = state.settings()
+      return { ...DEFAULT_AUTOPILOT, ...settings.autopilot,
+        ...(settings.ownerCaptionsHorizontal ? {captionsHorizontal:settings.ownerCaptionsHorizontal.enabled} : {}),
+        ...(settings.ownerCaptionsVertical ? {captionsVertical:settings.ownerCaptionsVertical.enabled} : {}),
+        steps:{...(settings.transcription?.auto === undefined ? {} : {transcribe:settings.transcription.auto}),...(settings.transcription?.autoClean === undefined ? {} : {clean:settings.transcription.autoClean}),...settings.autopilot?.steps}
+      }
+    },
     ownerStyle: () => state.settings().ownerStyle,
+    ownerEditingDefaults: () => state.settings(),
     ownerBackground: async () => { const asset = state.settings().ownerStyleAsset; return asset ? resolveProjectFile(userData,asset) : undefined },
     emit: (snapshot) => emit('autopilot:progress',snapshot),
     ready: (id,clips,youtube) => {
@@ -313,6 +324,29 @@ async function main(): Promise<void> {
       calibration,
       autopilot,
       outputDirs,
+      diagnostics: {
+        gpuInfo: async () => {
+          const info = await app.getGPUInfo('complete') as { gpuDevice?: { deviceString?: string }[] }
+          return { devices: info.gpuDevice?.map((d) => d.deviceString ?? '').filter(Boolean) ?? [], hardwareAcceleration: app.getGPUFeatureStatus().video_encode === 'enabled' }
+        },
+        mediaAccess: () => {
+          const status = (kind: 'camera' | 'microphone'): 'granted' | 'denied' | 'unknown' => {
+            const value = systemPreferences.getMediaAccessStatus(kind)
+            return value === 'granted' ? 'granted' : value === 'denied' || value === 'restricted' ? 'denied' : 'unknown'
+          }
+          return { camera: status('camera'), microphone: status('microphone') }
+        },
+        checkShortcuts: async (prefs) => {
+          if (recording.recording) throw new Error('Pare a gravação antes de mudar os atalhos.')
+          const registered: string[] = []
+          try {
+            for (const key of Object.values(prefs)) {
+              if (globalShortcut.isRegistered(key) || !globalShortcut.register(key, () => undefined)) throw new Error(`O atalho ${key} já está em uso por outro programa. Escolha outra combinação.`)
+              registered.push(key)
+            }
+          } finally { registered.forEach((key) => globalShortcut.unregister(key)) }
+        }
+      },
       pickExportDir: async (defaultPath) => {
         // TOMADA_TEST_PICK_DIR: nos testes o diálogo do Windows não aparece; vazio = "cancelou"
         const forced = process.env.TOMADA_TEST_PICK_DIR
@@ -384,6 +418,7 @@ async function main(): Promise<void> {
       minHeight: 600,
       show: false,
       title: 'Tomada',
+      icon,
       backgroundColor: BACKGROUND,
       autoHideMenuBar: true,
       webPreferences: {

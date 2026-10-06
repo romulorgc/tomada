@@ -40,6 +40,7 @@ import type { Project, Word } from '@shared/types'
 import { withClipLayout } from '@shared/clips'
 import { ensureVertical, projectForFormat } from '@shared/vertical'
 import { captionFontsLoaded, ensureCaptionFonts } from '../fonts'
+import { samplesInBatches } from './bounded-samples'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -204,6 +205,13 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
   const format: FormatSpec = { kind: job.format ?? 'horizontal', w: job.width, h: job.height }
   const c = await createContext(job, format)
   const fps = job.fps
+  let activeOutput: Output | null = null
+  let finalized = false
+  let screenIter: AsyncGenerator<VideoSample | null, void, unknown> | null = null
+  let cameraIter: AsyncGenerator<VideoSample | null, void, unknown> | null = null
+  const screenHold = new FrameHold()
+  const cameraHold = new FrameHold()
+  let pending: Promise<[VideoSample | null, VideoSample | null]> | null = null
   try {
     const { derived, project } = c
     const total = outputFrameCount(derived.outputDurationMs, fps)
@@ -238,14 +246,19 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
 
     // O encoder por hardware nem sempre aceita a configuração pedida (nesta máquina recusa 1440p e 4K a 60 qps; o
     // Chromium só descobre no PRIMEIRO quadro, e a exportação inteira falharia). Pergunta antes e escolhe.
-    const acceleration = await pickAcceleration(codec, format.w, format.h, fps, job.bitrate)
+    let acceleration = await pickAcceleration(codec, format.w, format.h, fps, job.bitrate)
     let { output, source } = makeOutput(acceleration)
+    activeOutput = output
     try {
       await output.start()
     } catch (err) {
       // sem encoder por hardware: tenta o que o navegador oferecer (pode ser software)
+      if (acceleration === 'no-preference') throw err
+      await output.cancel().catch(() => undefined)
+      acceleration = 'no-preference'
       encoderNote = `sem hardware (${messageOf(err)})`
-      ;({ output, source } = makeOutput('no-preference'))
+      ;({ output, source } = makeOutput(acceleration))
+      activeOutput = output
       await output.start()
     }
 
@@ -253,10 +266,12 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
       (async function* () {
         for (let i = 0; i < total; i++) yield fileTimeSeconds(sourceTimeOfFrame(i, fps, derived.kept), offset)
       })()
-    const screenIter = c.screen ? c.screen.sink.samplesAtTimestamps(times(c.screen.offsetMs)) : null
-    const cameraIter = c.camera ? c.camera.sink.samplesAtTimestamps(times(c.camera.offsetMs)) : null
-    const screenHold = new FrameHold()
-    const cameraHold = new FrameHold()
+    // O pump do sink all-intra pode consumir todos os timestamps em paralelo
+    // sem limitar seu primeiro pacote. Lotes finitos forçam flush e limitam
+    // as amostras nativas a 32 por trilha, também em gravações longas.
+    const screenTrack = c.screen, cameraTrack = c.camera
+    screenIter = screenTrack ? samplesInBatches(times(screenTrack.offsetMs), (batch) => screenTrack.sink.samplesAtTimestamps(batch)) : null
+    cameraIter = cameraTrack ? samplesInBatches(times(cameraTrack.offsetMs), (batch) => cameraTrack.sink.samplesAtTimestamps(batch)) : null
 
     const next = async (iter: AsyncGenerator<VideoSample | null, void, unknown> | null): Promise<VideoSample | null> => {
       if (!iter) return null
@@ -264,7 +279,23 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
       return r.done ? null : r.value
     }
     // decodifica o quadro i + 1 enquanto o i é desenhado e codificado
-    let pending = Promise.all([next(screenIter), next(cameraIter)])
+    const prefetch = (): Promise<[VideoSample | null, VideoSample | null]> => {
+      const p = Promise.allSettled([next(screenIter), next(cameraIter)]).then<[VideoSample | null, VideoSample | null]>(([screen, camera]) => {
+        if (screen.status === 'rejected' || camera.status === 'rejected') {
+          // A outra trilha pode já ter decodificado: não perca sua amostra
+          // quando só uma rejeita, como aconteceria com Promise.all.
+          if (screen.status === 'fulfilled') screen.value?.close()
+          if (camera.status === 'fulfilled') camera.value?.close()
+          throw screen.status === 'rejected' ? screen.reason : camera.status === 'rejected' ? camera.reason : new Error('Falha ao decodificar.')
+        }
+        return [screen.value, camera.value]
+      })
+      // O encoder pode falhar antes do próximo await: observa já a rejeição,
+      // mas mantém o erro no próprio promise para a iteração/limpeza.
+      void p.catch(() => undefined)
+      return p
+    }
+    pending = prefetch()
     const meter = new FpsMeter()
     let lastReport = 0
     // onde o tempo vai (ms acumulados): esperar a decodificação, copiar o quadro, desenhar, esperar o encoder
@@ -273,13 +304,14 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
 
     for (let i = 0; i < total; i++) {
       if (io.signal?.aborted) {
-        await output.cancel()
         throw new Error('Exportação cancelada.')
       }
       let t0 = performance.now()
+      if (!pending) throw new Error('Não consegui obter o próximo quadro da exportação.')
       const [s, cam] = await pending
+      pending = null
       spent.decode += performance.now() - t0
-      if (i + 1 < total) pending = Promise.all([next(screenIter), next(cameraIter)])
+      if (i + 1 < total) pending = prefetch()
       t0 = performance.now()
       screenHold.update(s)
       cameraHold.update(cam)
@@ -291,7 +323,20 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
       renderFrame(c.ctx, scene, frames, c.cache)
       spent.draw += performance.now() - t0
       t0 = performance.now()
-      await source.add(i / fps, 1 / fps)
+      try {
+        await source.add(i / fps, 1 / fps)
+      } catch (err) {
+        // mediabunny cria o encoder no PRIMEIRO add, não em output.start().
+        // Ainda não há quadros gravados: pode repetir o mesmo canvas/timestamp.
+        if (i !== 0 || acceleration !== 'prefer-hardware') throw err
+        await output.cancel().catch(() => undefined)
+        acceleration = 'no-preference'
+        encoderNote = `sem hardware (${messageOf(err)})`
+        ;({ output, source } = makeOutput(acceleration))
+        activeOutput = output
+        await output.start()
+        await source.add(i / fps, 1 / fps)
+      }
       spent.encode += performance.now() - t0
 
       const now = performance.now()
@@ -300,10 +345,9 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
         io.onProgress?.(i + 1, meter.tick(i + 1))
       }
     }
-    screenHold.close()
-    cameraHold.close()
     const tFinal = performance.now()
     await output.finalize()
+    finalized = true
     const finalizeMs = performance.now() - tFinal
     const wall = performance.now() - startedAt
     const per = (ms: number): string => (ms / total).toFixed(2)
@@ -312,7 +356,12 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
       `total ${(wall / total).toFixed(2)} (${((total / wall) * 1000).toFixed(1)} qps), fechar o arquivo ${finalizeMs.toFixed(0)} ms`
     return { frames: total, encoder: encoderNote, timing }
   } finally {
+    screenHold.close()
+    cameraHold.close()
     c.close()
+    if (activeOutput && !finalized) await activeOutput.cancel().catch(() => undefined)
+    if (pending) await pending.then(([s, cam]) => { s?.close(); cam?.close() }, () => undefined)
+    await Promise.allSettled([screenIter?.return(), cameraIter?.return()])
   }
 }
 

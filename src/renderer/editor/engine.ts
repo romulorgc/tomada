@@ -68,6 +68,9 @@ class VideoTrack {
 
   private make(role: 'active' | 'standby'): HTMLVideoElement {
     const v = document.createElement('video')
+    // O protocolo local já responde CORS: a prévia precisa de pixels legíveis
+    // para a proteção destrutiva, inclusive no vídeo de espera da emenda.
+    v.crossOrigin = 'anonymous'
     v.muted = true
     v.playsInline = true
     v.preload = 'auto'

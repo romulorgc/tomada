@@ -5,13 +5,14 @@
  * Código puro de formato; a escrita atômica usa `fs-utils`. Sem Electron.
  */
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { resolve } from 'node:path'
 import type { ProcessStepId, StopReason } from '@shared/ipc'
 import type { FrameRate, Interval, RecordMode } from '@shared/recording'
 import type { CaptureInfo, Project, Rect, Size } from '@shared/types'
 import type { VideoScript } from '@shared/script'
 import type { RetakeMark } from '@shared/retake-marker'
 import { writeFileAtomic } from './fs-utils'
+import { resolveProjectFile } from './project-files'
 
 export const MANIFEST_PATH = 'raw/recording.json'
 export const RAW_SCREEN = 'raw/screen.webm'
@@ -82,18 +83,41 @@ export type RecordingManifest = {
   notes: string[]
   saved: ManifestSaved | null
   processedAt: string | null
+  /** Checkpoints durante a gravação: no relógio do renderer, nunca o da reabertura. */
+  lastChunkAt?: number | null
+  openPauseAt?: number | null
+  /** A decisão de recuperar já foi tomada; ainda pode haver uma falha para repetir. */
+  recoveryPending?: boolean
   script?: VideoScript
   retakeMarks?: RetakeMark[]
   processing?: { done: ProcessStepId[]; sources: Project['sources'] }
 }
 
+const manifestWrites = new Map<string, Promise<void>>()
+
 export async function writeManifest(dir: string, manifest: RecordingManifest): Promise<void> {
-  await writeFileAtomic(join(dir, MANIFEST_PATH), `${JSON.stringify(manifest, null, 2)}\n`)
+  // Captura o checkpoint já: o objeto continua sendo atualizado pela gravação.
+  const data = `${JSON.stringify(manifest, null, 2)}\n`
+  const path = resolve(dir, MANIFEST_PATH)
+  const key = process.platform === 'win32' ? path.toLowerCase() : path
+  // Chunk, pausa, retomada e processamento compartilham a ordem dos renames.
+  const task = (manifestWrites.get(key) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+    await writeFileAtomic(await resolveProjectFile(dir, MANIFEST_PATH), data)
+  })
+  manifestWrites.set(key, task)
+  const clear = (): void => { if (manifestWrites.get(key) === task) manifestWrites.delete(key) }
+  void task.then(clear, clear)
+  await task // a falha desta escrita continua visível para quem a pediu
 }
 
 export async function readManifest(dir: string): Promise<RecordingManifest> {
-  const text = await readFile(join(dir, MANIFEST_PATH), 'utf8')
+  const text = await readFile(await resolveProjectFile(dir, MANIFEST_PATH), 'utf8')
   const parsed = JSON.parse(text) as RecordingManifest
   if (parsed.version !== 1) throw new Error(`Versão do manifesto de gravação não suportada: ${String(parsed.version)}`)
+  if (typeof parsed.sessionId !== 'string' || typeof parsed.folder !== 'string' || typeof parsed.title !== 'string' || typeof parsed.createdAt !== 'string' || !Array.isArray(parsed.pauses) || !Array.isArray(parsed.notes) || parsed.notes.some((n) => typeof n !== 'string')) throw new Error('Manifesto de gravação inválido.')
+  const finite = (n: unknown): boolean => typeof n === 'number' && Number.isFinite(n)
+  if (parsed.clock && (!finite(parsed.clock.t0) || !finite(parsed.clock.offsetMs) || !finite(parsed.clock.rttMs))) throw new Error('Relógio inválido no manifesto de gravação.')
+  for (const p of parsed.pauses) if (!finite(p?.start) || !finite(p?.end) || p.end < p.start) throw new Error('Pausa inválida no manifesto de gravação.')
+  for (const value of [parsed.endedAt, parsed.recordedMs, parsed.lastChunkAt, parsed.openPauseAt]) if (value !== null && value !== undefined && !finite(value)) throw new Error('Tempo inválido no manifesto de gravação.')
   return parsed
 }

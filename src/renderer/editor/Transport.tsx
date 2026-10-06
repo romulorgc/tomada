@@ -23,6 +23,7 @@ const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Ctrl+F', label: t.editor.shortcuts.search },
   { keys: 'S', label: t.editor.shortcuts.split },
   { keys: 'Z', label: t.editor.shortcuts.zoom },
+  { keys: 'B', label: t.editor.shortcuts.blur },
   { keys: 'Ctrl+Z', label: t.editor.shortcuts.undo },
   { keys: 'Ctrl+Shift+Z', label: t.editor.shortcuts.redo },
   { keys: 'Ctrl+Roda', label: t.editor.shortcuts.timelineZoom },

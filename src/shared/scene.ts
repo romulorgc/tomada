@@ -26,6 +26,8 @@ import { HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, layou
 import { ZOOM_SCALE_SPRING } from './spring'
 import { computeCameraPath, sampleCameraPath, visibleRect, type CameraPath } from './zoom'
 import { fitRect } from './geometry'
+import { activeBlurRegions } from './blur'
+import type { BlurRegion } from './types'
 
 // ---------------------------------------------------------------------------
 // Formato de saída
@@ -392,6 +394,7 @@ export type SceneHalo = { x: number; y: number; radius: number; alpha: number }
 export type SceneCursor = { x: number; y: number; scale: number; alpha: number }
 
 export type Scene = {
+  blurRegions?: BlurRegion[]
   t: number
   format: FormatSpec
   /** px por "px de 1080" (ver `styleUnit`). */
@@ -632,6 +635,7 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
 
   return {
     t: sourceT,
+    blurRegions: activeBlurRegions(project, sourceT),
     format,
     unit,
     background: style.background,

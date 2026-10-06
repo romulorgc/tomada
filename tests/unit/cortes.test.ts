@@ -10,6 +10,7 @@ import {
   clipText,
   complementRanges,
   heuristicClips,
+  heuristicClipLabels,
   heuristicClipCount,
   isWeakStart,
   limitHook,
@@ -285,10 +286,59 @@ describe('cortes: heurística (sem IA)', () => {
     expect(isWeakStart('Escolho o cliente que acabei de cadastrar')).toBe(false)
   })
 
-  it('o título é o começo da primeira frase, sem conectivo; sem transcrição não há o que propor', () => {
-    expect(titleFromText('Então, eu abro o relatório do mês e escolho o período.')).toBe('Eu abro o relatório do mês e escolho')
-    expect(titleFromText('aqui na tela inicial eu clico em novo cliente.')).toBe('Aqui na tela inicial eu clico em novo cliente')
+  it('o título preserva uma frase completa, sem muleta de abertura; sem transcrição não há o que propor', () => {
+    expect(titleFromText('Então, eu abro o relatório do mês e escolho o período.')).toBe('Eu abro o relatório do mês e escolho o período.')
+    expect(titleFromText('aqui na tela inicial eu clico em novo cliente.')).toBe('Aqui na tela inicial eu clico em novo cliente.')
     expect(heuristicClips({ words: [], durationMs: 10_000, cuts: [] })).toEqual({ clips: [], dropped: [] })
+  })
+
+  it('a fala longa dá lugar a uma conclusão inteira curta, sem cortar a nona palavra e inventar ponto', () => {
+    const long = 'Eu preencho o formulário com todos os dados necessários para cadastrar o cliente e conferir suas informações antes de continuar.'
+    expect(titleFromText(`${long} Cadastro concluído.`)).toBe('Cadastro concluído.')
+    expect(titleFromText(long)).toBe('Veja a demonstração.')
+    expect(titleFromText('Eu preencho o formulário e depois escolho')).toBe('Veja a demonstração.')
+  })
+
+  it('limpa hesitação e muleta pontuadas, preservando verbo e palavras com sentido', () => {
+    expect(titleFromText('É, hum, então, tipo, o cadastro fica salvo, né.')).toBe('O cadastro fica salvo.')
+    expect(titleFromText('O cliente, tipo, recebe o aviso, né.')).toBe('O cliente recebe o aviso.')
+    expect(titleFromText('É importante escolher o tipo certo.')).toBe('É importante escolher o tipo certo.')
+    expect(titleFromText('Bom atendimento exige escuta.')).toBe('Bom atendimento exige escuta.')
+    expect(titleFromText('É. Salvo!')).toBe('Salvo!')
+  })
+
+  it('a versão completa de gravação curta usa frase fiel para ambos os textos, sem muleta ou fragmento', () => {
+    const text = 'É, então, eu preencho o formulário com os dados do cliente e verifico todas as informações antes de salvar. Cadastro salvo, né.'
+    const words: Word[] = text.split(' ').map((part, i) => ({ i, text: part, start: i * 250, end: i * 250 + 200, prob: 1, kind: 'word' }))
+    const durationMs = 10_000
+    expect(heuristicClips({ words, durationMs, cuts: [] }).clips).toEqual([])
+    expect(heuristicClipLabels(text)).toEqual({ title: 'Cadastro salvo.', hook: 'Cadastro salvo.' })
+    expect(heuristicClipLabels('É, eu preencho os dados necessários para cadastrar')).toEqual({ title: 'Veja a demonstração.', hook: 'Veja a demonstração.' })
+  })
+
+  it('título e gancho usam frases inteiras do próprio corte, com limites distintos', () => {
+    const texts = [
+      'Eu preencho os dados necessários para cadastrar o cliente sem sair desta tela.',
+      'O formulário permite conferir nome telefone endereço e os horários escolhidos antes de concluir.',
+      'Pronto, o cadastro fica salvo, né.'
+    ]
+    let time = 0
+    let index = 0
+    const words: Word[] = []
+    for (const text of texts) {
+      for (const part of text.split(' ')) {
+        words.push({ i: index++, text: part, start: time, end: time + 850, prob: 1, kind: 'word' })
+        time += 1000
+      }
+      time += 1000
+    }
+    const proposed = heuristicClips({ words, durationMs: time, cuts: [], count: 1 }).clips
+    expect(proposed).toHaveLength(1)
+    expect(proposed[0]!.title).toBe('Eu preencho os dados necessários para cadastrar o cliente sem sair desta tela.')
+    expect(proposed[0]!.hook).toBe('Pronto, o cadastro fica salvo.')
+    expect(proposed[0]!.title.length).toBeLessThanOrEqual(80)
+    expect(proposed[0]!.hook.length).toBeLessThanOrEqual(80)
+    expect(proposed[0]!.hook.split(' ').length).toBeLessThanOrEqual(8)
   })
 
   it('respeita os cortes do projeto na conta da duração e os cortes que já existem', () => {

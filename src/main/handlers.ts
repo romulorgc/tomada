@@ -38,8 +38,14 @@ import type { AutopilotService } from './autopilot'
 import { PIPELINE_STEPS } from '@shared/autopilot'
 import { reviewItemSchema, reviewDocument } from '@shared/review'
 import { projectSchema } from '@shared/project'
+import { validateRecordingShortcuts } from '@shared/shortcuts-config'
+import { createDiagnostics, type DiagnosticSystem } from './diagnostics'
+import { z } from 'zod'
+import { stat } from 'node:fs/promises'
+import { defaultStyle } from '@shared/project'
 
 export type HandlerDeps = {
+  diagnostics?: DiagnosticSystem
   calibration?: CameraCalibrationService
   autopilot?: AutopilotService
   info: AppInfo
@@ -96,6 +102,7 @@ const sameKey = (a: string): string => resolve(a).toLowerCase()
 
 export function createHandlers(deps: HandlerDeps): IpcHandlers {
   const { state, store, logger, recording, exporter, derived, transcription, llm } = deps
+  const diagnostics = createDiagnostics({ state, logger, transcription, llm, ...(deps.diagnostics ? { system: deps.diagnostics } : {}) })
   /** O que o usuário escolheu nesta sessão pelos diálogos nativos: só isso entra em ajustes que viram caminho. */
   const pickedSettings = { projectsDir: new Set<string>(), ffmpegPath: new Set<string>() }
   const captionsExporter = createCaptionsExporter({ read: (id) => store.read(id), words: async (id) => (await transcription.getTranscript(id))?.words ?? null })
@@ -170,6 +177,31 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     },
 
     'settings:get': async () => state.view(),
+    'diagnostics:get': () => diagnostics.snapshot(),
+    'diagnostics:permissions': async (permissions) => diagnostics.confirmPermissions(z.object({ camera: z.enum(['granted', 'denied', 'unknown']), microphone: z.enum(['granted', 'denied', 'unknown']) }).parse(permissions)),
+    'recovery:list': () => recording.listInterrupted(),
+    'recovery:recover': (id) => recording.recoverInterrupted(id),
+    'recovery:discard': (id) => recording.discardInterrupted(id),
+    'record:disk-space': (request, durationMs) => recording.diskSpace(recordRequestSchema.parse(request), durationMs === undefined ? undefined : finiteNumber(durationMs, 'duração estimada')),
+    'export:disk-space': (request) => exporter.diskSpace(exportRequestSchema.parse(request)),
+    'settings:set-shortcuts': async (input) => {
+      if (recording.status().status !== 'idle') throw new Error('Espere a gravação terminar antes de mudar os atalhos.')
+      const shortcuts = validateRecordingShortcuts(input, state.recordPrefs().retakeShortcut)
+      await deps.diagnostics?.checkShortcuts?.(shortcuts)
+      return state.update({ shortcuts })
+    },
+    'settings:pick-style-background': async () => {
+      const source = await deps.pickImage()
+      if (!source) return null
+      const ext = extname(source).toLowerCase()
+      if (!['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) throw new Error('Use uma imagem PNG, JPG ou WebP.')
+      const info = await stat(source)
+      if (!info.isFile() || info.size > 40 * 1024 * 1024) throw new Error('Use uma imagem de até 40 MB.')
+      const asset = `estilo/media/fundo-${randomUUID().replaceAll('-', '')}${ext}`
+      const target = await resolveProjectFile(deps.info.userDataDir, asset)
+      await mkdir(dirname(target), { recursive: true }); await copyFile(source, target)
+      return state.update({ ownerStyle: { ...(state.settings().ownerStyle ?? defaultStyle()), background: { type: 'image', path: asset } }, ownerStyleAsset: asset })
+    },
     'camera:calibrate': async (capture) => {
       if (recording.status().status !== 'idle' || recording.status().processing?.status === 'running') throw new Error('Espere a gravação e o processamento terminarem antes de calibrar.')
       if (!deps.calibration) throw new Error('A calibração de sincronia não está disponível neste computador.')
@@ -177,7 +209,8 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     },
     'settings:save-style': async (id,itemId) => {
       const {project,dir} = await store.read(id)
-      const style = (itemId ? projectForFormat(reviewDocument(project,itemId),itemId === 'youtube' ? 'horizontal' : 'vertical') : project).style
+      const selected = itemId ? projectForFormat(reviewDocument(project,itemId),itemId === 'youtube' ? 'horizontal' : 'vertical') : project
+      const style = selected.style
       let asset: string | undefined
       if (style.background.type === 'image') {
         const source = await resolveProjectFile(dir,style.background.path)
@@ -186,10 +219,18 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
         await mkdir(dirname(target),{recursive:true})
         await copyFile(source,target)
       }
-      return state.update({ownerStyle:style,...(asset ? {ownerStyleAsset:asset} : {})})
+      const editing = itemId && itemId !== 'youtube'
+        ? { ownerCaptionsVertical: selected.captions, ownerVerticalZoomPreset: selected.zoomPreset ?? 'moderate' as const }
+        : { ownerCaptionsHorizontal: selected.captions, ownerZoomPreset: selected.zoomPreset ?? 'moderate' as const, ...(!itemId && project.vertical ? { ownerCaptionsVertical: projectForFormat(project, 'vertical').captions, ownerVerticalZoomPreset: project.vertical.zoomPreset ?? 'moderate' as const } : {}) }
+      return state.update({ownerStyle:style,...editing,...(asset ? {ownerStyleAsset:asset} : {})})
     },
     'settings:update': async (patch) => {
       if (patch?.ownerStyleAsset !== undefined) throw new Error('Salve o estilo a partir de um vídeo na Revisão.')
+      if (patch?.shortcuts !== undefined) throw new Error('Use a seção Atalhos para conferir conflitos antes de salvar.')
+      if (patch?.ownerStyle?.background.type === 'image') {
+        const existing = state.settings().ownerStyle?.background
+        if (existing?.type !== 'image' || patch.ownerStyle.background.path !== existing.path) throw new Error('Use Escolher imagem para guardar o fundo com segurança.')
+      }
       assertPicked('projectsDir', patch?.projectsDir)
       assertPicked('ffmpegPath', patch?.ffmpegPath)
       return state.update(patch)
@@ -212,7 +253,11 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'record:prefs-get': async () => state.recordPrefs(),
     'record:prefs-set': (patch) => state.updateRecordPrefs(patch),
     'record:clock': async () => deps.clock(),
-    'record:prepare': (request) => recording.prepare(recordRequestSchema.parse(request)),
+    'record:prepare': async (request) => {
+      const parsed = recordRequestSchema.parse(request)
+      validateRecordingShortcuts(state.recordingShortcuts(), parsed.retakeShortcut)
+      return recording.prepare(parsed)
+    },
     'record:countdown': () => recording.countdown(),
     'record:go': () => recording.go(),
     'record:started': (info) => recording.started(info),
@@ -260,6 +305,11 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     },
     'transcription:get-prefs': async () => state.transcriptionPrefs(),
     'transcription:set-prefs': (patch) => state.updateTranscriptionPrefs(patch ?? {}),
+    'transcription:set-engine': async (engine) => {
+      const view = await transcription.view()
+      if (view.state === 'preparing' || view.jobs.some((job) => job.state === 'running' || job.state === 'queued')) throw new Error('Espere a transcrição terminar antes de trocar de motor.')
+      return state.setTranscriptionEngine(z.enum(['faster-whisper', 'whisper-cpp']).parse(engine))
+    },
     'transcript:get': (projectId) => transcription.getTranscript(projectId),
     'dictionary:get': async () => state.dictionary(),
     'dictionary:set': (terms) => state.setDictionary(terms),
