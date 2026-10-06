@@ -8,6 +8,8 @@ import { copyFile, mkdir, readFile, readdir, realpath, stat } from 'node:fs/prom
 import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path'
 import type { MediaFile, ProjectDetail } from '@shared/ipc'
 import { EVENT_FILES } from '@shared/events'
+import { FACE_FILE } from '@shared/face'
+import { currentMatteUrl } from './camera/matte-file'
 import { mediaUrl } from '@shared/media-url'
 import { ProjectFormatError, parseProject, projectDurationMs, serializeProject } from '@shared/project'
 import { isReservedWindowsName } from '@shared/safe-path'
@@ -201,6 +203,15 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
       // O documento pode vir de terceiros: nenhum caminho dele sai da pasta do projeto.
       await assertDocumentPaths(dir, project)
       const eventUrl = async (rel: string): Promise<string | null> => ((await pathExists(await resolveProjectFile(dir, rel))) ? mediaUrl(id, rel) : null)
+      /** Arquivo derivado que pode ter sido refeito: a URL leva a data dele, para a interface não ler a versão antiga do cache. */
+      const versionedUrl = async (rel: string): Promise<string | null> => {
+        try {
+          const info = await stat(await resolveProjectFile(dir, rel))
+          return info.isFile() ? mediaUrl(id, rel, Math.trunc(info.mtimeMs)) : null
+        } catch {
+          return null
+        }
+      }
       return {
         id,
         dir,
@@ -213,7 +224,8 @@ export function createProjectStore(deps: ProjectStoreDeps): ProjectStore {
           cursor: await eventUrl(EVENT_FILES.cursor),
           clicks: await eventUrl(EVENT_FILES.clicks),
           keys: await eventUrl(EVENT_FILES.keys)
-        }
+        },
+        analysis: { face: await versionedUrl(FACE_FILE), matte: await currentMatteUrl(id, dir, project) }
       }
     },
 

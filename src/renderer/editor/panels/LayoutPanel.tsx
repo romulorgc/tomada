@@ -8,7 +8,17 @@ import { setLayoutOfSeg } from '@shared/edits'
 import type { LayoutKind } from '@shared/types'
 import { keptRanges } from '@shared/timeline'
 import { autoVerticalLayouts, speechRanges } from '@shared/vertical'
-import { LayoutBubbleIcon, LayoutCameraIcon, LayoutFocusIcon, LayoutScreenIcon, LayoutSideIcon, LayoutStackIcon, LayoutWideIcon } from '../../components/Icons'
+import {
+  LayoutBubbleIcon,
+  LayoutCameraIcon,
+  LayoutFocusIcon,
+  LayoutPresenterIcon,
+  LayoutPresenterVerticalIcon,
+  LayoutScreenIcon,
+  LayoutSideIcon,
+  LayoutStackIcon,
+  LayoutWideIcon
+} from '../../components/Icons'
 import { t } from '../../i18n/pt-BR'
 import { useApp } from '../../store'
 import { Hint, Section, Toggle } from '../controls'
@@ -16,9 +26,9 @@ import { useDoc, useEditor } from '../context'
 import { useEditorOps } from '../ops'
 
 const T = t.editor.layout
-const KINDS: LayoutKind[] = ['bubble', 'side-by-side', 'screen', 'camera']
-/** No vertical: V-A Cursor, V-B Câmera + tela, V-C Tela na largura e só a câmera. */
-const VERTICAL_KINDS: LayoutKind[] = ['screen-focus', 'stack', 'screen-wide', 'camera']
+const KINDS: LayoutKind[] = ['bubble', 'side-by-side', 'presenter', 'screen', 'camera']
+/** No vertical: V-A Cursor, V-B Câmera + tela, V-D Apresentador (recortado), V-C Tela na largura e só a câmera. */
+const VERTICAL_KINDS: LayoutKind[] = ['screen-focus', 'stack', 'presenter', 'screen-wide', 'camera']
 const HOOK_MAX = 80
 const ICONS: Record<string, ReactNode> = {
   bubble: <LayoutBubbleIcon size={26} />,
@@ -27,8 +37,10 @@ const ICONS: Record<string, ReactNode> = {
   camera: <LayoutCameraIcon size={26} />,
   'screen-focus': <LayoutFocusIcon size={26} />,
   stack: <LayoutStackIcon size={26} />,
-  'screen-wide': <LayoutWideIcon size={26} />
+  'screen-wide': <LayoutWideIcon size={26} />,
+  presenter: <LayoutPresenterIcon size={26} />
 }
+const iconFor = (l: LayoutKind, vertical: boolean): ReactNode => (l === 'presenter' && vertical ? <LayoutPresenterVerticalIcon size={26} /> : ICONS[l])
 
 /** Por que um layout não está disponível neste projeto (ou `null` se está). */
 function unavailable(l: LayoutKind, hasScreen: boolean, hasCamera: boolean): string | null {
@@ -43,7 +55,8 @@ function LayoutCards({
   testPrefix,
   hasScreen,
   hasCamera,
-  kinds = KINDS
+  kinds = KINDS,
+  vertical = false
 }: {
   value: LayoutKind | null
   onPick: (l: LayoutKind) => void
@@ -51,6 +64,7 @@ function LayoutCards({
   hasScreen: boolean
   hasCamera: boolean
   kinds?: LayoutKind[]
+  vertical?: boolean
 }) {
   return (
     <div className="layout-cards" role="group">
@@ -68,7 +82,7 @@ function LayoutCards({
             data-testid={`${testPrefix}-${l}`}
             onClick={() => onPick(l)}
           >
-            {ICONS[l]}
+            {iconFor(l, vertical)}
             <span>{T.options[l as keyof typeof T.options]}</span>
             {reason ? <small>{reason}</small> : null}
           </button>
@@ -79,7 +93,7 @@ function LayoutCards({
 }
 
 export function LayoutPanel() {
-  const { store, hasScreen, hasCamera, cursorData, transcript, durationMs } = useEditor()
+  const { store, hasScreen, hasCamera, cursorData, transcript, durationMs, matte } = useEditor()
   const notify = useApp((s) => s.notify)
   const ops = useEditorOps()
   const base = useDoc((s) => s.project.style.defaultLayout)
@@ -105,7 +119,8 @@ export function LayoutPanel() {
       keys: cursorData.keys,
       cursor: cursorData.grid,
       speech: speechRanges(transcript.data?.words),
-      kept: keptRanges(durationMs, cuts)
+      kept: keptRanges(durationMs, cuts),
+      ...(matte.url ? { hasMatte: true } : {})
     })
     store.getState().change((p) => {
       const manual = p.layouts.filter((s) => s.origin === 'manual')
@@ -126,9 +141,10 @@ export function LayoutPanel() {
           hasScreen={hasScreen}
           hasCamera={hasCamera}
           kinds={kinds}
+          vertical={vertical}
         />
         <p className="ctl-note">{vertical ? V.videoHelp : T.videoHelp}</p>
-        {vertical && (T.optionHints as Record<string, string>)[base] ? <p className="ctl-note">{(T.optionHints as Record<string, string>)[base]}</p> : null}
+        {(vertical || base === 'presenter') && (T.optionHints as Record<string, string>)[base] ? <p className="ctl-note">{(T.optionHints as Record<string, string>)[base]}</p> : null}
         {vertical ? (
           <Toggle
             label={V.cameraTop}
@@ -210,6 +226,7 @@ export function LayoutPanel() {
               hasScreen={hasScreen}
               hasCamera={hasCamera}
               kinds={kinds}
+              vertical={vertical}
             />
             <p className="ctl-note">{T.segmentHelp}</p>
             <button type="button" className="btn btn-wide btn-danger-ghost" data-testid="layout-remove" onClick={() => ops.deleteSelected()}>

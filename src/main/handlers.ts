@@ -31,6 +31,8 @@ import { checkOpenable, checkRevealable, type OutputDirs } from './path-guard'
 import { assertDocumentPaths, resolveProjectFile } from './project-files'
 import type { ProjectStore } from './projects'
 import type { RecordingService } from './recording-service'
+import type { CameraService } from './camera/service'
+import { CAMERA_KINDS, type CameraKind } from '@shared/camera-analysis'
 import type { TranscriptionService } from './transcription/service'
 import type { AppState } from './state'
 import type { CameraCalibrationService } from './camera-calibration'
@@ -52,6 +54,8 @@ export type HandlerDeps = {
   exporter: ExportService
   derived: DerivedMedia
   transcription: TranscriptionService
+  /** A análise da câmera (M4c): o rosto, para enquadrar. */
+  camera: CameraService
   llm: LlmManager
   /** Diálogo de escolher a pasta da exportação (em teste, `TOMADA_TEST_PICK_DIR`). */
   pickExportDir(defaultPath?: string): Promise<string | null>
@@ -86,6 +90,19 @@ function finiteNumber(value: unknown, what: string): number {
   return value
 }
 
+/** O tipo de análise que a interface pediu: conjunto fechado. */
+function cameraKind(kind: unknown): CameraKind {
+  if (typeof kind !== 'string' || !(CAMERA_KINDS as readonly string[]).includes(kind)) throw new Error('Tipo de análise da câmera inválido.')
+  return kind as CameraKind
+}
+
+/** O pedido de "refazer": só `true`/`false` (ausente = não). Qualquer outra coisa vinda da interface é recusada. */
+function cameraForce(force: unknown): boolean {
+  if (force === undefined) return false
+  if (typeof force !== 'boolean') throw new Error('Pedido de análise da câmera inválido (refazer).')
+  return force
+}
+
 const CHUNK_KINDS: readonly ChunkKind[] = ['screen', 'camera', 'mic']
 const BAR_ACTIONS: readonly BarAction[] = ['pause', 'resume', 'stop', 'discard', 'restart']
 /** Maior posição aceita em `exporter:write` (128 GiB): nada de mandar o arquivo de vídeo para o infinito. */
@@ -95,7 +112,7 @@ const MAX_WRITE_POSITION = 128 * 1024 ** 3
 const sameKey = (a: string): string => resolve(a).toLowerCase()
 
 export function createHandlers(deps: HandlerDeps): IpcHandlers {
-  const { state, store, logger, recording, exporter, derived, transcription, llm } = deps
+  const { state, store, logger, recording, exporter, derived, transcription, camera, llm } = deps
   /** O que o usuário escolheu nesta sessão pelos diálogos nativos: só isso entra em ajustes que viram caminho. */
   const pickedSettings = { projectsDir: new Set<string>(), ffmpegPath: new Set<string>() }
   const captionsExporter = createCaptionsExporter({ read: (id) => store.read(id), words: async (id) => (await transcription.getTranscript(id))?.words ?? null })
@@ -249,6 +266,15 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'derived:preview-audio': (id) => derived.previewAudio(id),
     'derived:thumbs': (id) => derived.thumbs(id),
     'derived:levels': (id) => derived.levels(id),
+
+    'camera:status': () => camera.view(),
+    'camera:prepare': () => camera.prepare(),
+    'camera:cancel-prepare': async () => camera.cancelPrepare(),
+    'camera:analyze': async (projectId, kind, force) => camera.analyze(projectId, cameraKind(kind), { force: cameraForce(force) }),
+    'camera:cancel': async (projectId, kind) => {
+      store.dirOf(projectId) // id inválido falha aqui
+      camera.cancel(projectId, cameraKind(kind))
+    },
 
     'transcription:status': () => transcription.view(),
     'transcription:prepare': () => transcription.prepare(),

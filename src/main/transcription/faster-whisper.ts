@@ -111,6 +111,15 @@ async function readMarker(t: ToolPaths): Promise<Marker | null> {
   }
 }
 
+/** `pip --version` ("pip 25.1.1 from ..."): o pip conhece `--progress-bar raw`? Só do 25.1 em diante; o de um venv novo costuma ser mais velho. */
+export function pipHasRawProgress(versionOutput: string): boolean {
+  const m = /pip\s+(\d+)\.(\d+)/.exec(versionOutput)
+  if (!m) return false
+  const major = Number(m[1])
+  const minor = Number(m[2])
+  return major > 25 || (major === 25 && minor >= 1)
+}
+
 /** `Downloading nvidia_cudnn_cu12-9.27.0.42-py3-none-win_amd64.whl (743.1 MB)` → { name, bytes }. */
 export function parsePipDownloadLine(line: string): { name: string; bytes: number } | null {
   const m = /^(?:Downloading|Using cached)\s+(\S+)\s+\(([\d.,]+)\s*(kB|MB|GB|B)\)/.exec(line.trim())
@@ -145,10 +154,9 @@ export function createFasterWhisper(deps: FasterWhisperDeps): Transcriber {
     return { state: 'ready', detail: null, device: marker.device === 'cuda' ? marker.gpu : null }
   }
 
-  async function pipVersion(): Promise<[number, number]> {
+  async function pipHasRaw(): Promise<boolean> {
     const { stdout } = await runProcess(venvPython(tools), ['-m', 'pip', '--version'], { timeoutMs: 60_000 })
-    const m = /pip\s+(\d+)\.(\d+)/.exec(stdout)
-    return m ? [Number(m[1]), Number(m[2])] : [0, 0]
+    return pipHasRawProgress(stdout)
   }
 
   /** Roda `pip install` lendo o progresso (`--progress-bar raw`). */
@@ -246,8 +254,7 @@ export function createFasterWhisper(deps: FasterWhisperDeps): Transcriber {
       current = 'packages'
       tracker.begin('packages', 'Preparando o instalador de pacotes…')
       const gpu = await detectGpu()
-      const [major, minor] = await pipVersion()
-      if (major < 25 || (major === 25 && minor < 1)) {
+      if (!(await pipHasRaw())) {
         // o pip antigo do venv não conhece `--progress-bar raw`: esta atualização (2 MB) roda sem barra
         await pip(['--upgrade', 'pip'], tracker, signal, 'Atualizando o pip', false)
       }

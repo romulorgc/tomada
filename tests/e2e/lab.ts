@@ -3,13 +3,16 @@
  * ganchos de teste) dentro do app de verdade e renderiza quadros pelo MESMO caminho da exportação
  * (mediabunny → evaluateScene → renderFrame num OffscreenCanvas). Base dos goldens.
  */
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ElectronApplication, Page } from '@playwright/test'
 import pixelmatch from 'pixelmatch'
 import { PNG } from 'pngjs'
 import { EVENT_FILES } from '../../src/shared/events'
+import { FACE_FILE, type FaceTrack } from '../../src/shared/face'
 import { mediaUrl } from '../../src/shared/media-url'
+import { MATTE_FILE } from '../../src/shared/matte'
 import { parseProject } from '../../src/shared/project'
 import type { FormatSpec } from '../../src/shared/scene'
 import type { Project, Word } from '../../src/shared/types'
@@ -55,6 +58,10 @@ export type StillOptions = {
   folder?: string
   /** As palavras da transcrição (legendas). */
   words?: Word[] | null
+  /** A URL da análise do rosto (enquadramento da câmera), se a cena usa (ver `writeFace`). */
+  faceUrl?: string | null
+  /** A URL do recorte do fundo (a máscara), para o layout Apresentador (ver `writeMatte`). */
+  matteUrl?: string | null
 }
 
 /** Renderiza os instantes pedidos e devolve os PNGs. */
@@ -66,6 +73,8 @@ export async function renderStills(lab: Page, o: StillOptions): Promise<Buffer[]
     project,
     format: o.format ?? { kind: 'horizontal', w: 1920, h: 1080 },
     words: o.words ?? null,
+    faceUrl: o.faceUrl ?? null,
+    matteUrl: o.matteUrl ?? null,
     times: o.times,
     screenUrl: project.sources.screen ? mediaUrl(folder, project.sources.screen.path) : null,
     cameraUrl: project.sources.camera ? mediaUrl(folder, project.sources.camera.path) : null,
@@ -77,6 +86,46 @@ export async function renderStills(lab: Page, o: StillOptions): Promise<Buffer[]
   }
   const base64s = await lab.evaluate((r) => (window as unknown as { tomadaExport: { renderStills(x: unknown): Promise<string[]> } }).tomadaExport.renderStills(r), req)
   return base64s.map((b) => Buffer.from(b, 'base64'))
+}
+
+/**
+ * Grava uma análise de rosto SINTÉTICA na pasta do projeto da sessão (`media/camera-face.json`) e devolve a URL para `renderStills`:
+ * o rosto fica parado em (`cx`, `cy`) com a caixa `w × h` (fração da imagem da câmera). Serve para os goldens do enquadramento.
+ */
+export function writeFace(session: Session, face: { cx: number; cy?: number; w?: number; h?: number; durationMs?: number }, folder = EXAMPLE_FOLDER): string {
+  const { cx, cy = 0.4, w = 0.14, h = 0.3, durationMs = 23_000 } = face
+  const track: FaceTrack = {
+    version: 1,
+    engine: 'teste',
+    frame: { w: 640, h: 360 },
+    sampleMs: 200,
+    durationMs,
+    boxes: Array.from({ length: Math.floor(durationMs / 200) + 1 }, (_, i) => ({ t: i * 200, x: cx - w / 2, y: cy - h / 2, w, h, score: 0.99 })),
+    createdAt: '2026-10-05T00:00:00.000Z'
+  }
+  writeFileSync(join(session.projects, folder, FACE_FILE), JSON.stringify(track))
+  return mediaUrl(folder, FACE_FILE)
+}
+
+/**
+ * Grava um recorte do fundo SINTÉTICO na pasta do projeto da sessão (`media/camera-matte.mp4`) e devolve a URL para `renderStills`: uma
+ * silhueta conhecida (cabeça sobre ombros e tronco, branca sobre preto, borda suave) com o tamanho e a taxa da câmera de exemplo
+ * (640×360, 30 qps). É a "máscara de gabarito" dos goldens do Apresentador: o modelo de verdade só entra nas medições com a gravação real.
+ */
+export function writeMatte(session: Session, o: { durationS?: number; cx?: number } = {}, folder = EXAMPLE_FOLDER): string {
+  const { durationS = 23, cx = 0.5 } = o
+  const e = (c: { cx: number; cy: number; rx: number; ry: number }): string => `lte(pow((X-W*${c.cx})/(W*${c.rx}),2)+pow((Y-H*${c.cy})/(H*${c.ry}),2),1)`
+  const head = { cx, cy: 0.3, rx: 0.09, ry: 0.2 }
+  const body = { cx, cy: 1.1, rx: 0.3, ry: 0.7 }
+  const vf = `geq=lum='255*max(${e(head)},${e(body)})':cb=128:cr=128,gblur=sigma=1.4,format=yuv420p,loop=loop=-1:size=1:start=0,fps=30`
+  const out = join(session.projects, folder, MATTE_FILE)
+  mkdirSync(join(session.projects, folder, 'media'), { recursive: true })
+  execFileSync(
+    'ffmpeg',
+    ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=640x360:r=30:d=0.0334', '-vf', vf, '-t', String(durationS), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '14', '-pix_fmt', 'yuv420p', '-g', '30', out],
+    { stdio: 'pipe' }
+  )
+  return mediaUrl(folder, MATTE_FILE)
 }
 
 export type GoldenResult = { name: string; mismatched: number; ratio: number; created: boolean }

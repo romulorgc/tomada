@@ -10,15 +10,17 @@ import { clipScene } from '@shared/clips'
 import { DEFAULT_CLEAN, type Levels } from '@shared/clean'
 import { createEditorStore } from '@shared/editor-store'
 import { eventsFromText } from '@shared/events'
+import { parseFaceTrack, type FaceTrack } from '@shared/face'
 import { regenerateZooms } from '@shared/edits'
 import { formatSpan } from '@shared/format'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
-import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, prepareEvents, type CursorData } from '@shared/scene'
+import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, prepareEvents, usesPresenter, type CursorData } from '@shared/scene'
 import type { Transcript } from '@shared/types'
 import { projectForFormat, ensureVertical } from '@shared/vertical'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
+import { cameraJobKey, useCamera } from '../camera-store'
 import { useApp } from '../store'
 import { useTranscription } from '../transcription-store'
 import { createAiUiStore } from './ai-store'
@@ -264,15 +266,65 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
     if (jobState === 'done') loadTranscript()
   }, [jobState, loadTranscript])
 
+  // --- análise do rosto (enquadramento da câmera) --------------------------------------------------------------------
+  const [face, setFace] = useState<AssetState<FaceTrack>>({ status: detail.analysis.face ? 'loading' : 'none', data: null, error: null })
+  const faceUrl = useRef<string | null>(null)
+  const loadFace = useCallback((url: string | null) => {
+    if (url === faceUrl.current) return
+    faceUrl.current = url
+    if (!url) {
+      setFace({ status: 'none', data: null, error: null })
+      return
+    }
+    setFace((s) => ({ status: 'loading', data: s.data, error: null }))
+    void fetchText(url)
+      .then((text) => parseFaceTrack(text ?? ''))
+      .then((data) => {
+        if (mounted.current && faceUrl.current === url) setFace({ status: 'ready', data, error: null })
+      })
+      .catch((err: unknown) => {
+        window.tomada.log({ level: 'error', message: 'Falha ao ler a análise do rosto da câmera', detail: messageOf(err) })
+        if (mounted.current && faceUrl.current === url) setFace({ status: 'error', data: null, error: messageOf(err) })
+      })
+  }, [])
+  useEffect(() => {
+    loadFace(detail.analysis.face)
+  }, [detail.analysis.face, loadFace])
+  // a análise terminou (aqui ou em segundo plano): lê o resultado novo
+  const faceJob = useCamera((s) => s.jobs[cameraJobKey(detail.id, 'face')])
+  useEffect(() => {
+    if (faceJob?.state === 'done' && faceJob.url) loadFace(faceJob.url)
+  }, [faceJob, loadFace])
+  // Gravação com câmera e motor pronto (ao abrir, ou quando a preparação termina com o editor aberto): pede a análise. Volta na hora
+  // se o resultado guardado ainda vale; se já está na fila ou rodando, devolve o trabalho que existe.
+  const faceEngineReady = useCamera((s) => s.view?.face.state === 'ready')
+  useEffect(() => {
+    if (!hasCamera || !faceEngineReady) return
+    void useCamera.getState().analyze(detail.id, 'face')
+  }, [detail.id, hasCamera, faceEngineReady])
+
+  // --- recorte do fundo (apresentador recortado) -------------------------------------------------------------------
+  const [matteUrl, setMatteUrl] = useState<string | null>(detail.analysis.matte)
+  useEffect(() => {
+    setMatteUrl(detail.analysis.matte)
+  }, [detail.analysis.matte])
+  const matteJob = useCamera((s) => s.jobs[cameraJobKey(detail.id, 'matte')])
+  useEffect(() => {
+    if (matteJob?.state === 'done' && matteJob.url) setMatteUrl(matteJob.url)
+  }, [matteJob])
+
   // --- cena -----------------------------------------------------------------------------------------------
   const format = useStore(store, (s) => s.format)
   const formatRef = useRef(format)
   formatRef.current = format
   const words = transcript.data?.words ?? null
+  const faceTrack = face.data
   const derived = useMemo(
-    () => (cursorData ? deriveProject(project, cursorData, format === 'vertical' ? VERTICAL_1080 : HORIZONTAL_1080, words) : null),
-    [project, cursorData, format, words]
+    () => (cursorData ? deriveProject(project, cursorData, format === 'vertical' ? VERTICAL_1080 : HORIZONTAL_1080, words, faceTrack) : null),
+    [project, cursorData, format, words, faceTrack]
   )
+
+  const needsMatte = derived?.needsMatte ?? false
 
   // A prévia de um corte: o MESMO documento que a exportação desenha (os trechos do corte, o gancho dele, o layout e a legenda
   // dele), sempre no 9:16. A linha do tempo segue mostrando o vídeo inteiro.
@@ -280,9 +332,22 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   const previewClip = useMemo(() => (previewId ? doc.clips.find((c) => c.id === previewId) : undefined), [previewId, doc.clips])
   const sceneProject = useMemo(() => (previewClip ? clipScene(doc, previewClip) : project), [previewClip, doc, project])
   const sceneDerived = useMemo(
-    () => (!previewClip ? derived : cursorData ? deriveProject(sceneProject, cursorData, VERTICAL_1080, words) : null),
-    [previewClip, derived, sceneProject, cursorData, words]
+    () => (!previewClip ? derived : cursorData ? deriveProject(sceneProject, cursorData, VERTICAL_1080, words, faceTrack) : null),
+    [previewClip, derived, sceneProject, cursorData, words, faceTrack]
   )
+  // O recorte do fundo é necessário quando QUALQUER coisa que vai ser vista ou exportada usa o Apresentador: o formato aberto, a cena da prévia
+  // de um corte, ou o layout de algum corte (a exportação do corte percorre a mesma cadeia: `clipScene`). Olhar só o formato aberto deixava o
+  // corte com Apresentador sem máscara (prévia com o fundo e exportação falhando).
+  const sceneNeedsMatte = (sceneDerived ?? derived)?.needsMatte ?? false
+  const clipsNeedMatte = useMemo(() => doc.clips.some((c) => usesPresenter(clipScene(doc, c), 'vertical')), [doc])
+  const needsMatteAny = needsMatte || sceneNeedsMatte || clipsNeedMatte
+  // Pede o recorte do fundo (se o motor está pronto e ainda não existe). Volta na hora se o guardado vale para esta câmera; se já está na
+  // fila ou rodando, devolve o trabalho que existe.
+  const matteEngineReady = useCamera((s) => s.view?.matte.state === 'ready')
+  useEffect(() => {
+    if (!hasCamera || !needsMatteAny || !matteEngineReady || matteUrl) return
+    void useCamera.getState().analyze(detail.id, 'matte')
+  }, [detail.id, hasCamera, needsMatteAny, matteEngineReady, matteUrl])
   // a prévia só existe no 9:16 e enquanto o corte existe
   useEffect(() => {
     if (previewId && (format !== 'vertical' || !previewClip)) clips.getState().preview(null)
@@ -294,8 +359,8 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   // Espera a transcrição chegar (a escolha de layout usa onde há fala).
   useEffect(() => {
     if (format !== 'vertical' || !cursorData || transcript.status === 'loading') return
-    store.getState().changeDoc((doc) => ensureVertical(doc, cursorData, { durationMs, words, hasCursorEvents: Boolean(detail.events.cursor) }), { history: false })
-  }, [format, cursorData, transcript.status, words, durationMs, store, detail.events.cursor])
+    store.getState().changeDoc((doc) => ensureVertical(doc, cursorData, { durationMs, words, hasCursorEvents: Boolean(detail.events.cursor), hasMatte: Boolean(matteUrl) }), { history: false })
+  }, [format, cursorData, transcript.status, words, durationMs, store, detail.events.cursor, matteUrl])
 
   // Ao abrir um projeto que nunca teve zoom automático, gera os do preset padrão (uma vez; não entra no "desfazer").
   const generated = useRef(false)
@@ -362,6 +427,12 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenUrl, cameraUrl, playback])
+
+  // o vídeo do recorte do fundo anda com a câmera na prévia (liga e desliga sem refazer o motor). Só é carregado quando a cena que está
+  // sendo desenhada precisa dele: uma máscara estragada não pode pausar nem mostrar erro numa prévia de bolha, lado a lado ou tela cheia.
+  useEffect(() => {
+    engineRef.current?.setMatte(sceneNeedsMatte ? matteUrl : null)
+  }, [matteUrl, sceneNeedsMatte, engineGen])
 
   // trocar de formato muda a proporção da prévia
   useEffect(() => {
@@ -544,6 +615,8 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       retryAssets,
       transcript,
       reloadTranscript: loadTranscript,
+      face,
+      matte: { url: matteUrl, needed: needsMatteAny },
       levels,
       text,
       exporter,
@@ -552,7 +625,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, store, playback, cursorData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, levels, text, exporter, clips, queue, aiUi]
+    [detail, store, playback, cursorData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (

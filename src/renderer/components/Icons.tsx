@@ -415,6 +415,25 @@ export const LayoutWideIcon = (p: IconProps) => (
   </Svg>
 )
 
+/** Apresentador recortado (16:9): a tela e a pessoa (cabeça e ombros, sem fundo) no canto de baixo. */
+export const LayoutPresenterIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2.2" />
+    <circle cx="16.4" cy="10.6" r="1.9" fill="currentColor" stroke="none" />
+    <path d="M12.4 19c0-2.7 1.6-4.3 4-4.3s4 1.6 4 4.3z" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+/** V-D Apresentador (9:16): o recorte da tela em cima e a pessoa embaixo, na frente. */
+export const LayoutPresenterVerticalIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="7" y="2.8" width="10" height="18.4" rx="2" />
+    <rect x="7.6" y="3.4" width="8.8" height="7.2" rx="0.8" fill="currentColor" fillOpacity="0.35" stroke="none" />
+    <circle cx="12" cy="13.6" r="1.7" fill="currentColor" stroke="none" />
+    <path d="M8.2 21.2c0-2.8 1.7-4.4 3.8-4.4s3.8 1.6 3.8 4.4z" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
 export const CaptionsIcon = (p: IconProps) => (
   <Svg {...p}>
     <rect x="3" y="5.5" width="18" height="13" rx="2.4" />

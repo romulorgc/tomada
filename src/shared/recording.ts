@@ -38,6 +38,8 @@ export type RecordPrefs = {
   echoCancellation: boolean
   /** Bolha da câmera sobre a tela durante a gravação (fora da captura). */
   showBubble: boolean
+  /** Moldura-guia sobre a prévia da câmera (onde ficam a cabeça, o tronco e as mãos), para o layout Apresentador. Só na prévia: não vai para o vídeo. */
+  framingGuide: boolean
   /** Já escolhemos câmera e microfone padrão na primeira abertura? (null ≠ "nunca escolheu") */
   setupDone: boolean
   /**
@@ -62,6 +64,7 @@ export const DEFAULT_RECORD_PREFS: RecordPrefs = {
   noiseSuppression: true,
   echoCancellation: false,
   showBubble: true,
+  framingGuide: true,
   setupDone: false,
   hideCursor: true,
   retakeShortcut: 'Ctrl+Alt+Z',
@@ -81,6 +84,7 @@ const recordPrefsSchema = z.looseObject({
   noiseSuppression: z.boolean().catch(DEFAULT_RECORD_PREFS.noiseSuppression),
   echoCancellation: z.boolean().catch(DEFAULT_RECORD_PREFS.echoCancellation),
   showBubble: z.boolean().catch(DEFAULT_RECORD_PREFS.showBubble),
+  framingGuide: z.boolean().catch(DEFAULT_RECORD_PREFS.framingGuide),
   setupDone: z.boolean().catch(DEFAULT_RECORD_PREFS.setupDone),
   hideCursor: z.boolean().catch(DEFAULT_RECORD_PREFS.hideCursor),
   retakeShortcut: retakeShortcutSchema.catch(DEFAULT_RECORD_PREFS.retakeShortcut),
@@ -103,6 +107,7 @@ export function normalizeRecordPrefs(raw: unknown): RecordPrefs {
     noiseSuppression: parsed.noiseSuppression,
     echoCancellation: parsed.echoCancellation,
     showBubble: parsed.showBubble,
+    framingGuide: parsed.framingGuide,
     setupDone: parsed.setupDone,
     hideCursor: parsed.hideCursor,
     retakeShortcut: parsed.retakeShortcut,

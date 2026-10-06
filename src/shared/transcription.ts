@@ -11,8 +11,8 @@ export type EngineState = 'ready' | 'missing' | 'preparing' | 'error'
 
 export type PrepareStepStatus = 'pending' | 'running' | 'done' | 'error'
 
-/** Passos da preparação (cada motor usa o seu conjunto). */
-export type PrepareStepId = 'python' | 'packages' | 'binary' | 'model' | 'check'
+/** Passos da preparação (cada motor usa o seu conjunto; os `matte-*` são do recorte do fundo da câmera). */
+export type PrepareStepId = 'python' | 'packages' | 'binary' | 'model' | 'check' | 'matte-packages' | 'matte-model' | 'matte-check'
 
 export type PrepareStep = {
   id: PrepareStepId
@@ -24,7 +24,8 @@ export type PrepareStep = {
 }
 
 export type PrepareSnapshot = {
-  engine: EngineId
+  /** O motor que está sendo preparado (a análise da câmera, M4c, também usa este retrato, com `camera`). */
+  engine: EngineId | 'camera'
   status: 'running' | 'done' | 'error' | 'cancelled'
   /** 0..1 do trabalho todo (cada passo pesa pelo tamanho do que baixa). */
   fraction: number

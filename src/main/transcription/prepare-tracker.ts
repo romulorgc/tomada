@@ -18,7 +18,7 @@ export interface PrepareTracker {
   snapshot(): PrepareSnapshot
 }
 
-export function createPrepareTracker(engine: EngineId, specs: readonly StepSpec[], emit: (snapshot: PrepareSnapshot) => void, now: () => number = Date.now): PrepareTracker {
+export function createPrepareTracker(engine: EngineId | 'camera', specs: readonly StepSpec[], emit: (snapshot: PrepareSnapshot) => void, now: () => number = Date.now): PrepareTracker {
   const total = specs.reduce((a, s) => a + s.weight, 0) || 1
   const steps: PrepareStep[] = specs.map((s) => ({ id: s.id, status: 'pending', fraction: 0 }))
   const notes: string[] = []

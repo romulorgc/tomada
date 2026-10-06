@@ -16,6 +16,7 @@ import type { RecordPrefs, RecordRequest } from './recording'
 import type { VideoScript, TeleprompterAction, TeleprompterConfig, TeleprompterState } from './script'
 import type { RetakeMark } from './retake-marker'
 import type { PreflightResult } from './preflight'
+import type { CameraJob, CameraKind, CameraView } from './camera-analysis'
 import type { LlmStatus, PrepareSnapshot, RetakesResult, TranscriptionJob, TranscriptionPrefs, TranscriptionView } from './transcription'
 import type { LayoutKind, Project, ProjectSummary, Size, Transcript, Word } from './types'
 
@@ -94,6 +95,8 @@ export type ProjectDetail = {
   }
   /** URLs dos arquivos de eventos (null = o arquivo não existe, ex.: gravação só de câmera). */
   events: { cursor: string | null; clicks: string | null; keys: string | null }
+  /** Resultados da análise da câmera (M4c) que já existem na pasta do projeto, com a versão do arquivo na URL (null = ainda não existe). */
+  analysis: { face: string | null; matte: string | null }
 }
 
 export type MediaFile = {
@@ -297,6 +300,10 @@ export type ExportJob = {
   cameraUrl: string | null
   /** URLs dos eventos. */
   eventUrls: { cursor: string | null; clicks: string | null; keys: string | null }
+  /** A análise do rosto na câmera (enquadramento), ou null se ainda não existe. */
+  faceUrl: string | null
+  /** O recorte do fundo da câmera (vídeo da máscara) que vale para a câmera de agora, ou null se não existe. O apresentador recortado precisa dele. */
+  matteUrl: string | null
 }
 
 /** O que a janela de exportação informa ao terminar a fase de vídeo. */
@@ -382,6 +389,14 @@ export type IpcContract = {
   /** Nível do áudio por quadro (microfone e som do computador) para a limpeza de silêncio. */
   'derived:levels': { args: [id: string]; result: Levels | null }
 
+  // Análise da câmera (M4c): o rosto (enquadramento). A interface só diz QUAL projeto e o tipo; o main resolve o vídeo e grava o resultado.
+  'camera:status': { args: []; result: CameraView }
+  'camera:prepare': { args: []; result: void }
+  'camera:cancel-prepare': { args: []; result: void }
+  /** `force`: refaz mesmo com o resultado guardado valendo ("Recortar de novo"); ausente = devolve o guardado. */
+  'camera:analyze': { args: [projectId: string, kind: CameraKind, force?: boolean]; result: CameraJob }
+  'camera:cancel': { args: [projectId: string, kind: CameraKind]; result: void }
+
   // Transcrição (M3): a interface só diz QUAL projeto; o main resolve a voz, executa o motor e grava o transcript.json.
   'transcription:status': { args: []; result: TranscriptionView }
   'transcription:prepare': { args: []; result: void }
@@ -446,6 +461,10 @@ export type IpcEvents = {
   'transcription:prepare': PrepareSnapshot
   /** Uma transcrição na fila mudou de estado (ou de progresso). */
   'transcription:job': TranscriptionJob
+  /** Preparação da análise da câmera (M4c): cada mudança de passo ou de progresso. */
+  'camera:prepare': PrepareSnapshot
+  /** Uma análise da câmera mudou de estado (ou de progresso); terminada, traz a URL do resultado. */
+  'camera:job': CameraJob
 }
 
 export type IpcChannel = keyof IpcContract
@@ -533,6 +552,13 @@ export type TomadaApi = {
     previewAudio(id: string): Promise<PreviewAudioData | null>
     thumbs(id: string): Promise<ThumbsData | null>
     levels(id: string): Promise<Levels | null>
+  }
+  camera: {
+    status(): Promise<CameraView>
+    prepare(): Promise<void>
+    cancelPrepare(): Promise<void>
+    analyze(projectId: string, kind: CameraKind, force?: boolean): Promise<CameraJob>
+    cancel(projectId: string, kind: CameraKind): Promise<void>
   }
   transcription: {
     status(): Promise<TranscriptionView>

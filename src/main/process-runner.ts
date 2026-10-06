@@ -7,7 +7,9 @@
  *  - **Entrada pelo stdin**: texto longo (prompt, pedido em JSON) vai por aqui, nunca pela linha de comando.
  *  - **Ambiente limpo**: `ELECTRON_RUN_AS_NODE` NÃO é herdada (um Electron filho viraria um Node comum, e esta
  *    máquina a tem ligada).
- *  - **Tempo limite e cancelamento**: estourar o tempo ou abortar mata o processo e rejeita com o motivo.
+ *  - **Tempo limite e cancelamento**: estourar o tempo ou abortar mata a ÁRVORE inteira de processos (o filho e os netos: o Python
+ *    abre o ffmpeg, e um ffmpeg órfão seguiria com o arquivo aberto), ESPERA o encerramento e só então rejeita com o motivo.
+ *    Quem limpa arquivo depois de um cancelamento (o parcial da máscara) pode confiar que ninguém mais o tem aberto.
  *
  * Sem Electron.
  */
@@ -45,6 +47,42 @@ export type RunProcessOptions = {
 
 export type ProcessResult = { stdout: string; stderr: string; exitCode: 0 }
 
+/** Depois de pedir a morte da árvore, quanto esperar o `close` do filho antes de desistir de esperar (ms). */
+const KILL_GRACE_MS = 10_000
+
+/**
+ * Encerra o processo e TODOS os que ele abriu. No Windows (`taskkill /T /F`) não existe grupo de processos que o Node alcance; no resto,
+ * o filho foi aberto como líder de grupo (`detached`) e o sinal vai ao grupo todo.
+ */
+function killTree(child: ReturnType<typeof spawn>): Promise<void> {
+  const pid = child.pid
+  if (!pid) {
+    child.kill()
+    return Promise.resolve()
+  }
+  if (process.platform === 'win32') {
+    return new Promise((resolve) => {
+      const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, shell: false, stdio: 'ignore' })
+      const fallback = (): void => {
+        child.kill()
+        resolve()
+      }
+      killer.on('error', fallback)
+      // código 128 = o processo já tinha acabado: não é problema
+      killer.on('close', () => {
+        child.kill()
+        resolve()
+      })
+    })
+  }
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch {
+    child.kill('SIGKILL')
+  }
+  return Promise.resolve()
+}
+
 /** O ambiente do filho: o do app, sem `ELECTRON_RUN_AS_NODE`. */
 export function childEnv(extra: Record<string, string> = {}, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
@@ -73,7 +111,15 @@ export function runProcess(exe: string, args: readonly string[], opts: RunProces
     const cap = opts.maxOutput ?? 64 * 1024 * 1024
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(exe, [...args], { cwd: opts.cwd, env: childEnv(opts.env), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] })
+      child = spawn(exe, [...args], {
+        cwd: opts.cwd,
+        env: childEnv(opts.env),
+        windowsHide: true,
+        shell: false,
+        // fora do Windows o filho lidera um grupo: é por ele que a árvore inteira é encerrada
+        detached: process.platform !== 'win32',
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
     } catch (err) {
       reject(new ProcessError(`Não consegui abrir ${exe}: ${err instanceof Error ? err.message : String(err)}`, 'spawn', null, '', ''))
       return
@@ -84,6 +130,7 @@ export function runProcess(exe: string, args: readonly string[], opts: RunProces
     let stdout = ''
     let stderr = ''
     let settled = false
+    let stopping = false
     let timer: NodeJS.Timeout | undefined
 
     const keep = (current: string, add: string): string => {
@@ -97,17 +144,31 @@ export function runProcess(exe: string, args: readonly string[], opts: RunProces
       opts.signal?.removeEventListener('abort', onAbort)
       fn()
     }
-    const onAbort = (): void => {
-      child.kill()
-      done(() => reject(new ProcessError('Cancelado.', 'cancelled', null, stdout, stderr)))
+    /** Mata a árvore, espera o filho fechar (com teto) e só então rejeita. */
+    const stop = (reason: ProcessFailure, message: string): void => {
+      if (stopping || settled) return
+      stopping = true
+      if (timer) clearTimeout(timer)
+      void (async () => {
+        const closed = new Promise<void>((resolveClosed) => {
+          const grace = setTimeout(resolveClosed, KILL_GRACE_MS)
+          child.once('close', () => {
+            clearTimeout(grace)
+            resolveClosed()
+          })
+        })
+        await killTree(child)
+        await closed
+        stdout = keep(stdout, outDecoder.end())
+        stderr = keep(stderr, errDecoder.end())
+        done(() => reject(new ProcessError(message, reason, null, stdout, stderr)))
+      })()
     }
+    const onAbort = (): void => stop('cancelled', 'Cancelado.')
     opts.signal?.addEventListener('abort', onAbort, { once: true })
 
     if (opts.timeoutMs && opts.timeoutMs > 0) {
-      timer = setTimeout(() => {
-        child.kill()
-        done(() => reject(new ProcessError(`O programa passou do tempo limite (${Math.round(opts.timeoutMs! / 1000)} s) e foi interrompido.`, 'timeout', null, stdout, stderr)))
-      }, opts.timeoutMs)
+      timer = setTimeout(() => stop('timeout', `O programa passou do tempo limite (${Math.round(opts.timeoutMs! / 1000)} s) e foi interrompido.`), opts.timeoutMs)
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -138,6 +199,7 @@ export function runProcess(exe: string, args: readonly string[], opts: RunProces
       )
     })
     child.on('close', (code) => {
+      if (stopping) return // quem está encerrando a árvore rejeita com o motivo certo (cancelado ou tempo limite)
       stdout = keep(stdout, outDecoder.end())
       stderr = keep(stderr, errDecoder.end())
       done(() => {

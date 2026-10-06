@@ -48,7 +48,8 @@ const REVERSE_SEEK_MS = 90
 /** O áudio alcança o relógio com um ajuste maior que o do vídeo (a deriva dele é a que se ouve). */
 const AUDIO_NUDGE = 0.08
 
-type MediaKind = 'screen' | 'camera'
+/** `matte` = o vídeo do recorte do fundo da câmera (M4c): anda junto da câmera, no mesmo relógio e com o mesmo deslocamento. */
+type MediaKind = 'screen' | 'camera' | 'matte'
 
 /** Uma fonte de vídeo: o elemento que está no ar e, quando há cortes, a cópia que espera a emenda. */
 class VideoTrack {
@@ -58,7 +59,7 @@ class VideoTrack {
 
   constructor(
     readonly kind: MediaKind,
-    private readonly url: string,
+    readonly url: string,
     private readonly host: HTMLElement,
     private readonly onEvent: () => void,
     private readonly onError: (kind: MediaKind, element: HTMLVideoElement) => void
@@ -144,6 +145,8 @@ export class PreviewEngine {
   private raf = 0
   private lastNow = 0
   private dirty = true
+  /** O erro mostrado agora veio do vídeo do recorte do fundo: trocar ou tirar a máscara (`setMatte`) o resolve. */
+  private matteFailed = false
   private destroyed = false
   private frames = 0
   private lastScene: Scene | null = null
@@ -185,6 +188,35 @@ export class PreviewEngine {
   }
 
   // --- configuração -----------------------------------------------------------------------------------
+  /**
+   * O recorte do fundo da câmera (o vídeo da máscara): liga ou troca a trilha, que passa a andar com a câmera. `null` desliga.
+   * Sem a máscara o layout Apresentador mostra a janela da câmera inteira (o motivo está na aba Câmera).
+   */
+  setMatte(url: string | null): void {
+    const old = this.tracks.findIndex((t) => t.kind === 'matte')
+    if (old >= 0) {
+      if (url !== null && this.tracks[old]!.url === url) return
+      this.tracks[old]!.dispose()
+      this.tracks.splice(old, 1)
+    }
+    if (this.matteFailed) {
+      // a máscara que não abria saiu (layout que não a usa, ou "Recortar de novo" gerou outra): o erro dela não vale mais
+      this.matteFailed = false
+      this.setError(null)
+    }
+    if (url) {
+      const track = new VideoTrack('matte', url, this.o.host, () => (this.dirty = true), (k, el) => this.mediaFailed(k, el))
+      this.tracks.push(track)
+      const want = this.fileSeconds('matte', track.active, this.sourceMs)
+      track.active.currentTime = want
+      if (this.playing && this.rate > 0) {
+        track.active.playbackRate = this.rate
+        void track.active.play().catch(() => undefined)
+      }
+    }
+    this.dirty = true
+  }
+
   setScene(project: Project, derived: Derived): void {
     const oldCameraOffset = this.project ? cameraVideoOffsetMs(this.project) : null
     this.project = project
@@ -292,6 +324,7 @@ export class PreviewEngine {
   // --- conversões ------------------------------------------------------------------------------------
   private offsetOf(kind: MediaKind): number {
     if (!this.project) return 0
+    // o recorte do fundo nasce da câmera: o mesmo deslocamento (e a mesma correção de sincronia da imagem)
     return kind === 'screen' ? this.project.sync.screenOffsetMs : cameraVideoOffsetMs(this.project)
   }
 
@@ -552,7 +585,8 @@ export class PreviewEngine {
   private mediaFailed(kind: MediaKind, el: HTMLVideoElement): void {
     if (el.dataset.role !== 'active') return
     const code = el.error ? `${el.error.code}: ${el.error.message}` : 'erro desconhecido'
-    this.fail(`O vídeo da ${kind === 'screen' ? 'tela' : 'câmera'} não abriu (${code}).`)
+    if (kind === 'matte') this.matteFailed = true
+    this.fail(`O vídeo ${kind === 'screen' ? 'da tela' : kind === 'camera' ? 'da câmera' : 'do recorte do fundo (abra a aba Câmera e clique em "Recortar de novo")'} não abriu (${code}).`)
   }
 
   private fail(message: string): void {
@@ -637,10 +671,24 @@ export class PreviewEngine {
     const scene = evaluateScene(project, d, this.sourceMs, format)
     const screen = this.tracks.find((t) => t.kind === 'screen')?.active
     const camera = this.tracks.find((t) => t.kind === 'camera')?.active
-    renderFrame(this.ctx, scene, { screen: this.source(screen), camera: this.source(camera) }, this.cache)
+    const matte = this.source(this.tracks.find((t) => t.kind === 'matte')?.active)
+    renderFrame(this.ctx, scene, { screen: this.source(screen), camera: this.source(camera), matte }, this.cache)
     this.lastScene = scene
     this.frames++
     canvas.dataset.sourceMs = this.sourceMs.toFixed(1)
+    // Diagnóstico (e testes): onde a câmera está no quadro e qual recorte da imagem dela aparece (frações, 4 casas).
+    const cam = scene.camera
+    if (cam) {
+      canvas.dataset.cameraSrc = [cam.src.x, cam.src.y, cam.src.w, cam.src.h].map((v) => v.toFixed(4)).join(',')
+      canvas.dataset.cameraDest = [cam.dest.x, cam.dest.y, cam.dest.w, cam.dest.h].map((v) => Math.round(v)).join(',')
+      // o apresentador recortado: quanto dele está no ar e se o quadro da máscara chegou (sem ele sai a janela da câmera inteira)
+      if (cam.cutout) canvas.dataset.cutout = `${cam.cutout.weight.toFixed(3)}|${matte ? 'matte' : 'sem-matte'}`
+      else delete canvas.dataset.cutout
+    } else {
+      delete canvas.dataset.cameraSrc
+      delete canvas.dataset.cameraDest
+      delete canvas.dataset.cutout
+    }
     canvas.dataset.frames = String(this.frames)
     canvas.dataset.ready = busy ? 'false' : 'true'
   }

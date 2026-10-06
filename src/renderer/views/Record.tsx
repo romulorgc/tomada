@@ -92,7 +92,25 @@ function MicMeter({ stream }: { stream: MediaStream | null }) {
   )
 }
 
-function CameraPreview({ stream, loading }: { stream: MediaStream | null; loading: boolean }) {
+/**
+ * Moldura-guia sobre a prévia: onde ficam a cabeça, o tronco e as mãos para o recorte do layout Apresentador (a pessoa aparece do peito
+ * para cima, com as mãos, ancorada na borda de baixo). Só desenha na prévia; nada disto entra na gravação.
+ */
+function FramingGuide() {
+  return (
+    <div className="framing-guide" data-testid="framing-guide" role="img" aria-label={t.record.camera.guideLabel}>
+      <svg viewBox="0 0 160 90" preserveAspectRatio="xMidYMax meet" aria-hidden="true">
+        <ellipse cx="80" cy="30" rx="12" ry="15" />
+        <path d="M44 90 C44 66 58 53 80 53 C102 53 116 66 116 90" />
+        <ellipse cx="40" cy="78" rx="8" ry="6" strokeDasharray="3 3" />
+        <ellipse cx="120" cy="78" rx="8" ry="6" strokeDasharray="3 3" />
+      </svg>
+      <p>{t.record.camera.guideTip}</p>
+    </div>
+  )
+}
+
+function CameraPreview({ stream, loading, guide = false }: { stream: MediaStream | null; loading: boolean; guide?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null)
   useEffect(() => {
     const v = ref.current
@@ -109,6 +127,7 @@ function CameraPreview({ stream, loading }: { stream: MediaStream | null; loadin
           {loading ? t.record.camera.loading : t.record.camera.off}
         </p>
       ) : null}
+      {hasVideo && guide ? <FramingGuide /> : null}
     </div>
   )
 }
@@ -372,7 +391,7 @@ export function Record() {
               <div className="mb-3 flex items-center gap-2 text-muted">
                 <CameraIcon size={18} /> <span className="text-[0.9375rem] font-medium">{t.record.modes.camera}</span>
               </div>
-              <CameraPreview stream={preview.stream} loading={preview.loading} />
+              <CameraPreview stream={preview.stream} loading={preview.loading} guide={prefs.framingGuide} />
             </section>
           )}
           <ScriptPanel script={script} onChange={setScript} prefs={prefs} setPrefs={setPrefs} disabled={!idle} />
@@ -396,7 +415,7 @@ export function Record() {
                   </option>
                 ))}
               </select>
-              {prefs.mode === 'screen-camera' ? <CameraPreview stream={preview.stream} loading={preview.loading} /> : null}
+              {prefs.mode === 'screen-camera' ? <CameraPreview stream={preview.stream} loading={preview.loading} guide={prefs.framingGuide} /> : null}
               {lists.cameras.length === 0 ? <p className="text-[0.8125rem] text-muted">{t.record.camera.noDevices}</p> : null}
             </Field>
           ) : null}
@@ -453,6 +472,7 @@ export function Record() {
             <div className="mt-3 grid gap-3">
               <Switch checked={prefs.noiseSuppression} onChange={(v) => setPrefs({ noiseSuppression: v })} label={t.record.advanced.noiseSuppression} testId="noise-toggle" disabled={!idle} />
               <Switch checked={prefs.echoCancellation} onChange={(v) => setPrefs({ echoCancellation: v })} label={t.record.advanced.echoCancellation} testId="echo-toggle" disabled={!idle} />
+              {wantsCamera ? <Switch checked={prefs.framingGuide} onChange={(v) => setPrefs({ framingGuide: v })} label={t.record.advanced.framingGuide} testId="guide-toggle" disabled={!idle} /> : null}
               {prefs.mode === 'screen-camera' ? <Switch checked={prefs.showBubble} onChange={(v) => setPrefs({ showBubble: v })} label={t.record.advanced.bubble} testId="bubble-toggle" disabled={!idle} /> : null}
               <label className="grid gap-1 text-[0.8125rem] text-muted">{t.preparation.retakeShortcut}<select className="field" value={prefs.retakeShortcut} disabled={!idle} onChange={(e) => setPrefs({ retakeShortcut: e.target.value })} data-testid="retake-shortcut">{['Ctrl+Alt+Z', 'Ctrl+Alt+X', 'Ctrl+Alt+E', 'Ctrl+Shift+E', 'Alt+Shift+E'].map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
             </div>

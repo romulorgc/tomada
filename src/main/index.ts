@@ -11,6 +11,8 @@ import { createGpuQueue } from './gpu-queue'
 import { DEFAULT_AUTOPILOT } from '@shared/autopilot'
 import { LEVEL_CHANNEL, type AppInfo, type IpcEvents, type ProcessSnapshot } from '@shared/ipc'
 import { createSourceProvider } from './capture-sources'
+import { chooseCameraEngine } from './camera/engines'
+import { createCameraService } from './camera/service'
 import { createDerivedMedia } from './derived-media'
 import { createExporterWindowFactory } from './export-window'
 import { createExportService } from './export-service'
@@ -167,6 +169,18 @@ async function main(): Promise<void> {
     start: (id:string) => { const task = gpu.start(() => rawTranscription.start(id),() => rawTranscription.idle()); transcriptionWork = task.done.catch(() => undefined); return task.started },
     idle: async () => {await transcriptionWork;await rawTranscription.idle()}
   }
+  // --- Análise da câmera (M4c): o rosto, para enquadrar a câmera --------------------------------------------------
+  const camera = createCameraService({
+    logger,
+    engine: chooseCameraEngine({
+      env: process.env,
+      scriptPath: join(resourcesDir, 'camera_tools.py'),
+      logger,
+      ffmpeg: () => locateFfmpeg(state.ffmpegLocateOptions())?.ffmpeg ?? null
+    }),
+    read: (id) => store.read(id),
+    emit
+  })
   const vault: KeyVault = {
     available: () => safeStorage.isEncryptionAvailable(),
     encrypt: (plain) => safeStorage.encryptString(plain).toString('base64'),
@@ -185,6 +199,16 @@ async function main(): Promise<void> {
   const autoStarted = new Set<string>()
   let autopilot: AutopilotService | null = null
   const processingStarted = new Map<string,number>()
+  /** Depois de cada gravação com câmera processada, o rosto é analisado em segundo plano (se o motor está pronto; senão o editor oferece preparar). */
+  const autoAnalyzeFace = async (folder: string): Promise<void> => {
+    try {
+      const ready = (await camera.view()).face.state === 'ready'
+      if (ready) await camera.analyze(folder, 'face')
+    } catch (err) {
+      // projeto sem câmera ou outro motivo: o editor tenta de novo ao abrir e mostra o motivo; aqui só fica no log
+      logger.warn(`Não comecei a análise do rosto de ${folder}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
   const emitRecording = <K extends keyof IpcEvents>(channel: K, payload: IpcEvents[K]): void => {
     emit(channel, payload)
     if (channel === 'process:progress') {
@@ -193,6 +217,7 @@ async function main(): Promise<void> {
       if (snap.status === 'done' && !autoStarted.has(snap.sessionId)) {
         autoStarted.add(snap.sessionId)
         void autopilot?.start(snap.folder,processingStarted.get(snap.sessionId))
+        void autoAnalyzeFace(snap.folder)
       }
     }
   }
@@ -295,6 +320,7 @@ async function main(): Promise<void> {
     void recording.shutdown()
     void exporter.shutdown()
     transcription.shutdown()
+    camera.shutdown()
     derived.shutdown()
     windows.closeAll()
   })
@@ -309,6 +335,7 @@ async function main(): Promise<void> {
       exporter,
       derived,
       transcription,
+      camera,
       llm,
       calibration,
       autopilot,
