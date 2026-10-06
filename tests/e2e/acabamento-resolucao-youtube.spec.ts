@@ -18,6 +18,8 @@ test('Ajustes: resolução do YouTube no piloto vem em 1440p e a escolha de 1080
   await expect(select.locator('option')).toHaveText(['1440p (padrão: o YouTube dá codec melhor)', '1080p (exporta mais rápido)'])
   await shot(page, 'acabamento-ajustes-resolucao-youtube')
   await select.selectOption('1080p')
-  await expect.poll(() => (JSON.parse(readFileSync(join(s!.userData, 'settings.json'), 'utf8')) as { autopilot?: { youtubeResolution?: string } }).autopilot?.youtubeResolution).toBe('1080p')
+  // o arquivo de ajustes só nasce depois do primeiro salvamento: ler enquanto não existe não é erro, é "ainda não"
+  const saved = (): string | undefined => { try { return (JSON.parse(readFileSync(join(s!.userData, 'settings.json'), 'utf8')) as { autopilot?: { youtubeResolution?: string } }).autopilot?.youtubeResolution } catch { return undefined } }
+  await expect.poll(saved).toBe('1080p')
   await expect(select).toHaveValue('1080p')
 })

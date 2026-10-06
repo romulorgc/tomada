@@ -341,7 +341,9 @@ test('PRÉVIA = EXPORTAÇÃO no 9:16: cada quadro da prévia se parece com o SEU
     results.push(`t=${t} ms: própria ${(own.mean * 100).toFixed(2)}% (muito diferentes ${(own.strongRatio * 100).toFixed(2)}%), a mais parecida dos outros instantes ${(nearest * 100).toFixed(2)}%`)
     expect(own.mean, `diferença média em t=${t}`).toBeLessThan(0.035)
     expect(own.strongRatio, `pixels muito diferentes em t=${t}`).toBeLessThan(0.06)
-    expect(own.mean, `t=${t}: a prévia tem de parecer-se com o seu quadro bem mais que com o dos outros`).toBeLessThan(nearest * 0.8)
+    // A janela de tela do 9:16 agora enquadra a ação e fica quieta entre os cliques (acabamento C): dois instantes vizinhos podem ficar quase
+    // iguais, então a margem é de 5% (era 20%); o limite absoluto acima (3,5% de diferença média) segue sendo o que prova "mesma imagem".
+    expect(own.mean, `t=${t}: a prévia tem de parecer-se com o seu quadro mais que com o dos outros`).toBeLessThan(nearest * 0.95)
   })
   console.log('prévia × exportação vertical (90×160):' + String.fromCharCode(10) + results.join(String.fromCharCode(10)))
 })

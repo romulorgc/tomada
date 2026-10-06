@@ -152,10 +152,11 @@ export const GOLDENS_SOFTWARE_DIR = join(GOLDENS_DIR, 'software')
  * Nas janelas ocultas (TOMADA_E2E_HIDDEN=1) o Chromium desenha por software: o desfoque e o serrilhado de bordas diferem da GPU
  * além da tolerância sem que nada tenha quebrado. Se existir `tests/goldens/software/<name>.png`, ele é a referência desse modo;
  * UPDATE_GOLDENS=1 nesse modo só cria a variante dos goldens que fogem da tolerância e nunca sobrescreve o golden da GPU.
+ * Com TOMADA_E2E_GPU=1 (janelas ocultas, mas GPU ligada) o desenho é o da GPU: vale o golden da GPU, e UPDATE_GOLDENS=1 o regrava.
  */
 export function compareGolden(name: string, png: Buffer, opts: { maxRatio?: number; threshold?: number } = {}): GoldenResult {
   mkdirSync(GOLDENS_DIR, { recursive: true })
-  const hidden = process.env.TOMADA_E2E_HIDDEN === '1'
+  const hidden = process.env.TOMADA_E2E_HIDDEN === '1' && process.env.TOMADA_E2E_GPU !== '1'
   const update = process.env.UPDATE_GOLDENS === '1'
   const gpuFile = join(GOLDENS_DIR, `${name}.png`)
   const softwareFile = join(GOLDENS_SOFTWARE_DIR, `${name}.png`)
