@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { createProject, parseProject } from '../../src/shared/project'
@@ -12,7 +13,7 @@ test.afterEach(async () => {
 })
 
 test('a Revisão destaca cortes de nota baixa e desfaz uma grafia de produto sem trocar o uso comum', async () => {
-  const root = join(ROOT, 'test-results', 'acabamento-piloto-ui')
+  const root = join(tmpdir(), 'tomada-acabamento-piloto-ui')
   mkdirSync(root, { recursive: true })
   const base = mkdtempSync(join(root, 'sessao-'))
   const projects = join(base, 'projetos'), userData = join(base, 'userdata'), dir = join(projects, 'dicionario')

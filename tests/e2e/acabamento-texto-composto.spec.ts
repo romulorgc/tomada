@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { applyDictionaryCorrections } from '../../src/shared/dictionary-corrections'
@@ -7,13 +8,13 @@ import { parseProject } from '../../src/shared/project'
 import type { Transcript } from '../../src/shared/types'
 import { copyTree, FIXTURES_DIR } from '../helpers/fs'
 import { openEditor, readSaved, seekTo, waitSaved } from './editor-helpers'
-import { EXAMPLE_FOLDER, launchTomada, ROOT, shot, type Session } from './helpers'
+import { EXAMPLE_FOLDER, launchTomada, shot, type Session } from './helpers'
 
 let session: Session | undefined
 test.afterEach(async () => { if (session) { const problems = session.problems; await session.close(); session = undefined; expect(problems).toEqual([]) } })
 
 test('a aba Texto mostra o produto composto uma vez e conserva os índices e o intervalo original ao selecionar e cortar', async () => {
-  const root = join(ROOT, 'test-results', 'acabamento-texto-composto')
+  const root = join(tmpdir(), 'tomada-acabamento-texto-composto')
   mkdirSync(root, { recursive: true })
   const base = mkdtempSync(join(root, 'sessao-')), dir = join(base, 'projetos', EXAMPLE_FOLDER), userData = join(base, 'userdata')
   copyTree(join(FIXTURES_DIR, 'projeto-exemplo'), dir)
