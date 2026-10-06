@@ -257,7 +257,7 @@ export async function runProcessing(ctx: ProcessContext, deps: ProcessDeps): Pro
       // Com o navegador só de passagem a tela inteira segue como base e o recorte fica como oferta do editor.
       if (saved.capture.kind === 'screen' && saved.capture.browser?.contentRect && project.sources.screen) {
         const text = await readFile(await resolveProjectFile(dir, EVENT_FILES.contentRect), 'utf8').catch(() => '')
-        const samples = eventsFromText({ contentRect: text }).contentRects
+        const samples = eventsFromText({ contentRect: text }).contentRects ?? []
         const { w, h, durationMs } = project.sources.screen
         if (browserPageShare(samples, { w, h }, durationMs) >= AUTO_CROP_MIN_SHARE) project.screenCrop = { mode: 'auto' }
       }

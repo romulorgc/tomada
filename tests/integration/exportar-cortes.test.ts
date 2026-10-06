@@ -167,7 +167,7 @@ describe('exportar um corte vertical', () => {
     expect(Math.abs(Number(probe.format.duration) * 1000 - 5400)).toBeLessThan(80)
     // o que a janela de vídeo recebeu: vertical, 1080×1920, o documento do corte (cortes de fora, gancho do corte)
     const job = jobs[0]!
-    expect(job).toMatchObject({ format: 'vertical', width: 1080, height: 1920, fps: 30, bitrate: 10_000_000 })
+    expect(job).toMatchObject({ format: 'vertical', width: 1080, height: 1920, fps: 30, bitrate: 16_000_000 })
     expect(job.clipLayout).toBeUndefined() // automático
     expect(keptRanges(23_000, job.project.cuts)).toEqual([{ start: 400, end: 5800 }])
     expect(job.project.vertical!.hook).toBe('Grave a tela em segundos')

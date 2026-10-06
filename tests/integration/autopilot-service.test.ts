@@ -244,6 +244,22 @@ describe('integração dos ajustes e da retomada do piloto automático', () => {
     expect(itemOf(w.project(), 'clip-1')).toMatchObject({ phase: 'ready', exportPath: 'exports/export-1.mp4' })
   })
 
+  it.each([['sem escolha (o padrão)', undefined, '1440p'], ['escolha 1440p', '1440p', '1440p'], ['escolha 1080p', '1080p', '1080p']] as const)('o YouTube do piloto, %s nos Ajustes, exporta em %s (padrão 1440p: o YouTube dá codec melhor a envios de 1440p ou mais) e o vertical segue 1080×1920', async (_nome, choice, expected) => {
+    const doc = baseProject()
+    finishedPipeline(doc)
+    doc.review = { items: { youtube: { origin: 'auto', decision: 'pending', phase: 'ready', exportPath: 'exports/antigo.mp4' } } }
+    addClip(doc)
+    doc.review.items['clip-1'] = { origin: 'auto', decision: 'pending', phase: 'ready', exportPath: 'exports/antigo-vertical.mp4' }
+    const w = await world(doc)
+    if (choice) w.prefs.youtubeResolution = choice
+    await writeFile(join(w.dir, 'events/clicks.jsonl'), `${JSON.stringify({ t: 3000, x: 0.5, y: 0.5, button: 'left' })}
+`)
+    await w.service.retry(id, 'zooms')
+    const calls = w.start.mock.calls.map(([request]) => request)
+    expect(calls.find((request) => request.format === 'horizontal')).toMatchObject({ resolution: expected, fps: 30 })
+    expect(calls.find((request) => request.format === 'vertical')).toMatchObject({ resolution: '1080p', fps: 30, clipId: 'clip-1' })
+  })
+
   it('refazer zooms atualiza a edição e reexporta automaticamente o vídeo pronto', async () => {
     const doc = baseProject()
     finishedPipeline(doc)

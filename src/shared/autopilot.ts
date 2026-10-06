@@ -15,10 +15,12 @@ export const autopilotPrefsSchema = z.object({
   captionsHorizontal: z.boolean().default(false),
   captionsVertical: z.boolean().default(true),
   maxClips: z.number().int().min(3).max(5).default(3),
-  minScore: z.number().min(0).max(100).default(70)
+  minScore: z.number().min(0).max(100).default(70),
+  /** Resolução do YouTube que o piloto exporta: 1440p por padrão (o YouTube dá um codec melhor a envios de 1440p ou mais). */
+  youtubeResolution: z.enum(['1080p', '1440p']).default('1440p')
 })
 export type AutopilotPrefs = Omit<z.infer<typeof autopilotPrefsSchema>, 'steps'> & { steps: Partial<Record<PipelineStepId, boolean>> }
-export const DEFAULT_AUTOPILOT: AutopilotPrefs = { mode: 'everything', steps: {}, captionsHorizontal: false, captionsVertical: true, maxClips: 3, minScore: 70 }
+export const DEFAULT_AUTOPILOT: AutopilotPrefs = { mode: 'everything', steps: {}, captionsHorizontal: false, captionsVertical: true, maxClips: 3, minScore: 70, youtubeResolution: '1440p' }
 export const pipelineSchema = z.looseObject({
   projectId: z.string(), status: z.enum(['running', 'done']), startedAt: z.number(), elapsedMs: z.number(), notice: z.string().optional(),
   steps: z.array(z.looseObject({ id: z.enum(PIPELINE_STEPS), status: z.enum(['pending', 'running', 'done', 'error', 'skipped']), detail: z.string().optional(), elapsedMs: z.number().optional() }))

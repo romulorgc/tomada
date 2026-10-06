@@ -146,7 +146,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       await deps.camera?.idle()
       await deps.exporter.idle()
       const protection = protectionFingerprint((await deps.store.read(id)).project)
-      const { exportId } = await deps.exporter.start({ projectId: id, format: itemId === 'youtube' ? 'horizontal' : 'vertical', resolution: '1080p', fps: 30, ...(itemId === 'youtube' ? {} : { clipId: itemId }) })
+      const { exportId } = await deps.exporter.start({ projectId: id, format: itemId === 'youtube' ? 'horizontal' : 'vertical', resolution: itemId === 'youtube' ? deps.prefs().youtubeResolution : '1080p', fps: 30, ...(itemId === 'youtube' ? {} : { clipId: itemId }) })
       await deps.exporter.idle()
       const done = deps.exporter.status(exportId)
       if (done?.exportId !== exportId || done.phase !== 'done' || !done.outputPath) throw new Error(done?.message ?? 'A exportação não terminou.')

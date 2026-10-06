@@ -23,11 +23,13 @@ describe('plano da exportação', () => {
     expect(EXPORT_SIZES['1080p']).toEqual({ w: 1920, h: 1080 })
     expect(EXPORT_SIZES['1440p']).toEqual({ w: 2560, h: 1440 })
     expect(EXPORT_SIZES['2160p']).toEqual({ w: 3840, h: 2160 })
-    expect(exportBitrate('1080p', 30)).toBe(8_000_000)
-    expect(exportBitrate('1080p', 60)).toBe(12_000_000)
-    expect(exportBitrate('1440p', 30)).toBe(16_000_000)
-    expect(exportBitrate('1440p', 60)).toBe(24_000_000)
-    expect(exportBitrate('2160p', 30)).toBe(40_000_000)
+    // acabamento D: taxas mais altas, porque a tela tem texto fino e o vídeo de câmera 4K recomprimido a 8 Mbps saía mole
+    expect(exportBitrate('1080p', 30)).toBe(16_000_000)
+    expect(exportBitrate('1080p', 60)).toBe(24_000_000)
+    expect(exportBitrate('1440p', 30)).toBe(24_000_000)
+    expect(exportBitrate('1440p', 60)).toBe(36_000_000)
+    expect(exportBitrate('2160p', 30)).toBe(45_000_000)
+    expect(exportBitrate('2160p', 60)).toBe(68_000_000)
     expect(exportFormat({ resolution: '1440p', fps: 30 })).toEqual({ kind: 'horizontal', w: 2560, h: 1440 })
   })
 
@@ -148,13 +150,13 @@ describe('exportação vertical (M4a): 1080×1920, 10/12 Mbps, nome próprio', (
     expect(exportFormat({ resolution: '1440p', fps: 30, format: 'horizontal' })).toEqual({ kind: 'horizontal', w: 2560, h: 1440 })
   })
 
-  it('taxa de bits do vertical: 10 Mbps a 30 qps e 12 a 60, em qualquer resolução', () => {
+  it('taxa de bits do vertical: 16 Mbps a 30 qps e 24 a 60, em qualquer resolução', () => {
     for (const resolution of ['1080p', '1440p', '2160p'] as const) {
-      expect(exportBitrate(resolution, 30, 'vertical')).toBe(10_000_000)
-      expect(exportBitrate(resolution, 60, 'vertical')).toBe(12_000_000)
+      expect(exportBitrate(resolution, 30, 'vertical')).toBe(16_000_000)
+      expect(exportBitrate(resolution, 60, 'vertical')).toBe(24_000_000)
     }
-    expect(exportBitrate('1080p', 30, 'horizontal')).toBe(8_000_000) // o 16:9 não mudou
-    expect(exportBitrate('1080p', 30)).toBe(8_000_000)
+    expect(exportBitrate('1080p', 30, 'horizontal')).toBe(16_000_000)
+    expect(exportBitrate('1080p', 30)).toBe(16_000_000)
   })
 
   it('o nível do H.264 do 1080×1920 a 30 e a 60 qps cabe no nível 4.0 e 4.2 (mesmo número de macroblocos do 16:9)', () => {

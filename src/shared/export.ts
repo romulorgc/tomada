@@ -52,15 +52,19 @@ export const EXPORT_VERTICAL_SIZE = { w: 1080, h: 1920 } as const
 
 export const EXPORT_RESOLUTION_LABEL: Record<ExportResolution, string> = { '1080p': '1080p', '1440p': '1440p', '2160p': '4K' }
 
-/** Taxa de bits do YouTube: 1080p 8 Mbps (12 a 60 qps), 1440p 16 (24), 4K 40 (60). */
+/**
+ * Taxa de bits do YouTube (revisada no acabamento D): 1080p 16 Mbps (24 a 60 qps), 1440p 24 (36), 4K 45 (68). O envio
+ * de 8 Mbps saía mole: o YouTube recomprime, a tela tem texto fino e o rosto vem de uma câmera 4K. 1440p60 e 4K60 mantêm a razão
+ * de 1,5× entre 30 e 60 qps que a tabela já tinha.
+ */
 const BITRATE_MBPS: Record<ExportResolution, Record<ExportFps, number>> = {
-  '1080p': { 30: 8, 60: 12 },
-  '1440p': { 30: 16, 60: 24 },
-  '2160p': { 30: 40, 60: 60 }
+  '1080p': { 30: 16, 60: 24 },
+  '1440p': { 30: 24, 60: 36 },
+  '2160p': { 30: 45, 60: 68 }
 }
 
-/** Vertical: 10 Mbps a 30 qps e 12 a 60 (recomprimir estraga o texto da tela, então mais que o mínimo das plataformas). */
-const VERTICAL_MBPS: Record<ExportFps, number> = { 30: 10, 60: 12 }
+/** Vertical: 16 Mbps a 30 qps e 24 a 60 (recomprimir estraga o texto da tela, então bem mais que o mínimo das plataformas). */
+const VERTICAL_MBPS: Record<ExportFps, number> = { 30: 16, 60: 24 }
 
 export function exportBitrate(resolution: ExportResolution, fps: ExportFps, format: ExportFormatKind = 'horizontal'): number {
   return (format === 'vertical' ? VERTICAL_MBPS[fps] : BITRATE_MBPS[resolution][fps]) * 1_000_000

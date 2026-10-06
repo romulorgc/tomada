@@ -88,7 +88,7 @@ test('grava com motor real, marca errei e chega sem clique à Revisão com YouTu
   expect(doc.meta?.youtube?.description).toBeTruthy()
   const youtube=probe(join(dir,doc.review!.items.youtube!.exportPath!))
   const vertical=probe(join(dir,doc.review!.items[clip.id]!.exportPath!))
-  expect(youtube.streams.find((s) => s.codec_type==='video')).toMatchObject({width:1920,height:1080})
+  expect(youtube.streams.find((s) => s.codec_type==='video')).toMatchObject({width:2560,height:1440}) // o padrão do piloto é 1440p (acabamento D)
   expect(vertical.streams.find((s) => s.codec_type==='video')).toMatchObject({width:1080,height:1920})
   expect(vertical.streams.some((s) => s.codec_type==='audio')).toBe(true)
   // O trecho do "errei" saiu do vídeo exportado: duração e marcador audiovisual (a cor de cada instante).
