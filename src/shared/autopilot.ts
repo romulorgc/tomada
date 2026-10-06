@@ -1,7 +1,7 @@
 /** Piloto automático persistente. A fila do main injeta os serviços, este núcleo decide ordem e retomada. */
 import { z } from 'zod'
 
-export const PIPELINE_STEPS = ['transcribe', 'clean', 'zooms', 'layouts', 'captions', 'youtube', 'clips', 'clipExports', 'publish', 'notify'] as const
+export const PIPELINE_STEPS = ['transcribe', 'dictionary', 'clean', 'zooms', 'layouts', 'captions', 'youtube', 'clips', 'clipExports', 'publish', 'notify'] as const
 export type PipelineStepId = typeof PIPELINE_STEPS[number]
 export type PipelineStep = { id: PipelineStepId; status: 'pending' | 'running' | 'done' | 'error' | 'skipped'; detail?: string; elapsedMs?: number }
 export type PipelineState = {
@@ -30,6 +30,8 @@ export async function runPipeline(state: PipelineState, deps: {
   run(id: PipelineStepId): Promise<string | void>; save(state: PipelineState): Promise<void>; enabled(id: PipelineStepId): boolean; now?(): number; stopped?(): boolean
 }): Promise<void> {
   const now = deps.now ?? Date.now
+  // Uma versão nova pode acrescentar etapa; a retomada conserva os estados já gravados e insere só a ausente.
+  state.steps = PIPELINE_STEPS.map((id) => state.steps.find((s) => s.id === id) ?? { id, status: 'pending' })
   state.status = 'running'
   for (const step of state.steps) {
     if (deps.stopped?.()) return

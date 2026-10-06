@@ -55,6 +55,7 @@ test('grava com motor real, marca errei e chega sem clique à Revisão com YouTu
   mkdirSync(SCREENS_DIR,{recursive:true})
   const responses=join(ROOT,'test-results','m4d-respostas.json')
   writeFileSync(responses,JSON.stringify([
+    {task:'dictionary',match:'',response:{corrections:[]}},
     {task:'clips',match:'',response:{clips:[]}}, {task:'retakes',match:'',response:{retakes:[]}},
     {task:'publish',match:'',response:{titles:['Cadastro pronto para publicar'],description:'Demonstração sintética para conferir a gravação e as saídas.',tags:['cadastro','demonstração'],chapters:[],clips:[]}},
     {task:'edit',match:'',response:{ops:[{op:'title',text:'Título ajustado na revisão'}],reply:'Troquei o título.'}}

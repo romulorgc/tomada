@@ -7,6 +7,7 @@ import { itemOf, reviewDocument, type ReviewItem } from '@shared/review'
 import { keptRanges, outputDuration, sourceToOutput } from '@shared/timeline'
 import type { Project, Transcript, CutReason, LayoutKind, CaptionStyleId } from '@shared/types'
 import { projectForFormat } from '@shared/vertical'
+import { correctedTranscriptWords, undoDictionaryCorrection } from '@shared/dictionary-corrections'
 import { ErrorPanel } from '../components/Feedback'
 import { CheckIcon, AlertIcon } from '../components/Icons'
 import { t } from '../i18n/pt-BR'
@@ -36,6 +37,15 @@ export function Review({ id }: { id: string }) {
   },[id,load])
   const action = async (fn: () => Promise<unknown>) => { try { await fn(); await load() } catch(e) { notify({ kind: 'error',text: T.error,detail: messageOf(e) }) } }
   const change = async (itemId: string,patch: Partial<ReviewItem>,reexport = true) => action(async () => { setDoc(await window.tomada.review.update(id,itemId,patch,reexport)) })
+  const undoCorrection = async (i: number) => action(async () => {
+    if (!doc) return
+    const saved = await window.tomada.projects.save(id, undoDictionaryCorrection(doc, i), doc)
+    setDoc(saved)
+    for (const itemId of ['youtube', ...saved.clips.map((c) => c.id)]) {
+      const item = itemOf(saved, itemId)
+      if (item.decision !== 'discarded' && (item.exportPath || item.phase === 'exporting' || item.phase === 'queued')) await window.tomada.review.update(id, itemId, {}, true)
+    }
+  })
   if (!doc) return error ? <ErrorPanel title={T.review} detail={error} onRetry={() => void load()} /> : <div className="p-10" aria-busy="true">{t.common.loading}</div>
   const running = doc.autopilot?.status === 'running'
   const items = ['youtube',...doc.clips.map((c) => c.id)]
@@ -51,6 +61,7 @@ export function Review({ id }: { id: string }) {
     <div className="review-layout">
       <aside className="review-summary" aria-label={T.summary}>
         <h2>{T.summary}</h2>
+        {doc.review?.dictionaryCorrections?.length ? <section className="review-dictionary" data-testid="review-dictionary-corrections"><h3>{T.dictionaryCorrections}</h3>{doc.review.dictionaryCorrections.map((c) => <div key={c.i} className="review-decision"><span>{c.before} → {c.after}</span>{c.undone ? <span>{T.correctionUndone}</span> : <button className="link" data-testid={`review-dictionary-undo-${c.i}`} onClick={() => void undoCorrection(c.i)}>{T.undoCorrection}</button>}</div>)}</section> : null}
         {categories.map((reason) => { const found = automatic.filter((c) => c.reason === reason && c.enabled); return <button key={reason} className="review-summary-link" aria-pressed={category === reason} onClick={() => setCategory(reason)} data-testid={`review-summary-${reason}`}>{T.cutsCount(found.length,T.reasons[reason],formatDuration(found.reduce((n,c) => n+c.end-c.start,0)))} <span>{T.view} →</span></button> })}
         <button className="review-summary-link" aria-pressed={category === 'zooms'} onClick={() => setCategory('zooms')}>{T.zoomCount(youtubeView.zooms.filter((z) => z.origin === 'auto').length)} <span>{T.view} →</span></button>
         <button className="review-summary-link" aria-pressed={category === 'layouts'} onClick={() => setCategory('layouts')}>{T.layoutCount(youtubeView.layouts.filter((l) => l.origin === 'auto').length)} <span>{T.view} →</span></button>
@@ -131,7 +142,7 @@ function ReviewCard({ id,itemId,doc,transcript,change,action }: { id:string; ite
         <label><input type="checkbox" checked={view.captions.enabled} data-testid={`review-${itemId}-captions`} onChange={(e) => void change(itemId,{captionsEnabled:e.target.checked})} /> {T.captions}</label>
         <label>{T.start} · {formatSpan(trim.start)}<input type="range" min={0} max={Math.max(0,trim.end-100)} step={100} value={trim.start} aria-label={T.start} onChange={(e) => setTrim({...trim,start:Number(e.target.value)})} onPointerUp={commitTrim} onKeyUp={commitTrim} /></label>
         <label>{T.end} · {formatSpan(trim.end)}<input type="range" min={trim.start+100} max={duration} step={100} value={trim.end} aria-label={T.end} onChange={(e) => setTrim({...trim,end:Number(e.target.value)})} onPointerUp={commitTrim} onKeyUp={commitTrim} /></label>
-        <div className="review-transcript" data-testid={`review-${itemId}-transcript`}>{transcript?.words.filter((w) => w.start >= trim.start && w.end <= trim.end).map((w) => <button key={w.i} title={formatSpan(w.start)} className={project.cuts.some((c) => c.enabled && w.start >= c.start && w.end <= c.end) ? 'cut' : ''} onClick={() => { if(video.current) video.current.currentTime = sourceToOutput(w.start,keptRanges(duration,project.cuts))/1000 }}>{w.text} </button>)}</div>
+        <div className="review-transcript" data-testid={`review-${itemId}-transcript`}>{correctedTranscriptWords(transcript?.words ?? [], project.wordFixes, doc.review?.dictionaryCorrections).filter((w) => w.start >= trim.start && w.end <= trim.end).map((w) => <button key={w.i} title={formatSpan(w.start)} className={project.cuts.some((c) => c.enabled && w.start >= c.start && w.end <= c.end) ? 'cut' : ''} onClick={() => { if(video.current) video.current.currentTime = sourceToOutput(w.start,keptRanges(duration,project.cuts))/1000 }}>{w.text} </button>)}</div>
         <label>{T.layout}<select value={item.layout ?? view.style.defaultLayout} onChange={(e) => void change(itemId,{layout:e.target.value as LayoutKind})}>{layoutOptions.map((l) => <option key={l} value={l}>{t.editor.layout.options[l]}</option>)}</select></label>
         <label>{T.captionStyle}<select value={view.captions.style} onChange={(e) => void change(itemId,{captionStyle:e.target.value as CaptionStyleId})}>{(['natural','highlight','clean','karaoke'] as const).map((s) => <option value={s} key={s}>{t.editor.captions.styles[s].name}</option>)}</select></label>
         <label>{T.zoom}<select value={item.zoom ?? 'auto'} onChange={(e) => void change(itemId,{zoom:e.target.value as ReviewItem['zoom']})}><option value="auto">{T.auto}</option><option value="softer">{T.softer}</option><option value="stronger">{T.stronger}</option><option value="off">{T.off}</option></select></label>

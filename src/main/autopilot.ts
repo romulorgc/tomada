@@ -28,6 +28,8 @@ import { mergeEditorProject } from '@shared/project-merge'
 import { suggestClips } from './llm/clips'
 import { generatePublish } from './llm/publish'
 import { detectRetakes } from './llm/retakes'
+import { detectDictionaryCorrections } from './llm/dictionary'
+import { applyDictionaryCorrections, correctedTranscriptWords } from '@shared/dictionary-corrections'
 import type { LlmManager } from './llm/manager'
 import type { Logger } from './logger'
 import { MANIFEST_PATH, readManifest, writeManifest } from './manifest'
@@ -51,6 +53,7 @@ export interface AutopilotService {
 export type AutopilotDeps = {
   store: ProjectStore; transcription: TranscriptionService; derived: DerivedMedia; exporter: ExportService; llm: LlmManager; logger: Logger
   prefs(): AutopilotPrefs; ownerStyle?(): Project['style'] | undefined
+  vocabulary?(): readonly string[]
   ownerBackground?(): Promise<string | undefined>
   /** O serviço da câmera (M4c): o piloto espera a análise do rosto e do recorte do fundo e escolhe o Apresentador quando o recorte já existe. */
   camera?: Pick<CameraService, 'idle' | 'result' | 'analyze' | 'view'>
@@ -107,7 +110,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
   const transcript = async (id: string): Promise<Transcript> => {
     const t = await deps.transcription.getTranscript(id)
     if (!t || t.words.length === 0) throw new Error('Sem transcrição com fala. Prepare a transcrição nos Ajustes e tente de novo.')
-    return t
+    const { project } = await deps.store.read(id)
+    return { ...t, words: correctedTranscriptWords(t.words, project.wordFixes, project.review?.dictionaryCorrections) }
   }
   const textOf = (project:Project,itemId:string,words:Transcript['words'] | null):string => {
     const item = itemOf(project,itemId)
@@ -173,6 +177,22 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         await deps.transcription.idle()
         const t = await transcript(id)
         return `${t.words.length} palavras transcritas localmente.`
+      }
+      case 'dictionary': {
+        const provider = deps.llm.provider()
+        if (!provider) return 'Sem IA: mantive a transcrição e as correções do usuário.'
+        const dictionary = deps.vocabulary?.() ?? []
+        if (!dictionary.length) return 'Dicionário vazio: mantive a transcrição.'
+        const t = await deps.transcription.getTranscript(id)
+        if (!t?.words.length) return 'Sem transcrição: nenhuma grafia foi alterada.'
+        const raw = await detectDictionaryCorrections({ provider, words: t.words, dictionary })
+        let count = 0
+        await regenerate(id, (p) => {
+          const next = applyDictionaryCorrections(p, t.words, raw, dictionary)
+          count = (next.review?.dictionaryCorrections?.length ?? 0) - (p.review?.dictionaryCorrections?.length ?? 0)
+          return next
+        })
+        return `${count} ${count === 1 ? 'troca de grafia' : 'trocas de grafia'} em nomes de produtos com confiança alta; veja e desfaça em “O que o automático fez”.`
       }
       case 'clean': {
         const t = await transcript(id)
@@ -293,7 +313,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         let meta: Project['meta']
         let notice = ''
         if (provider) {
-          try { const result = await generatePublish({ provider, project, words: t.words, durationMs: duration, clips: project.clips }); meta = { youtube: { titles: result.titles, description: result.description, chapters: result.chapters, tags: result.tags }, perClip: result.clips } }
+          try { const result = await generatePublish({ provider, project, words: t.words, durationMs: duration, clips: project.clips, dictionary: deps.vocabulary?.() }); meta = { youtube: { titles: result.titles, description: result.description, chapters: result.chapters, tags: result.tags }, perClip: result.clips } }
           catch (err) { notice = `Textos pela IA falharam: ${err instanceof Error ? err.message : String(err)}. ` }
         } else notice = 'Sem IA: textos e capítulos gerados pela transcrição; confira antes de postar. '
         const body = t.words.filter((w) => !project.cuts.some((c) => c.enabled && c.start <= w.start && c.end >= w.end)).map((w) => w.text).join(' ')
@@ -422,7 +442,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         // tentar de novo resolve o aviso do piloto (o `notice` sai do estado)
         await change(id,(p) => { const { notice: _resolved, ...pipeline } = p.autopilot ?? newPipeline(id); return { ...p, autopilot: { ...pipeline, status: 'running', steps: pipeline.steps.map((s) => s.id === step ? { id: s.id, status: 'pending' } : s) } } })
         await run(id)
-        if (deps.prefs().mode === 'everything' && ['clean','zooms','layouts','captions','clips'].includes(step)) {
+        if (deps.prefs().mode === 'everything' && ['dictionary','clean','zooms','layouts','captions','clips'].includes(step)) {
           const latest = (await deps.store.read(id)).project
           for (const itemId of ['youtube',...latest.clips.map((c) => c.id)]) {
             if (itemOf(latest,itemId).decision === 'discarded') continue

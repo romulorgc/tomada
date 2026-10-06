@@ -302,6 +302,7 @@ async function main(): Promise<void> {
 
   autopilot = createAutopilot({
     store, transcription, derived, exporter, llm, logger, camera,
+    vocabulary: () => state.dictionary(),
     prefs: () => {
       const settings = state.settings()
       return { ...DEFAULT_AUTOPILOT, ...settings.autopilot,

@@ -3,6 +3,7 @@ export { reviewItemSchema } from './review-schema'
 import { clipDocument, complementRanges, withClipLayout } from './clips'
 import { projectDurationMs } from './project'
 import { captionStyleDefaults } from './caption-style'
+import type { DictionaryCorrection } from './dictionary-corrections'
 import type { CaptionStyle, Cut, CutReason, LayoutKind, LayoutSeg, Project, Range, Style, Zoom } from './types'
 import { defaultVerticalEdit, mergeFormatView, projectForFormat } from './vertical'
 
@@ -21,7 +22,7 @@ export type ReviewItem = {
   title?: string; hook?: string; text?: string
   edits?: { cuts: Cut[]; zooms: Zoom[]; layouts: LayoutSeg[]; captions: CaptionStyle; style: Style; wordFixes?: Project['wordFixes']; mutes?: Project['mutes']; meta?: Project['meta']; zoomPreset?: Project['zoomPreset']; autoExclusions?:Project['autoExclusions'] }
 }
-export type ReviewState = { items: Record<string, ReviewItem>; metaOrigin?: 'auto' | 'manual'; titleOrigin?: 'auto' | 'manual' }
+export type ReviewState = { items: Record<string, ReviewItem>; metaOrigin?: 'auto' | 'manual'; titleOrigin?: 'auto' | 'manual'; dictionaryCorrections?: DictionaryCorrection[] }
 export function itemOf(doc: Project, id: string): ReviewItem { return doc.review?.items[id] ?? { decision: 'pending', origin: 'auto' } }
 export function updateReviewItem(doc: Project, id: string, patch: Partial<ReviewItem>, manual = true): Project {
   if(patch.disabledReasons) {
@@ -40,6 +41,7 @@ export function reviewDocument(doc: Project, id: string): Project {
   if (item.edits) {
     if (clip) p = mergeFormatView(p,{...projectForFormat(p,'vertical'),...item.edits},'vertical')
     else p = { ...p, ...item.edits }
+    p = { ...p, wordFixes: { ...original.wordFixes, ...item.edits.wordFixes } }
   }
   const restore = <T extends {start:number;end:number;origin?:'auto'|'manual'}>(current:T[],base:T[]):T[] => {
     const manual = current.filter((s) => s.origin === 'manual')

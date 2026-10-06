@@ -12,6 +12,7 @@ import { videoScriptSchema } from './script'
 import { retakeMarkSchema } from './retake-marker'
 import { pipelineSchema } from './autopilot'
 import { reviewItemSchema } from './review-schema'
+import { dictionaryCorrectionSchema } from './dictionary-corrections'
 import type { CaptionStyle, CaptionStyleId, CaptureInfo, Project, Src, Style } from './types'
 
 export const CURRENT_PROJECT_VERSION = 2
@@ -319,7 +320,7 @@ export const projectSchema = z.looseObject({
   wordFixes: z.record(z.string(), z.string()).optional(),
   autoCleaned: z.boolean().optional(),
   autopilot: pipelineSchema.optional(),
-  review: z.looseObject({ items: z.record(z.string(), reviewItemSchema.extend({ edits: z.object({ cuts: z.array(cutSchema), zooms: z.array(zoomSchema), layouts: z.array(layoutSegSchema), captions: captionStyleSchema, style: styleSchema, autoExclusions:autoExclusionsSchema.optional(), wordFixes:z.record(z.string(),z.string()).optional(), mutes:z.array(muteSchema).optional(), meta:metaSchema.optional(), zoomPreset:z.enum(['subtle','moderate','intense','off']).optional() }).optional() })), metaOrigin: z.enum(['auto','manual']).optional(), titleOrigin: z.enum(['auto','manual']).optional() }).optional(),
+  review: z.looseObject({ items: z.record(z.string(), reviewItemSchema.extend({ edits: z.object({ cuts: z.array(cutSchema), zooms: z.array(zoomSchema), layouts: z.array(layoutSegSchema), captions: captionStyleSchema, style: styleSchema, autoExclusions:autoExclusionsSchema.optional(), wordFixes:z.record(z.string(),z.string()).optional(), mutes:z.array(muteSchema).optional(), meta:metaSchema.optional(), zoomPreset:z.enum(['subtle','moderate','intense','off']).optional() }).optional() })), metaOrigin: z.enum(['auto','manual']).optional(), titleOrigin: z.enum(['auto','manual']).optional(), dictionaryCorrections: z.array(dictionaryCorrectionSchema).max(10000).optional() }).optional(),
   meta: metaSchema.optional(),
   script: videoScriptSchema.optional(),
   retakeMarks: z.array(retakeMarkSchema).optional(),

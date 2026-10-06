@@ -14,11 +14,12 @@ export const ptBR = {
   },
   autopilot: {
     lowScore: 'Nota baixa: revise antes de postar',
+    dictionaryCorrections: 'Grafia dos nomes de produtos', undoCorrection: 'Desfazer troca', correctionUndone: 'Troca desfeita',
     hasErrors:'Há etapas com problema. Confira os motivos e tente novamente.',
     decisionHelp: 'As escolhas seguem a atividade da tela e a fala. Desmarque uma decisão para restaurar o trecho ou o enquadramento.', enableAll: 'Ligar categoria', resetText: 'Restaurar texto sugerido', resetAllTexts: 'Restaurar todos os textos', discardAll: 'Descartar todos os cortes', styleSaved: 'Estilo salvo para as próximas gravações.',
     title: 'Piloto automático', mode: 'Ao parar de gravar', everything: 'Fazer tudo e exportar', prepare: 'Só preparar (sem exportar)', nothing: 'Nada',
     help: 'Grave, revise e poste. Cada decisão pode ser ajustada; o que você mudar à mão fica preservado.',
-    steps: { transcribe: 'Transcrever localmente', clean: 'Limpar silêncio, hesitações e recomeços', zooms: 'Zooms automáticos', layouts: 'Layouts automáticos (16:9 e 9:16)', captions: 'Aplicar padrão de legendas', youtube: 'Exportar YouTube 1080p', clips: 'Sugerir os melhores cortes', clipExports: 'Exportar cortes verticais', publish: 'Preparar títulos e textos', notify: 'Avisar quando estiver pronto' },
+    steps: { transcribe: 'Transcrever localmente', dictionary: 'Conferir nomes do dicionário', clean: 'Limpar silêncio, hesitações e recomeços', zooms: 'Zooms automáticos', layouts: 'Layouts automáticos (16:9 e 9:16)', captions: 'Aplicar padrão de legendas', youtube: 'Exportar YouTube 1080p', clips: 'Sugerir os melhores cortes', clipExports: 'Exportar cortes verticais', publish: 'Preparar títulos e textos', notify: 'Avisar quando estiver pronto' },
     horizontalCaptions: 'Legenda no YouTube por padrão', verticalCaptions: 'Legenda nos cortes por padrão', maxClips: 'Quantidade máxima de cortes', score: 'Nota mínima', saveStyle: 'Usar este estilo nas próximas gravações', savedStyle: 'Estilo salvo para novas gravações',
     review: 'Revisão', reviewing: 'Prepare para postar', running: 'Preparando sua gravação…', ready: 'Pronto para revisar', summary: 'O que o automático fez', approve: 'Aprovar', discard: 'Descartar', pending: 'A revisar', approved: 'Aprovado', discarded: 'Descartado',
     quick: 'Ajustes rápidos', editor: 'Abrir no editor', copy: 'Copiar texto', copied: 'Texto copiado', post: 'Abrir pasta para postar', postHelp: 'A pasta recebe os vídeos aprovados e um texto por plataforma.',
