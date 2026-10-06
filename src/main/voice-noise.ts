@@ -8,6 +8,11 @@ const FRAME_MS = 20
 const FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS / 1000
 const WORD_GUARD_MS = 150
 const MIN_SILENCE_MS = 300
+/**
+ * O piso de ruído é estacionário: medir os primeiros 15 minutos basta e limita o custo (uma hora de voz são 173 milhões de amostras, que
+ * disputariam a CPU com a abertura do editor). Gravações mais curtas são medidas inteiras.
+ */
+export const MAX_MEASURED_MS = 15 * 60_000
 type NoiseFrame = { db: number; power: number; periodic: boolean }
 
 export type VoiceNoiseMeasure = {
@@ -26,7 +31,7 @@ export async function measureVoiceNoise(ff: Ffmpeg, opts: { voicePath: string; w
   const path = assertFfmpegPath(opts.voicePath, 'voz para medir ruído')
   if (opts.signal?.aborted) throw new FfmpegError('Medição de ruído cancelada.', null, '')
   return new Promise((resolve, reject) => {
-    const child = spawn(ff.paths.ffmpeg, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-i', path, '-vn',
+    const child = spawn(ff.paths.ffmpeg, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-i', path, '-t', String(MAX_MEASURED_MS / 1000), '-vn',
       '-af', 'highpass=f=80', '-ac', '1', '-ar', String(SAMPLE_RATE), '-f', 'f32le', 'pipe:1'],
     { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     const meter = new VoiceNoiseMeter()
@@ -38,8 +43,10 @@ export async function measureVoiceNoise(ff: Ffmpeg, opts: { voicePath: string; w
     child.stdout.on('data', (chunk: Buffer) => {
       const bytes = pending.length ? Buffer.concat([pending, chunk]) : chunk
       const count = Math.floor(bytes.length / 4)
-      const samples = new Float32Array(count)
-      for (let i = 0; i < count; i++) samples[i] = bytes.readFloatLE(i * 4)
+      // Uma hora de voz são ~173 milhões de amostras: uma visão Float32Array (sem copiar nem ler uma a uma) mantém o processo principal livre.
+      const samples = bytes.byteOffset % 4 === 0
+        ? new Float32Array(bytes.buffer, bytes.byteOffset, count)
+        : new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + count * 4))
       meter.push(samples)
       pending = Buffer.from(bytes.subarray(count * 4))
     })
