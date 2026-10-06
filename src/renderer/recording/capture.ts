@@ -23,6 +23,7 @@ import {
 import type { Size } from '@shared/types'
 import { explainMediaError } from './media-errors'
 import { deviceCaptureConstraints, physicalDeviceId } from '@shared/capture-devices'
+import { PcmRecorder } from './pcm-recorder'
 
 export const nowMs = (): number => performance.timeOrigin + performance.now()
 
@@ -99,6 +100,7 @@ export class CaptureEngine {
   private lastLevelAt = 0
   private probe: { video: HTMLVideoElement; size: Size } | null = null
   private startedInfo: StartedInfo | null = null
+  private pcm: PcmRecorder | null = null
 
   private constructor(
     private readonly params: EngineParams,
@@ -160,6 +162,17 @@ export class CaptureEngine {
       if (screenStream) engine.probe = await openProbe(screenStream)
       engine.attachTrackListeners()
       engine.startLevelMeter()
+      // Ponto único de troca do MICROFONE: o vídeo da câmera conserva seu gravador.
+      if (deviceStream?.getAudioTracks().length) {
+        try {
+          engine.pcm = await PcmRecorder.open(deviceStream, data => api().record.chunk('mic', data), err => {
+            if (engine.writeFailed || engine.dropping) return
+            engine.writeFailed = true
+            engine.notes.push(err.message)
+            params.callbacks.onRecorderError(err)
+          })
+        } catch (err) { engine.abort(); throw err }
+      }
       return engine
     } catch (err) {
       deviceStream?.getTracks().forEach((t) => t.stop())
@@ -282,7 +295,7 @@ export class CaptureEngine {
     const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
     const cameraDeviceId = camVideo ? physicalDeviceId(camVideo.getSettings(), devices, 'videoinput') : null
     const micDeviceId = camAudio ? physicalDeviceId(camAudio.getSettings(), devices, 'audioinput') : null
-    if (this.deviceStream && (camVideo || camAudio)) {
+    if (this.deviceStream && camVideo) {
       cameraMime = pickRecorderMime(supports, { video: Boolean(camVideo), audio: Boolean(camAudio) })
       if (!cameraMime) throw new Error('Este computador não tem um formato de gravação de câmera compatível.')
       this.slots.push(
@@ -292,7 +305,7 @@ export class CaptureEngine {
         })
       )
     }
-    if (this.slots.length === 0) throw new Error('Não há nada para gravar (sem tela, câmera nem microfone).')
+    if (this.slots.length === 0 && !this.pcm) throw new Error('Não há nada para gravar (sem tela, câmera nem microfone).')
 
     const clock = await syncClock()
 
@@ -313,9 +326,13 @@ export class CaptureEngine {
       slot.callAt = nowMs()
       slot.rec.start(1000)
     }
+    // PCM nasce no MESMO instante da voz anterior (start da câmera), que já é a referência
+    // usada por project.sync. Sem câmera, seu próprio start ocupa esse contrato.
+    const micStartAt = this.pcm ? this.slots.find(s => s.kind === 'camera')?.callAt ?? nowMs() : null
+    if (micStartAt !== null) this.pcm!.start(micStartAt)
     await Promise.all(started)
 
-    const calls = this.slots.map((s) => s.callAt!)
+    const calls = [...this.slots.map((s) => s.callAt!), ...(micStartAt === null ? [] : [micStartAt])]
     const t0 = Math.min(...calls)
     const find = (kind: ChunkKind): Slot | undefined => this.slots.find((s) => s.kind === kind)
     const at = (kind: ChunkKind): number | null => find(kind)?.callAt ?? null
@@ -326,7 +343,7 @@ export class CaptureEngine {
     const info: StartedInfo = {
       t0,
       screenStartAt: at('screen'),
-      cameraStartAt: at('camera') ?? at('mic'),
+      cameraStartAt: at('camera') ?? micStartAt,
       startEventLagMs: { screen: lag('screen'), camera: lag('camera') ?? lag('mic') },
       frame: this.frameSize(),
       clockOffsetMs: clock.offsetMs,
@@ -339,7 +356,8 @@ export class CaptureEngine {
       cameraHasAudio: Boolean(camAudio),
       cameraSize,
       cameraDeviceId,
-      micDeviceId
+      micDeviceId,
+      micPcm: Boolean(this.pcm)
     }
     this.startedInfo = info
     return info
@@ -349,12 +367,15 @@ export class CaptureEngine {
   pause(): number {
     const at = nowMs()
     for (const s of this.slots) if (s.rec.state === 'recording') s.rec.pause()
+    this.pcm?.pause(at)
     return at
   }
 
   /** Retoma os dois. Devolve o instante (depois das chamadas). */
   resume(): number {
+    const at = nowMs()
     for (const s of this.slots) if (s.rec.state === 'paused') s.rec.resume()
+    this.pcm?.resume(at)
     return nowMs()
   }
 
@@ -362,8 +383,9 @@ export class CaptureEngine {
   async stop(reason: StopReason): Promise<StopInfo> {
     const endedAt = nowMs()
     this.ended = true
-    await Promise.all(
-      this.slots.map(
+    const stopped = await Promise.allSettled([
+      this.pcm?.stop(endedAt),
+      ...this.slots.map(
         (s) =>
           new Promise<void>((resolve) => {
             if (s.rec.state === 'inactive') return resolve()
@@ -371,8 +393,13 @@ export class CaptureEngine {
             s.rec.stop()
           })
       )
-    )
+    ])
     await Promise.all(this.slots.map((s) => s.chain))
+    for (const result of stopped) if (result.status === 'rejected') {
+      const error = result.reason instanceof Error ? result.reason : new Error(String(result.reason))
+      this.notes.push(`O último pedaço do microfone não pôde ser confirmado: ${error.message}. Confira o fim da gravação.`)
+      this.params.callbacks.onRecorderError(error)
+    }
     const frame = this.frameSize()
     this.release()
     return { endedAt, reason, frame, notes: [...this.notes] }
@@ -397,6 +424,8 @@ export class CaptureEngine {
   }
 
   private release(): void {
+    this.pcm?.release()
+    this.pcm = null
     if (this.levelTimer !== null) window.clearInterval(this.levelTimer)
     this.levelTimer = null
     void this.audioCtx?.close().catch(() => undefined)

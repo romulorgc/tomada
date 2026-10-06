@@ -2,7 +2,7 @@
 export function deviceCaptureConstraints(cameraId: string | null, micId: string | null, prefs: { echoCancellation: boolean; noiseSuppression: boolean }) {
   return {
     video: cameraId ? { deviceId: { exact: cameraId }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } } : false,
-    audio: micId ? { deviceId: { exact: micId }, autoGainControl: false, echoCancellation: prefs.echoCancellation, noiseSuppression: prefs.noiseSuppression } : false
+    audio: micId ? { deviceId: { exact: micId }, sampleRate: { ideal: 48000 }, channelCount: { ideal: 1 }, autoGainControl: false, echoCancellation: prefs.echoCancellation, noiseSuppression: prefs.noiseSuppression } : false
   }
 }
 export const isPhysicalDeviceId = (value: string | null | undefined): boolean => typeof value === 'string' && value.length > 0 && value.length <= 500 && !['default', 'communications'].includes(value)

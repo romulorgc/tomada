@@ -69,8 +69,8 @@ describe('preferências da tela Gravar', () => {
     expect(recordRequestSchema.safeParse({ ...base, cameraStyle: 'tella' }).success).toBe(false)
   })
 
-  it('padrão do som: supressão de ruído ligada, eco desligado, cursor escondido pedido', () => {
-    expect(DEFAULT_RECORD_PREFS.noiseSuppression).toBe(true)
+  it('padrão do som: filtros do navegador desligados, cursor escondido pedido', () => {
+    expect(DEFAULT_RECORD_PREFS.noiseSuppression).toBe(false)
     expect(DEFAULT_RECORD_PREFS.echoCancellation).toBe(false)
     expect(DEFAULT_RECORD_PREFS.hideCursor).toBe(true)
     expect(DEFAULT_RECORD_PREFS.fps).toBe(30)

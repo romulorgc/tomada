@@ -285,7 +285,7 @@ export function Record() {
   const preview = useDevicePreview({
     cameraId: prefs && wantsCamera ? prefs.cameraId : null,
     micId: prefs?.micId ?? null,
-    noiseSuppression: prefs?.noiseSuppression ?? true,
+    noiseSuppression: prefs?.noiseSuppression ?? false,
     echoCancellation: prefs?.echoCancellation ?? false,
     enabled: idle && Boolean(prefs) && Boolean(lists)
   })

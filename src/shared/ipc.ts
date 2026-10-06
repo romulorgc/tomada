@@ -146,6 +146,8 @@ export type ChunkKind = 'screen' | 'camera' | 'mic'
 
 /** O que a interface informa ao main quando os gravadores já dispararam. */
 export type StartedInfo = {
+  /** Microfone independente em WAV PCM float32 48 kHz (ausente em captura antiga). */
+  micPcm?: boolean
   cameraDeviceId?: string | null
   micDeviceId?: string | null
   /**
