@@ -190,7 +190,22 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         await regenerate(id, (p) => {
           const next = applyDictionaryCorrections(p, t.words, raw, dictionary)
           count = (next.review?.dictionaryCorrections?.length ?? 0) - (p.review?.dictionaryCorrections?.length ?? 0)
-          return next
+          if (!count) return next
+          const added = next.review!.dictionaryCorrections!.slice(p.review?.dictionaryCorrections?.length ?? 0)
+          const items = { ...next.review?.items }
+          for (const itemId of ['youtube', ...next.clips.map((c) => c.id)]) {
+            const item = itemOf(next, itemId)
+            if (item.decision === 'discarded' || (!item.exportPath && item.phase !== 'exporting' && item.phase !== 'queued')) continue
+            const effective = reviewDocument(next, itemId)
+            const ranges = next.clips.find((c) => c.id === itemId)?.ranges
+            const changed = added.some((correction) => {
+              if (effective.wordFixes?.[String(correction.i)] !== correction.after) return false
+              const first = t.words.find((w) => w.i === correction.i), last = t.words.find((w) => w.i === (correction.last ?? correction.i))
+              return first && last && (!ranges || ranges.some((r) => r.start < last.end && r.end > first.start))
+            })
+            if (changed) items[itemId] = { ...item, phase: 'queued', revision: (item.revision ?? 0) + 1, exportPath: undefined, textPath: undefined, error: undefined }
+          }
+          return { ...next, review: { ...next.review, items } }
         })
         return `${count} ${count === 1 ? 'troca de grafia' : 'trocas de grafia'} em nomes de produtos com confiança alta; veja e desfaça em “O que o automático fez”.`
       }
@@ -387,7 +402,22 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     const { project } = await deps.store.read(id)
     const state = project.autopilot ?? newPipeline(id)
     const prefs = deps.prefs()
-    await runPipeline(state, { stopped: () => stopped, enabled: (s) => prefs.steps[s] !== false && (prefs.mode !== 'prepare' || !['youtube','clipExports'].includes(s)), run: (s) => runStep(id,s), save: async (s) => { await change(id, (p) => ({ ...p, autopilot: structuredClone(s) })); deps.emit(structuredClone(s)) } })
+    await runPipeline(state, { stopped: () => stopped, enabled: (s) => prefs.steps[s] !== false && (prefs.mode !== 'prepare' || !['youtube','clipExports'].includes(s)), run: async (s) => {
+      const detail = await runStep(id, s)
+      if (s === 'dictionary') {
+        // Projeto de versão anterior pode ter vídeos prontos: a grafia nova precisa chegar aos arquivos antes de publicar.
+        const latest = (await deps.store.read(id)).project
+        if (itemOf(latest, 'youtube').phase === 'queued') {
+          const youtube = state.steps.find((step) => step.id === 'youtube')
+          if (youtube) youtube.status = 'pending'
+        }
+        if (latest.clips.some((c) => itemOf(latest, c.id).phase === 'queued')) {
+          const clips = state.steps.find((step) => step.id === 'clipExports')
+          if (clips) clips.status = 'pending'
+        }
+      }
+      return detail
+    }, save: async (s) => { await change(id, (p) => ({ ...p, autopilot: structuredClone(s) })); deps.emit(structuredClone(s)) } })
   }
   const service: AutopilotService = {
     renameProject: (id,title) => {
@@ -442,7 +472,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         // tentar de novo resolve o aviso do piloto (o `notice` sai do estado)
         await change(id,(p) => { const { notice: _resolved, ...pipeline } = p.autopilot ?? newPipeline(id); return { ...p, autopilot: { ...pipeline, status: 'running', steps: pipeline.steps.map((s) => s.id === step ? { id: s.id, status: 'pending' } : s) } } })
         await run(id)
-        if (deps.prefs().mode === 'everything' && ['dictionary','clean','zooms','layouts','captions','clips'].includes(step)) {
+        if (deps.prefs().mode === 'everything' && ['clean','zooms','layouts','captions','clips'].includes(step)) {
           const latest = (await deps.store.read(id)).project
           for (const itemId of ['youtube',...latest.clips.map((c) => c.id)]) {
             if (itemOf(latest,itemId).decision === 'discarded') continue
