@@ -190,7 +190,7 @@ function editorDeps(over: { image?: string | null } = {}) {
   const calls: string[] = []
   return {
     calls,
-    derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, levels: async () => null, idle: async () => undefined, shutdown: () => undefined },
+    derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, levels: async () => null, cropSuggest: async () => null, idle: async () => undefined, shutdown: () => undefined },
     pickExportDir: async () => null,
     outputDirs: createOutputDirs(),
     pickImage: async () => over.image ?? null,

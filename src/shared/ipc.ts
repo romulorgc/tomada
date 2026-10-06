@@ -15,6 +15,7 @@ import type { InterruptedRecording } from './recovery'
 import type { DiskEstimate } from './disk'
 import type { Levels } from './clean'
 import type { ClipsResult } from './clips'
+import type { CropSuggestion } from './crop-detect'
 import type { ExportOptions } from './export'
 import type { PublishResult } from './publish'
 import type { RecordPrefs, RecordRequest } from './recording'
@@ -102,7 +103,7 @@ export type ProjectDetail = {
     camera: MediaFile | null
   }
   /** URLs dos arquivos de eventos (null = o arquivo não existe, ex.: gravação só de câmera). */
-  events: { cursor: string | null; clicks: string | null; keys: string | null }
+  events: { cursor: string | null; clicks: string | null; keys: string | null; /** A página do navegador medida (C1); null = não foi medida. */ contentRect: string | null }
   /** Resultados da análise da câmera (M4c) que já existem na pasta do projeto, com a versão do arquivo na URL (null = ainda não existe). */
   analysis: { face: string | null; matte: string | null }
 }
@@ -126,6 +127,8 @@ export type SourceInfo = {
   primary?: boolean
   /** Telas: tamanho em pixels físicos. */
   sizePx?: Size
+  /** Janelas (C1): o programa é um navegador. `chromium`: o Tomada mede a página e corta as abas sozinho; `gecko` (Firefox): só reconhecido. */
+  browser?: 'chromium' | 'gecko'
 }
 
 export type PrepareResult = {
@@ -307,7 +310,7 @@ export type ExportJob = {
   screenUrl: string | null
   cameraUrl: string | null
   /** URLs dos eventos. */
-  eventUrls: { cursor: string | null; clicks: string | null; keys: string | null }
+  eventUrls: { cursor: string | null; clicks: string | null; keys: string | null; contentRect: string | null }
   /** A análise do rosto na câmera (enquadramento), ou null se ainda não existe. */
   faceUrl: string | null
   /** O recorte do fundo da câmera (vídeo da máscara) que vale para a câmera de agora, ou null se não existe. O apresentador recortado precisa dele. */
@@ -405,6 +408,8 @@ export type IpcContract = {
   'derived:thumbs': { args: [id: string]; result: ThumbsData | null }
   /** Nível do áudio por quadro (microfone e som do computador) para a limpeza de silêncio. */
   'derived:levels': { args: [id: string]; result: Levels | null }
+  /** Recorte da tela SUGERIDO por análise de quadros (C1, fallback sem a página medida); `null` = nenhuma barra de navegador achada. */
+  'derived:crop-suggest': { args: [id: string]; result: CropSuggestion | null }
 
   // Análise da câmera (M4c): o rosto (enquadramento). A interface só diz QUAL projeto e o tipo; o main resolve o vídeo e grava o resultado.
   'camera:status': { args: []; result: CameraView }
@@ -576,6 +581,7 @@ export type TomadaApi = {
     previewAudio(id: string): Promise<PreviewAudioData | null>
     thumbs(id: string): Promise<ThumbsData | null>
     levels(id: string): Promise<Levels | null>
+    cropSuggest(id: string): Promise<CropSuggestion | null>
   }
   camera: {
     status(): Promise<CameraView>

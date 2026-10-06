@@ -5,6 +5,7 @@
  * retângulo) está em `@shared/recording`.
  */
 import { desktopCapturer, screen, type Session } from 'electron'
+import { browserOfExe } from '@shared/browser'
 import type { SourceInfo } from '@shared/ipc'
 import { resolveScreenRect, type MonitorRect } from '@shared/recording'
 import type { Rect } from '@shared/types'
@@ -73,7 +74,14 @@ export function createSourceProvider(deps: SourceProviderDeps): ElectronSourcePr
         } else if (s.id.startsWith('window:')) {
           if (own.has(hwndOfSourceId(s.id))) continue
           if (s.name.trim() === '') continue
-          windows.push({ id: s.id, kind: 'window', name: s.name, thumbnail: jpeg(s.thumbnail) })
+          // C1: marca as janelas de navegador (a página é medida e as abas saem do vídeo sozinhas)
+          let browser: SourceInfo['browser']
+          try {
+            browser = browserOfExe(loadWin32().imagePath(hwndOfSourceId(s.id)))?.engine
+          } catch {
+            browser = undefined
+          }
+          windows.push({ id: s.id, kind: 'window', name: s.name, thumbnail: jpeg(s.thumbnail), ...(browser ? { browser } : {}) })
         }
       }
       screens.sort((a, b) => Number(b.primary) - Number(a.primary) || a.name.localeCompare(b.name, 'pt-BR', { numeric: true }))

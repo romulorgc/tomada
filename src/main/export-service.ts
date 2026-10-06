@@ -58,6 +58,7 @@ import { pathExists } from './fs-utils'
 import type { Logger } from './logger'
 import type { OutputDirs } from './path-guard'
 import { assertDocumentPaths, isInside, resolveProjectFile } from './project-files'
+import { createTmpDirIn, removeTmpDir, type ExclusiveDir } from './safe-output'
 
 /** Diferença máxima aceita entre a duração do áudio e a do vídeo (ms). */
 export const MAX_AV_DIFF_MS = 50
@@ -139,6 +140,11 @@ type Run = {
   win: ExporterWindow | null
   /** Pasta onde o arquivo final (e o temporário, ao lado dele) é gravado. */
   outDir: string
+  /**
+   * Pasta temporária EXCLUSIVA (nome sorteado pelo sistema, criada no começo da execução, vazia) e os arquivos dentro dela. Um nome
+   * previsível (`.tmp-<id>`) deixaria quem plantou um link ali receber o que o ffmpeg e a janela de vídeo escrevem.
+   */
+  tmp: ExclusiveDir | null
   tmpDir: string
   videoPath: string
   audioPath: string
@@ -346,7 +352,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     // passe 1: mede (ffmpeg imprime o JSON do loudnorm no stderr)
     const voiceMutes = project.mutes?.filter((m) => m.enabled).map((m) => ({ start: m.start, end: m.end }))
     const graph1 = buildAudioGraph({ kept, voice, system, mode: 'measure', ...(voiceMutes?.length ? { voiceMutes } : {}) })
-    const graphFile1 = join(run.tmpDir, 'audio-medir.txt')
+    const graphFile1 = await run.tmp!.file('audio-medir.txt')
     await writeFile(graphFile1, graph1.graph, 'utf8')
     const measureRun = await ff.run(buildMeasureArgs({ inputs, graphFile: graphFile1 }), {
       signal,
@@ -360,7 +366,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
 
     // passe 2: aplica
     const graph2 = buildAudioGraph({ kept, voice, system, mode: 'final', measured, ...(voiceMutes?.length ? { voiceMutes } : {}) })
-    const graphFile2 = join(run.tmpDir, 'audio-final.txt')
+    const graphFile2 = await run.tmp!.file('audio-final.txt')
     await writeFile(graphFile2, graph2.graph, 'utf8')
     await ff.run(buildAudioArgs({ inputs, graphFile: graphFile2, output: run.audioPath, durationMs: outMs, ...(bitrate ? { bitrate } : {}) }), {
       signal,
@@ -400,8 +406,13 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     try {
       if (!ff) throw new ExportError('Não encontrei o ffmpeg. Escolha o ffmpeg nos Ajustes e tente de novo.')
       const exportsDir = run.outDir
-      await mkdir(run.tmpDir, { recursive: true })
-      run.handle = await open(run.videoPath, 'w+')
+      const tmp = await createTmpDirIn(exportsDir, '.tmp-')
+      run.tmp = tmp
+      run.tmpDir = tmp.dir
+      run.videoPath = await tmp.file('video.mp4')
+      run.audioPath = await tmp.file('audio.m4a')
+      run.partialFinal = await tmp.file('saida.parcial')
+      run.handle = await open(run.videoPath, 'wx+')
       await assertProtection(run)
 
       const label = run.req.format === 'vertical' ? `vertical 1080×1920 ${run.req.fps}` : `${EXPORT_RESOLUTION_LABEL[run.req.resolution]}${run.req.fps}`
@@ -493,7 +504,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       run.handle = null
       // parcial nunca fica com cara de bom: some tudo que não é o arquivo final (o parcial mora no tmpDir; o nome
       // definitivo só existe depois de pronto, então nenhum arquivo do usuário é apagado aqui)
-      await rm(run.tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined)
+      if (run.tmpDir) await removeTmpDir(run.tmpDir, logger)
       current = null
     }
   }
@@ -658,7 +669,6 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         const stem = clip ? `${String(clipNumber).padStart(2, '0')} - ${sanitizeFileName(project.title, 'Corte')}` : exportFileName(project.title, request).replace(/\.mp4$/, '')
         const unique = uniqueName(stem, (n) => existsSync(join(exportsDir, `${n}.mp4`)))
         const finalPath = join(exportsDir, `${unique}.mp4`)
-        const tmpDir = join(exportsDir, `.tmp-${id.slice(0, 8)}`)
         const clipLayout = clip ? (itemOf(stored, clip.id).layout ?? (clip.layoutV !== 'auto' ? clip.layoutV : undefined)) : undefined
         const job: ExportJob = {
           exportId: id,
@@ -678,7 +688,8 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
           eventUrls: {
             cursor: await eventUrl(request.projectId, dir, EVENT_FILES.cursor),
             clicks: await eventUrl(request.projectId, dir, EVENT_FILES.clicks),
-            keys: await eventUrl(request.projectId, dir, EVENT_FILES.keys)
+            keys: await eventUrl(request.projectId, dir, EVENT_FILES.keys),
+            contentRect: await eventUrl(request.projectId, dir, EVENT_FILES.contentRect)
           },
           // a análise do rosto (enquadramento da câmera): o exportador enquadra como a prévia
           faceUrl: await eventUrl(request.projectId, dir, FACE_FILE),
@@ -705,12 +716,13 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
           placedText: null,
           win: null,
           outDir: exportsDir,
-          tmpDir,
-          videoPath: join(tmpDir, 'video.mp4'),
-          audioPath: join(tmpDir, 'audio.m4a'),
+          tmp: null,
+          tmpDir: '',
+          videoPath: '',
+          audioPath: '',
           stem,
           finalPath,
-          partialFinal: join(tmpDir, 'saida.parcial'),
+          partialFinal: '',
           files,
           handle: null,
           progress: {

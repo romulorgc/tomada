@@ -157,9 +157,14 @@ function CameraPreview({ stream, loading, guide = false }: { stream: MediaStream
 
 function SourceCard({ source, selected, onSelect }: { source: SourceInfo; selected: boolean; onSelect: () => void }) {
   return (
-    <button type="button" className="source-card" aria-pressed={selected} onClick={onSelect} data-testid="source-card" data-source-id={source.id} data-kind={source.kind}>
+    <button type="button" className="source-card" aria-pressed={selected} onClick={onSelect} data-testid="source-card" data-source-id={source.id} data-kind={source.kind} data-browser={source.browser}>
       <span className="thumb">
         {source.thumbnail ? <img src={source.thumbnail} alt="" /> : <span className="viewfinder" />}
+        {source.browser ? (
+          <span className="absolute left-2 top-2 rounded-full bg-surface px-2 py-0.5 text-[0.6875rem] font-semibold text-ink shadow-sm" data-testid="browser-badge">
+            {source.browser === 'chromium' ? t.record.source.browserBadge : t.record.source.browserBadgeOther}
+          </span>
+        ) : null}
         {selected ? (
           <span className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full bg-rec text-rec-ink">
             <CheckIcon size={14} />
@@ -404,6 +409,9 @@ export function Record() {
                   </button>
                 </div>
               </div>
+              <p className="mb-4 text-[0.875rem] text-muted" data-testid="browser-hint">
+                {t.record.source.browserHint}
+              </p>
               {sourcesError ? (
                 <ErrorPanel title={t.record.source.loadFailed} detail={sourcesError} onRetry={() => void loadSources()} />
               ) : sources === null ? (

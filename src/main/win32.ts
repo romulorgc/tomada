@@ -7,6 +7,7 @@
  * Não importa `electron`.
  */
 import koffi from 'koffi'
+import type { ChildWindow } from '@shared/browser'
 import type { MonitorRect } from '@shared/recording'
 import type { Point, Rect } from '@shared/types'
 
@@ -16,6 +17,7 @@ const VK_RBUTTON = 0x02
 const VK_MBUTTON = 0x04
 const SM_SWAPBUTTON = 23
 const MONITORINFOF_PRIMARY = 1
+const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 /**
  * Teclas que contam como "houve digitação": 0x08..0xFE menos mouse, modificadores
@@ -41,6 +43,10 @@ export interface Win32 {
   /** Área de cliente em coordenadas de tela. */
   clientRect(hwnd: number): Rect | null
   foregroundWindow(): number
+  /** As janelas-filhas (todas, em qualquer profundidade) com classe, visibilidade e retângulo de tela (C1: a página do navegador). */
+  childWindows(hwnd: number): ChildWindow[]
+  /** Caminho do executável dono da janela (null se o Windows não deixa ler). Para saber se é um navegador. */
+  imagePath(hwnd: number): string | null
   /** Lista de monitores (retângulo físico + se é o principal). */
   monitors(): MonitorRect[]
   /** SM_SWAPBUTTON: a interface trocou esquerdo e direito. */
@@ -81,6 +87,22 @@ export function loadWin32(): Win32 {
   const GetClientRect = user32.func('int __stdcall GetClientRect(intptr_t hwnd, _Out_ RECT *r)')
   const ClientToScreen = user32.func('int __stdcall ClientToScreen(intptr_t hwnd, _Inout_ POINT *p)')
   const GetForegroundWindow = user32.func('intptr_t __stdcall GetForegroundWindow()')
+  const WindowEnumProc = koffi.proto('int __stdcall WindowEnumProc(intptr_t hwnd, intptr_t lparam)')
+  const EnumChildWindows = user32.func('int __stdcall EnumChildWindows(intptr_t parent, WindowEnumProc *cb, intptr_t lparam)')
+  const GetClassNameW = user32.func('int __stdcall GetClassNameW(intptr_t hwnd, _Out_ uint16_t *buf, int n)')
+  const IsWindowVisible = user32.func('int __stdcall IsWindowVisible(intptr_t hwnd)')
+  const GetWindowRect = user32.func('int __stdcall GetWindowRect(intptr_t hwnd, _Out_ RECT *r)')
+  const GetWindowThreadProcessId = user32.func('uint32 __stdcall GetWindowThreadProcessId(intptr_t hwnd, _Out_ uint32 *pid)')
+  // um callback só, reaproveitado a cada leitura (a página do navegador é lida a 10 Hz)
+  const collected: number[] = []
+  const childCb = koffi.register((h: number) => {
+    collected.push(Number(h))
+    return 1
+  }, koffi.pointer(WindowEnumProc))
+  const kernel32 = koffi.load('kernel32.dll')
+  const OpenProcess = kernel32.func('intptr_t __stdcall OpenProcess(uint32 access, int inherit, uint32 pid)')
+  const CloseHandle = kernel32.func('int __stdcall CloseHandle(intptr_t h)')
+  const QueryFullProcessImageNameW = kernel32.func('int __stdcall QueryFullProcessImageNameW(intptr_t process, uint32 flags, _Out_ uint16_t *buf, _Inout_ uint32 *size)')
   const DwmGetWindowAttribute = dwmapi.func('long __stdcall DwmGetWindowAttribute(intptr_t hwnd, uint32 attr, _Out_ RECT *out, uint32 size)')
   const timeBeginPeriod = winmm.func('uint32 __stdcall timeBeginPeriod(uint32 ms)')
   const timeEndPeriod = winmm.func('uint32 __stdcall timeEndPeriod(uint32 ms)')
@@ -141,6 +163,36 @@ export function loadWin32(): Win32 {
       return { x: origin.x, y: origin.y, w: c.right - c.left, h: c.bottom - c.top }
     },
     foregroundWindow: () => Number(GetForegroundWindow()),
+    childWindows(hwnd) {
+      collected.length = 0
+      EnumChildWindows(hwnd, childCb, 0)
+      const handles = collected.slice()
+      collected.length = 0
+      const out: ChildWindow[] = []
+      const nameBuf = Buffer.alloc(512)
+      for (const h of handles) {
+        const n = GetClassNameW(h, nameBuf, 256)
+        if (n <= 0) continue
+        const r = { left: 0, top: 0, right: 0, bottom: 0 }
+        if (!GetWindowRect(h, r)) continue
+        out.push({ className: nameBuf.toString('utf16le', 0, n * 2), visible: IsWindowVisible(h) !== 0, rect: toRect(r) })
+      }
+      return out
+    },
+    imagePath(hwnd) {
+      const pid = [0]
+      GetWindowThreadProcessId(hwnd, pid)
+      if (!pid[0]) return null
+      const proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid[0])
+      if (!proc) return null
+      try {
+        const buf = Buffer.alloc(2 * 1024)
+        const size = [1024]
+        return QueryFullProcessImageNameW(proc, 0, buf, size) ? buf.toString('utf16le', 0, size[0]! * 2) : null
+      } finally {
+        CloseHandle(proc)
+      }
+    },
     monitors() {
       const out: MonitorRect[] = []
       const handles: number[] = []

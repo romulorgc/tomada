@@ -311,6 +311,7 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'derived:preview-audio': (id) => derived.previewAudio(id),
     'derived:thumbs': (id) => derived.thumbs(id),
     'derived:levels': (id) => derived.levels(id),
+    'derived:crop-suggest': (id) => derived.cropSuggest(id),
 
     'camera:status': () => camera.view(),
     'camera:prepare': () => camera.prepare(),

@@ -85,7 +85,8 @@ const api: TomadaApi = {
     peaks: (id) => invoke('derived:peaks', id),
     previewAudio: (id) => invoke('derived:preview-audio', id),
     thumbs: (id) => invoke('derived:thumbs', id),
-    levels: (id) => invoke('derived:levels', id)
+    levels: (id) => invoke('derived:levels', id),
+    cropSuggest: (id) => invoke('derived:crop-suggest', id)
   },
   camera: {
     status: () => invoke('camera:status'),

@@ -429,3 +429,107 @@ describe('cancelar e descartar', () => {
     await world.service.abort('teste')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Recorte do navegador (C1): a página medida vira content-rect.jsonl, o documento nasce com o recorte automático
+
+describe('a página do navegador na gravação (C1)', () => {
+  const frame = WINDOW_SOURCE.rectPx
+  const client = { ...frame, x: frame.x + 1, y: frame.y + 38, w: frame.w - 2, h: frame.h - 39 }
+  /** A página: abaixo de 108 px de barras, com 1 px de borda dos lados. */
+  const page = { x: frame.x + 1, y: frame.y + 108, w: frame.w - 2, h: frame.h - 109 }
+  const windowRaw = (content?: typeof page, later?: typeof page): RawEvents => {
+    const raw = rawEvents('window')
+    raw.windowRects = [{ t: T0 - 60, frame, client, ...(content ? { content } : {}) }]
+    if (later) raw.windowRects.push({ t: T0 + 1500, frame, client, content: later })
+    return raw
+  }
+  const winRequest: RecordRequest = { ...baseRequest, sourceId: 'window:4242:0', mode: 'screen', cameraId: null }
+  // (os arquivos brutos só existem depois do beforeAll: nada de ler rawScreen na hora de montar o describe)
+  const winInfo = { cameraHasVideo: false, cameraSize: null, frame: { w: 984, h: 742 } }
+
+  async function run(over: { source?: typeof WINDOW_SOURCE | typeof SCREEN_SOURCE; browser?: { exe: string; engine: 'chromium' | 'gecko' } | null; raw: RawEvents; request?: RecordRequest; info?: Partial<StartedInfo> }) {
+    const { world, root } = newWorld({ source: over.source ?? WINDOW_SOURCE })
+    if (over.browser !== undefined) world.trackerResult.browser = over.browser
+    const request = over.request ?? winRequest
+    const { prepared } = await record(world, request, { raw: over.raw, files: { screen: rawScreen, mic: rawMic }, info: { ...winInfo, ...over.info } })
+    const snap = await waitDone(world)
+    expect(snap.status, snap.error?.message).toBe('done')
+    const dir = join(root, prepared.folder)
+    return { dir, snap, project: parseProject(readFileSync(join(dir, 'project.json'), 'utf8')), world }
+  }
+  const lines = (file: string): { t: number; x: number; y: number; w: number; h: number }[] =>
+    readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { t: number; x: number; y: number; w: number; h: number })
+
+  it('janela do Chrome: grava content-rect.jsonl (normalizado no quadro), o recorte nasce AUTOMÁTICO e o navegador fica anotado', async () => {
+    const { dir, project } = await run({ browser: { exe: 'chrome.exe', engine: 'chromium' }, raw: windowRaw(page) })
+    const rects = lines(join(dir, 'events/content-rect.jsonl'))
+    expect(rects).toHaveLength(1)
+    expect(rects[0]!.t).toBe(0)
+    expect(rects[0]!.x).toBeCloseTo(1 / 984, 4)
+    expect(rects[0]!.y).toBeCloseTo(108 / 742, 4)
+    expect(rects[0]!.w).toBeCloseTo(982 / 984, 4)
+    expect(rects[0]!.h).toBeCloseTo(633 / 742, 4)
+    expect(project.screenCrop).toEqual({ mode: 'auto' })
+    expect(project.capture.browser).toEqual({ exe: 'chrome.exe', engine: 'chromium', contentRect: true })
+  }, 120_000)
+
+  it('a página muda no meio (DevTools): uma linha nova no instante certo', async () => {
+    const narrow = { ...page, w: 400 }
+    const { dir } = await run({ browser: { exe: 'msedge.exe', engine: 'chromium' }, raw: windowRaw(page, narrow) })
+    const rects = lines(join(dir, 'events/content-rect.jsonl'))
+    expect(rects).toHaveLength(2)
+    expect(rects[1]!.t).toBeGreaterThan(1400)
+    expect(rects[1]!.t).toBeLessThan(1700)
+    expect(rects[1]!.w).toBeCloseTo(400 / 984, 4)
+  }, 120_000)
+
+  it('Firefox: reconhecido, mas a página NÃO é medida — sem recorte automático e um aviso que diz o que fazer', async () => {
+    const { dir, project, snap } = await run({ browser: { exe: 'firefox.exe', engine: 'gecko' }, raw: windowRaw() })
+    expect(existsSync(join(dir, 'events/content-rect.jsonl'))).toBe(false)
+    expect(project.screenCrop).toBeUndefined()
+    expect(project.capture.browser).toEqual({ exe: 'firefox.exe', engine: 'gecko', contentRect: false })
+    expect(snap.notes.join(' ')).toMatch(/Firefox/)
+    expect(snap.notes.join(' ')).toMatch(/Recorte da tela/)
+  }, 120_000)
+
+  it('navegador Chromium cuja página não foi medida: aviso visível, o vídeo fica com a janela inteira', async () => {
+    const { dir, project, snap } = await run({ browser: { exe: 'chrome.exe', engine: 'chromium' }, raw: windowRaw() })
+    expect(existsSync(join(dir, 'events/content-rect.jsonl'))).toBe(false)
+    expect(project.screenCrop).toBeUndefined()
+    expect(snap.notes.join(' ')).toMatch(/não consegui medir a página/i)
+  }, 120_000)
+
+  it('janela de outro programa: nada de recorte, nada de navegador no documento', async () => {
+    const { dir, project, snap } = await run({ browser: null, raw: windowRaw() })
+    expect(existsSync(join(dir, 'events/content-rect.jsonl'))).toBe(false)
+    expect(project.screenCrop).toBeUndefined()
+    expect(project.capture.browser).toBeUndefined()
+    expect(snap.notes.join(' ')).not.toMatch(/Firefox|navegador/)
+  }, 120_000)
+
+  it('captura de TELA: a página do navegador em primeiro plano é registrada, mas o recorte NÃO liga sozinho (ambíguo)', async () => {
+    const raw = rawEvents('screen')
+    const monitor = SCREEN_SOURCE.rectPx
+    raw.pages = [
+      { t: T0 - 60, rect: null },
+      { t: T0 + 600, rect: { x: monitor.x + 100, y: monitor.y + 150, w: 1400, h: 800 }, exe: 'chrome.exe' },
+      { t: T0 + 2000, rect: null }
+    ]
+    const { dir, project } = await run({ source: SCREEN_SOURCE, raw, request: { ...baseRequest, mode: 'screen', cameraId: null }, info: { frame: { w: 1920, h: 1080 } } })
+    const rects = lines(join(dir, 'events/content-rect.jsonl'))
+    expect(rects.map((r) => r.w)).toEqual([1, expect.closeTo(1400 / 1920, 4), 1])
+    expect(rects[1]!.x).toBeCloseTo(100 / 1920, 4)
+    expect(rects[1]!.y).toBeCloseTo(150 / 1080, 4)
+    expect(project.screenCrop).toBeUndefined()
+    expect(project.capture.browser).toEqual({ exe: 'chrome.exe', engine: 'chromium', contentRect: true })
+  }, 120_000)
+
+  it('captura de tela sem navegador à frente: nenhum arquivo', async () => {
+    const raw = rawEvents('screen')
+    raw.pages = [{ t: T0 - 60, rect: null }]
+    const { dir, project } = await run({ source: SCREEN_SOURCE, raw, request: { ...baseRequest, mode: 'screen', cameraId: null }, info: { frame: { w: 1920, h: 1080 } } })
+    expect(existsSync(join(dir, 'events/content-rect.jsonl'))).toBe(false)
+    expect(project.capture.browser).toBeUndefined()
+  }, 120_000)
+})

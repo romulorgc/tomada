@@ -3,6 +3,7 @@
  * parar. Não importa `electron` (testável em Node).
  */
 import { Worker } from 'node:worker_threads'
+import type { BrowserKind } from '@shared/browser'
 import type { RawEvents } from '@shared/recording'
 import type { Logger } from './logger'
 import type { TrackerMessage, TrackerStats, TrackerWorkerData } from './tracker-worker'
@@ -22,6 +23,8 @@ export type TrackerResult = {
   windowGone: boolean
   /** Erro do worker (se houve): a gravação segue, mas os eventos podem estar incompletos. */
   error: string | null
+  /** Janela gravada que é um navegador (C1): qual (Chromium mede a página; Firefox só é reconhecido). */
+  browser?: BrowserKind | null
 }
 
 export interface Tracker {
@@ -48,7 +51,8 @@ const STOP_TIMEOUT_MS = 4000
 export function createTracker(config: TrackerConfig, deps: TrackerDeps): Tracker {
   const { logger } = deps
   const control = new Int32Array(new SharedArrayBuffer(16))
-  const raw: RawEvents = { cursor: [], clicks: [], keys: [], windowRects: [] }
+  const raw: RawEvents = { cursor: [], clicks: [], keys: [], windowRects: [], pages: [] }
+  let browser: BrowserKind | null = null
   let worker: Worker | null = null
   let stats: TrackerStats | null = null
   let windowGone = false
@@ -63,6 +67,10 @@ export function createTracker(config: TrackerConfig, deps: TrackerDeps): Tracker
         for (const c of m.clicks) raw.clicks.push(c)
         for (const k of m.keys) raw.keys.push(k)
         for (const r of m.windowRects) raw.windowRects.push(r)
+        for (const p of m.pages) raw.pages!.push(p)
+        break
+      case 'browser':
+        browser = m.browser
         break
       case 'window-gone':
         windowGone = true
@@ -173,7 +181,7 @@ export function createTracker(config: TrackerConfig, deps: TrackerDeps): Tracker
           `Rastreador: ${stats.ticks} amostras em ${stats.seconds.toFixed(1)} s (${stats.hz.toFixed(1)} Hz; intervalo mediano ${stats.intervalMedianMs.toFixed(2)} ms, p95 ${stats.intervalP95Ms.toFixed(2)} ms, máx ${stats.intervalMaxMs.toFixed(1)} ms)`
         )
       }
-      return { raw, stats, windowGone, error }
+      return { raw, stats, windowGone, error, browser }
     }
   }
 }

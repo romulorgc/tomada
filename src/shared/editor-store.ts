@@ -21,6 +21,7 @@
  * `useStore(store, seletor)`.
  */
 import { createStore, type StoreApi } from 'zustand/vanilla'
+import type { CropLockId } from './crop-drag'
 import type { Project } from './types'
 import { mergeFormatView, projectForFormat } from './vertical'
 import { preserveManualDecisions } from './review'
@@ -33,6 +34,9 @@ export const AUTOSAVE_MS = 500
 export const COALESCE_MS = 900
 
 export type SaveStatus = 'saved' | 'saving' | 'error'
+
+/** Estado de INTERFACE do recorte da tela (C1): o editor do retângulo sobre a tela inteira e a proporção travada. Não é do documento. */
+export type CropUi = { editing: boolean; lock: CropLockId | null }
 
 export type SelectionKind = 'zoom' | 'layout' | 'cut' | 'blur'
 export type Selection = { kind: SelectionKind; id: string } | null
@@ -67,6 +71,8 @@ export type EditorState = {
   /** Mostra na prévia as zonas da interface das plataformas (só o vertical; nunca vai para a exportação). */
   safeGuide: boolean
   blurDrawing: boolean
+  /** O editor do recorte da tela (retângulo arrastável sobre a tela inteira) está aberto? (C1) */
+  cropUi: CropUi
   undoCount: number
   redoCount: number
   saveStatus: SaveStatus
@@ -82,6 +88,7 @@ export type EditorState = {
   setFormat(format: FormatKind): void
   setSafeGuide(on: boolean): void
   setBlurDrawing(on: boolean): void
+  setCropUi(patch: Partial<CropUi>): void
   /** Começa um gesto contínuo (arraste): tudo até `end()` vira UM passo de desfazer. */
   begin(): void
   end(): void
@@ -189,6 +196,7 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
       format: 'horizontal',
       safeGuide: false,
       blurDrawing: false,
+      cropUi: { editing: false, lock: null },
       undoCount: 0,
       redoCount: 0,
       saveStatus: 'saved',
@@ -217,6 +225,7 @@ export function createEditorStore(deps: EditorDeps): EditorStore {
 
       setSafeGuide: (on) => set({ safeGuide: on }),
       setBlurDrawing: (on) => set({ blurDrawing: on }),
+      setCropUi: (patch) => set({ cropUi: { ...get().cropUi, ...patch } }),
 
       begin() {
         if (group) return

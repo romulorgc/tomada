@@ -15,7 +15,7 @@ import { regenerateZooms } from '@shared/edits'
 import { formatSpan } from '@shared/format'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
-import { HORIZONTAL_1080, VERTICAL_1080, deriveProject, prepareEvents, usesPresenter, type CursorData } from '@shared/scene'
+import { HORIZONTAL_1080, VERTICAL_1080, applyScreenCrop, deriveProject, prepareEvents, usesPresenter, type CursorData } from '@shared/scene'
 import type { Transcript } from '@shared/types'
 import { projectForFormat, ensureVertical } from '@shared/vertical'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
@@ -222,19 +222,26 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   const [engineGen, setEngineGen] = useState(0)
 
   // --- eventos (cursor, cliques, teclas) ------------------------------------------------------------------
-  const [cursorData, setCursorData] = useState<CursorData | null>(null)
+  // `rawData` são os eventos da tela inteira; `cursorData` é o que o resto do editor usa: o MESMO já com o recorte da tela (C1) aplicado
+  // (cursor e cliques no espaço do recorte), então os zooms nascem do que o recorte mostra.
+  const [rawData, setRawData] = useState<CursorData | null>(null)
   const [eventsError, setEventsError] = useState<string | null>(null)
   useEffect(() => {
     let alive = true
     void (async () => {
       try {
-        const [cursor, clicks, keys] = await Promise.all([fetchText(detail.events.cursor), fetchText(detail.events.clicks), fetchText(detail.events.keys)])
-        if (alive) setCursorData(prepareEvents(eventsFromText({ cursor, clicks, keys }), durationMs))
+        const [cursor, clicks, keys, contentRect] = await Promise.all([
+          fetchText(detail.events.cursor),
+          fetchText(detail.events.clicks),
+          fetchText(detail.events.keys),
+          fetchText(detail.events.contentRect)
+        ])
+        if (alive) setRawData(prepareEvents(eventsFromText({ cursor, clicks, keys, contentRect }), durationMs))
       } catch (err) {
         window.tomada.log({ level: 'error', message: 'Falha ao ler os eventos do projeto', detail: messageOf(err) })
         if (alive) {
           setEventsError(messageOf(err))
-          setCursorData(prepareEvents({ cursor: [], clicks: [], keys: [] }, durationMs))
+          setRawData(prepareEvents({ cursor: [], clicks: [], keys: [] }, durationMs))
         }
       }
     })()
@@ -323,6 +330,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   }, [matteJob])
 
   // --- cena -----------------------------------------------------------------------------------------------
+  const cursorData = useMemo(() => (rawData ? applyScreenCrop(rawData, project) : null), [rawData, project.screenCrop, project.sources.screen])
   const format = useStore(store, (s) => s.format)
   const formatRef = useRef(format)
   formatRef.current = format
@@ -619,6 +627,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       playback,
       engineRef,
       cursorData,
+      rawData,
       eventsError,
       derived,
       sceneDerived,
@@ -640,7 +649,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, store, playback, cursorData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
+    [detail, store, playback, cursorData, rawData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (

@@ -71,7 +71,7 @@ async function world(initial: Project, options: { gate?: Promise<void>; transcri
     store: store as unknown as ProjectStore,
     exporter: exporter as unknown as ExportService,
     transcription: transcription as unknown as TranscriptionService,
-    derived: { levels: async () => null, peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, idle: async () => undefined, shutdown: () => undefined },
+    derived: { levels: async () => null, peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, cropSuggest: async () => null, idle: async () => undefined, shutdown: () => undefined },
     llm: { provider: () => options.provider ?? null } as unknown as LlmManager,
     ...(options.camera ? { camera: options.camera as unknown as NonNullable<Parameters<typeof createAutopilot>[0]['camera']> } : {}),
     logger: createMemoryLogger(), prefs: () => prefs, emit: vi.fn(), ready

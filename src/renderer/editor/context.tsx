@@ -26,8 +26,10 @@ export type EditorCtx = {
   store: EditorStore
   playback: PlaybackStore
   engineRef: MutableRefObject<PreviewEngine | null>
-  /** Eventos do cursor, depois de lidos (null enquanto carrega). */
+  /** Eventos do cursor, depois de lidos, JÁ no espaço do recorte da tela (null enquanto carrega). */
   cursorData: CursorData | null
+  /** Os mesmos eventos na tela inteira, sem recorte (de onde o recorte parte; C1). */
+  rawData: CursorData | null
   eventsError: string | null
   /** A cena do vídeo (do formato aberto): a linha do tempo e o diálogo de exportar usam esta. */
   derived: Derived | null

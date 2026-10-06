@@ -15,6 +15,7 @@ import type { Range, Transcript } from '@shared/types'
 import { writeFileAtomic } from '../fs-utils'
 import type { Logger } from '../logger'
 import { ProcessError, runProcess, tail } from '../process-runner'
+import { createTmpDirIn, removeTmpDir } from '../safe-output'
 import { downloadFile, DownloadError } from './download'
 import { explain, detectNvidiaGpu, type GpuInfo } from './faster-whisper'
 import { bytesLine, type PrepareTracker } from './prepare-tracker'
@@ -224,8 +225,9 @@ export function createWhisperCpp(deps: WhisperCppDeps): Transcriber {
     const marker = await readMarker()
     const state = await check()
     if (!marker || state.state !== 'ready') throw new Error(state.detail ?? 'O whisper.cpp não está preparado.')
-    await mkdir(tools.tmp, { recursive: true })
-    const base = join(tools.tmp, `wcpp-${process.pid}-${Date.now()}`)
+    // O whisper.cpp escreve `<base>.json`: numa pasta EXCLUSIVA (nome sorteado, vazia), nunca num nome que dê para adivinhar (pid + hora)
+    const work = await createTmpDirIn(tools.tmp, 'wcpp-')
+    const base = await work.file('resultado')
     const started = performance.now()
     const args = [
       '-m',
@@ -306,7 +308,7 @@ export function createWhisperCpp(deps: WhisperCppDeps): Transcriber {
       opts.onProgress?.(1)
       return transcript
     } finally {
-      await rm(`${base}.json`, { force: true }).catch(() => undefined)
+      await removeTmpDir(work.dir, logger)
     }
   }
 

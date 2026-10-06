@@ -7,6 +7,9 @@
  * 1 ms de resolução de timer ao Windows (sem isso o sono mínimo é 15,6 ms e a taxa cai
  * para ~64 Hz; medido).
  *
+ * C1: em janela de navegador Chromium também mede a PÁGINA (janela-filha `Chrome_RenderWidgetHostHWND`) junto do retângulo da
+ * janela; em captura de TELA, mede a página do navegador que estiver em primeiro plano (ou "nenhuma").
+ *
  * Tempo: `performance.timeOrigin + performance.now()` (ms, relógio de parede estável e
  * monotônico). Pixels FÍSICOS. Nada é normalizado aqui: quem converte é `buildEvents`.
  *
@@ -14,6 +17,7 @@
  *   control[0] célula de sono · control[1] pausado · control[2] parar.
  */
 import { parentPort, workerData } from 'node:worker_threads'
+import { browserOfExe, pickChromiumPage, type BrowserKind } from '../shared/browser'
 import type { MouseButton, Rect } from '@shared/types'
 import { loadWin32, TYPING_VKS } from './win32'
 
@@ -32,7 +36,10 @@ export type TrackerBatch = {
   cursor: number[]
   clicks: { t: number; upT?: number; x: number; y: number; button: MouseButton }[]
   keys: number[]
-  windowRects: { t: number; frame: Rect; client: Rect }[]
+  /** `content`: a página do navegador (px de tela), só em janela Chromium; ausente = não medida. */
+  windowRects: { t: number; frame: Rect; client: Rect; content?: Rect | null }[]
+  /** Captura de TELA: a página do navegador em primeiro plano (`null` = nenhum navegador à frente). Só quando muda. */
+  pages: { t: number; rect: Rect | null; exe?: string }[]
 }
 
 export type TrackerStats = {
@@ -48,6 +55,7 @@ export type TrackerMessage =
   | { type: 'ready'; t: number }
   | TrackerBatch
   | { type: 'window-gone'; t: number }
+  | { type: 'browser'; browser: BrowserKind | null }
   | { type: 'stopped'; stats: TrackerStats }
   | { type: 'error'; message: string }
 
@@ -73,15 +81,36 @@ function run(): void {
 
   let batch: TrackerBatch = emptyBatch()
   function emptyBatch(): TrackerBatch {
-    return { type: 'batch', cursor: [], clicks: [], keys: [], windowRects: [] }
+    return { type: 'batch', cursor: [], clicks: [], keys: [], windowRects: [], pages: [] }
   }
+  const hasData = (b: TrackerBatch): boolean => b.cursor.length > 0 || b.clicks.length > 0 || b.keys.length > 0 || b.windowRects.length > 0 || b.pages.length > 0
+
+  // Qual programa é dono de cada janela (só importa para saber se é navegador); lido uma vez por janela.
+  const kinds = new Map<number, BrowserKind | null>()
+  const browserOf = (h: number): BrowserKind | null => {
+    if (kinds.has(h)) return kinds.get(h) ?? null
+    if (kinds.size > 64) kinds.clear()
+    let kind: BrowserKind | null = null
+    try {
+      kind = browserOfExe(w32.imagePath(h))
+    } catch {
+      kind = null
+    }
+    kinds.set(h, kind)
+    return kind
+  }
+  const windowBrowser = cfg.kind === 'window' && hwnd !== null ? browserOf(hwnd) : null
+  if (cfg.kind === 'window') post({ type: 'browser', browser: windowBrowser })
+  const measurePage = windowBrowser?.engine === 'chromium'
 
   const buttonNames: MouseButton[] = ['left', 'right', 'middle']
   const wasDown: Record<MouseButton, boolean> = { left: false, right: false, middle: false }
   const pending: Record<MouseButton, { t: number; x: number; y: number } | null> = { left: null, right: null, middle: null }
   const keyWasDown = new Uint8Array(256)
 
-  let lastRect: { frame: Rect; client: Rect } | null = null
+  let lastRect: { frame: Rect; client: Rect; content: Rect | null | undefined } | null = null
+  let lastPage: Rect | null = null
+  let lastPageSeen: { rect: Rect | null; exe: string } | null | undefined
   let lastRectAt = Number.NEGATIVE_INFINITY
   let goneReads = 0
   let goneReported = false
@@ -107,10 +136,38 @@ function run(): void {
     const frame = w32.frameRect(hwnd)
     const client = w32.clientRect(hwnd)
     if (!frame || !client) return
-    if (!lastRect || !rectEqual(lastRect.frame, frame) || !rectEqual(lastRect.client, client)) {
-      lastRect = { frame, client }
-      batch.windowRects.push({ t, frame, client })
+    // A página: quando a janela não a devolve neste instante (arraste, recriação), vale a última boa.
+    let content: Rect | null | undefined
+    if (measurePage) {
+      const page = pickChromiumPage(w32.childWindows(hwnd), frame)
+      if (page) lastPage = page
+      content = lastPage
     }
+    const sameContent = !lastRect ? false : lastRect.content === content || (lastRect.content && content ? rectEqual(lastRect.content, content) : false)
+    if (!lastRect || !rectEqual(lastRect.frame, frame) || !rectEqual(lastRect.client, client) || !sameContent) {
+      lastRect = { frame, client, content }
+      batch.windowRects.push({ t, frame, client, ...(content !== undefined ? { content } : {}) })
+    }
+  }
+
+  /** Captura de TELA: a página do navegador Chromium que está em primeiro plano. */
+  const readForegroundPage = (t: number): void => {
+    const fg = w32.foregroundWindow()
+    const kind = fg ? browserOf(fg) : null
+    let rect: Rect | null = null
+    let exe = ''
+    if (fg && kind?.engine === 'chromium' && !w32.isIconic(fg)) {
+      const frame = w32.frameRect(fg)
+      if (frame) {
+        rect = pickChromiumPage(w32.childWindows(fg), frame)
+        exe = kind.exe
+      }
+    }
+    const prev = lastPageSeen
+    const same = prev !== undefined && prev !== null && (prev.rect === rect || (prev.rect && rect ? rectEqual(prev.rect, rect) : false))
+    if (same) return
+    lastPageSeen = { rect, exe }
+    batch.pages.push({ t, rect, ...(rect ? { exe } : {}) })
   }
 
   let nextTick = performance.now()
@@ -150,6 +207,7 @@ function run(): void {
     if (t - lastRectAt >= 100) {
       lastRectAt = t
       readWindowRect(t)
+      if (cfg.kind === 'screen') readForegroundPage(t)
     }
 
     if (!paused) batch.cursor.push(t, pos.x, pos.y)
@@ -165,7 +223,7 @@ function run(): void {
 
     if (performance.now() - lastFlush >= cfg.batchMs) {
       lastFlush = performance.now()
-      if (batch.cursor.length || batch.clicks.length || batch.keys.length || batch.windowRects.length) {
+      if (hasData(batch)) {
         post(batch)
         batch = emptyBatch()
       }
@@ -183,7 +241,7 @@ function run(): void {
     const p = pending[name]
     if (p) batch.clicks.push({ t: p.t, x: p.x, y: p.y, button: name })
   }
-  if (batch.cursor.length || batch.clicks.length || batch.keys.length || batch.windowRects.length) post(batch)
+  if (hasData(batch)) post(batch)
 
   w32.endHighResTimer()
   const sorted = [...intervals].sort((a, b) => a - b)

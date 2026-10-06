@@ -51,6 +51,11 @@ export type NormalizeOptions = {
   durationMs?: number
   /** Completa o rabo estático repetindo o último quadro até esta duração (ver `NormalizeVideoArgs.padToMs`). */
   padToMs?: number
+  /**
+   * Gravação de tela/janela: o tamanho do quadro pode mudar no meio (janela redimensionada). Trava no tamanho do primeiro quadro
+   * (lido da entrada) para o ffmpeg não perder tempo na troca (ver `NormalizeVideoArgs.lockSize`).
+   */
+  lockSize?: boolean
   /** Progresso 0..1 (só chamado quando `durationMs` é informado). */
   onProgress?: (fraction: number, raw: FfmpegProgress) => void
   /** Aviso de bastidor (ex.: NVENC falhou e caiu para libx264). */
@@ -74,6 +79,13 @@ export async function normalizeVideo(ff: Ffmpeg, o: NormalizeOptions): Promise<N
   const source = await ff.probe(o.input)
   const start = Math.min(source.video?.startTimeMs ?? 0, source.audio?.startTimeMs ?? source.video?.startTimeMs ?? 0)
   let encoder = await pickVideoEncoder(ff, o.encoder ?? 'auto')
+  let lockSize: { w: number; h: number } | undefined
+  if (o.lockSize) {
+    const input = await ff.probe(o.input)
+    const w = input.video?.width
+    const h = input.video?.height
+    if (w && h) lockSize = { w, h }
+  }
 
   const attempt = async (enc: VideoEncoder): Promise<void> => {
     const args = buildNormalizeVideoArgs({
@@ -84,7 +96,8 @@ export async function normalizeVideo(ff: Ffmpeg, o: NormalizeOptions): Promise<N
       videoLeadingMs: Math.max(0, (source.video?.startTimeMs ?? start) - start),
       audioLeadingMs: Math.max(0, (source.audio?.startTimeMs ?? start) - start),
       ...(o.keepAudio ? { keepAudio: true } : {}),
-      ...(o.padToMs ? { padToMs: o.padToMs } : {})
+      ...(o.padToMs ? { padToMs: o.padToMs } : {}),
+      ...(lockSize ? { lockSize } : {})
     })
     await ff.run(args, {
       ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),

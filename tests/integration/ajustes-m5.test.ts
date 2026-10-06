@@ -92,7 +92,7 @@ async function build(checkShortcuts?: () => Promise<void>) {
   const handlers = createHandlers({
     info: { name: 'Tomada', version: '0', platform: 'win32', electron: '40', userDataDir: dir, logsDir: dir }, state, store, logger,
     ...extras, diagnostics: system, recording, exporter: createIdleExportService(),
-    derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, levels: async () => null, idle: async () => undefined, shutdown: () => undefined },
+    derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, levels: async () => null, cropSuggest: async () => null, idle: async () => undefined, shutdown: () => undefined },
     pickFolder: async () => null, pickFfmpeg: async () => null, pickExportDir: async () => null, outputDirs: createOutputDirs(), pickImage: async () => null,
     openPath: async () => undefined, revealPath: async () => undefined, copyText: () => undefined, finishCountdown: () => undefined, clock: () => 0
   })

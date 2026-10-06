@@ -377,7 +377,7 @@ async function buildIpc() {
     pickFfmpeg: async () => null,
     recording: createIdleRecordingService(),
     exporter: createIdleExportService(),
-    derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, levels: async () => null, idle: async () => undefined, shutdown: () => undefined },
+    derived: { peaks: async () => null, previewAudio: async () => null, thumbs: async () => null, levels: async () => null, cropSuggest: async () => null, idle: async () => undefined, shutdown: () => undefined },
     ...transcriptionDeps({ state, store, logger }),
     outputDirs,
     pickExportDir: async () => null,

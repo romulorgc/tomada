@@ -17,6 +17,7 @@ import {
 } from './cursor'
 import { buildCaptionTrack, captionAt, pageAlpha, popScale, PAGE_FADE_MS, type CaptionTrack } from './captions'
 import { resolveCaptionStyle, resolveHookStyle, type CaptionRenderStyle, type HookRenderStyle } from './caption-style'
+import { cropSignature, pointToCrop, rectFromCrop, resolveScreenCrop, type CropTimeline } from './crop'
 import { projectDurationMs } from './project'
 import { BUBBLE_TARGET, PRESENTER_TARGET, buildFaceFramer, cameraCropRect, faceAimAt, lerpTarget, type FaceFramer, type FaceTrack } from './face'
 import {
@@ -31,7 +32,7 @@ import {
   styleUnit
 } from './styles'
 import { keptRanges, outputDuration, sourceToOutput } from './timeline'
-import type { Background, ClickEvent, CursorSample, KeyEvent, LayoutKind, Project, Range, Rect, Size, Style, Word } from './types'
+import type { Background, ClickEvent, ContentRectSample, CursorSample, KeyEvent, LayoutKind, Point, Project, Range, Rect, Size, Style, Word } from './types'
 import { GRID_HZ } from './cursor'
 import { HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
 import { ZOOM_SCALE_SPRING } from './spring'
@@ -67,7 +68,13 @@ export const BUBBLE_INSET = 0.035
 // ---------------------------------------------------------------------------
 // Eventos e dados derivados
 
-export type EventsData = { cursor: CursorSample[]; clicks: ClickEvent[]; keys: KeyEvent[] }
+export type EventsData = {
+  cursor: CursorSample[]
+  clicks: ClickEvent[]
+  keys: KeyEvent[]
+  /** A página do navegador medida (C1), na tela gravada. */
+  contentRects?: ContentRectSample[]
+}
 
 /** Eventos já processados (independem do estilo e dos zooms: reaproveitáveis entre edições). */
 export type CursorData = {
@@ -77,17 +84,78 @@ export type CursorData = {
   clicks: ClickEvent[]
   keys: KeyEvent[]
   durationMs: number
+  /** A página do navegador medida (C1), na tela gravada, para o recorte automático. */
+  contentRects: ContentRectSample[]
+  /**
+   * O recorte aplicado (C1): cursor e cliques JÁ estão no espaço dele (0..1 dentro do recorte; o que caiu fora é `out`).
+   * `null` = a tela inteira.
+   */
+  crop: CropTimeline | null
+  /** Os dados da tela inteira, de onde o recorte parte; ausente neste mesmo (os dados "crus"). */
+  origin?: CursorData
+  /** Os eventos crus (tela inteira), para refazer a grade quando o recorte muda. */
+  events: EventsData
 }
 
-export function prepareEvents(events: EventsData, durationMs: number): CursorData {
+function buildData(events: EventsData, durationMs: number, crop: CropTimeline | null): CursorData {
   const clicks = events.clicks.filter((c) => !c.out && Number.isFinite(c.t)).sort((a, b) => a.t - b.t)
   return {
     grid: processCursor(events.cursor, clicks, { durationMs }),
     lookup: createCursorLookup(events.cursor),
     clicks,
     keys: [...events.keys].sort((a, b) => a.t - b.t),
-    durationMs
+    durationMs,
+    contentRects: events.contentRects ?? [],
+    crop,
+    events
   }
+}
+
+export function prepareEvents(events: EventsData, durationMs: number): CursorData {
+  return buildData(events, durationMs, null)
+}
+
+const cropCache = new WeakMap<CursorData, Map<string, CursorData>>()
+
+/**
+ * O recorte do documento aplicado aos eventos (C1): cursor e cliques passam para o espaço do recorte (o que cai fora - uma aba, a
+ * barra de endereço - vira `out`: não abre zoom, não faz ripple e não puxa a câmera). Sem recorte (ou sem a tela gravada) devolve os
+ * dados crus. Guarda o resultado: só refaz a grade quando o recorte pedido muda (arrastar um controle não a recalcula).
+ */
+export function applyScreenCrop(data: CursorData, project: Pick<Project, 'screenCrop' | 'sources'>): CursorData {
+  const origin = data.origin ?? data
+  const src = project.sources.screen
+  const sourcePx = src && src.w > 0 && src.h > 0 ? { w: src.w, h: src.h } : null
+  const sig = `${cropSignature(project.screenCrop)}|${sourcePx ? `${sourcePx.w}x${sourcePx.h}` : '-'}`
+  let byOrigin = cropCache.get(origin)
+  if (!byOrigin) {
+    byOrigin = new Map()
+    cropCache.set(origin, byOrigin)
+  }
+  const hit = byOrigin.get(sig)
+  if (hit) return hit
+  const crop = resolveScreenCrop(project.screenCrop, origin.contentRects, sourcePx, origin.durationMs)
+  let out: CursorData
+  if (!crop) {
+    out = origin
+  } else {
+    const events = origin.events
+    const cursor: CursorSample[] = events.cursor.map((p) => {
+      const c = pointToCrop(crop.at(p.t), p)
+      const next: CursorSample = { t: p.t, x: c.x, y: c.y }
+      if (p.out || c.out) next.out = true
+      return next
+    })
+    const clicks: ClickEvent[] = events.clicks.map((k) => {
+      const c = pointToCrop(crop.at(k.t), k)
+      const next: ClickEvent = { ...k, x: c.x, y: c.y }
+      if (k.out || c.out) next.out = true
+      return next
+    })
+    out = { ...buildData({ cursor, clicks, keys: events.keys, contentRects: events.contentRects }, origin.durationMs, crop), origin, events: origin.events }
+  }
+  byOrigin.set(sig, out)
+  return out
 }
 
 type LayoutPoint = { t: number; layout: LayoutKind }
@@ -100,6 +168,10 @@ export type Derived = {
   /** Duração do vídeo de saída (ms). */
   outputDurationMs: number
   data: CursorData
+  /** O recorte da tela (C1) ou `null` (a tela inteira). Com ele, `data` está no espaço do recorte e `screenSize` é o tamanho dele. */
+  crop: CropTimeline | null
+  /** A moldura de navegador (C1, opcional): a fração da ALTURA do cartão da tela que a barra ocupa, e o texto. Só no 16:9. */
+  bar: { fraction: number; text: string } | null
   /** O caminho da câmera do layout padrão (no 16:9 é o único; no vertical há um por layout, em `paths`). */
   cameraPath: CameraPath
   /** Um caminho de câmera por recorte: no 16:9 só `main`; no vertical, um por layout usado (V-A, V-B, V-C). */
@@ -113,10 +185,14 @@ export type Derived = {
   face: FaceFramer | null
   /** Algum trecho usa o apresentador recortado (`presenter`): precisa do recorte do fundo da câmera (`media/camera-matte.mp4`). */
   needsMatte: boolean
+  /** O tamanho da área-base da tela em px: o recorte (com a barra, se houver) ou a tela gravada inteira. */
   screenSize: Size | null
   cameraSize: Size | null
   layoutPoints: LayoutPoint[]
 }
+
+/** A barra da moldura de navegador, em fração da altura da página (C1). */
+export const BROWSER_BAR_RATIO = 0.06
 
 /** Fração da fonte que um recorte do formato enxerga com escala 1. Horizontal: tudo. Vertical: faixa 9:16. */
 export function baseView(format: FormatSpec, screen: Size | null): { w: number; h: number } {
@@ -174,12 +250,19 @@ const TRIVIAL_PATH: CameraPath = { hz: GRID_HZ, t: [0], scale: [1], cx: [0.5], c
  * vertical (`projectForFormat`): os zooms e layouts dele. `words` são as palavras da transcrição (legendas) e `face` a análise do
  * rosto na câmera (enquadramento).
  */
-export function deriveProject(project: Project, data: CursorData, format: FormatSpec, words?: readonly Word[] | null, face?: FaceTrack | null): Derived {
+export function deriveProject(project: Project, rawData: CursorData, format: FormatSpec, words?: readonly Word[] | null, face?: FaceTrack | null): Derived {
   const durationMs = projectDurationMs(project)
   const kept = keptRanges(durationMs, project.cuts)
-  const screenSize = sizeOf(project.sources.screen)
+  // O recorte da tela (C1): a área-base passa a ser a página; o cursor e os cliques já vêm no espaço dela
+  const data = applyScreenCrop(rawData, project)
+  const crop = data.crop
+  const full = sizeOf(project.sources.screen)
+  const barOn = crop !== null && format.kind === 'horizontal' && project.screenCrop?.browserFrame?.enabled === true
+  const baseSize: Size | null = crop ? crop.sizePx : full
+  const screenSize: Size | null = baseSize && barOn ? { w: baseSize.w, h: Math.round(baseSize.h * (1 + BROWSER_BAR_RATIO)) } : baseSize
+  const bar = barOn ? { fraction: BROWSER_BAR_RATIO / (1 + BROWSER_BAR_RATIO), text: (project.screenCrop?.browserFrame?.domain ?? '').trim() } : null
   const cameraSize = project.style.camera.hidden ? null : sizeOf(project.sources.camera)
-  const sourceAspect = screenSize ? screenSize.w / screenSize.h : 16 / 9
+  const sourceAspect = baseSize ? baseSize.w / baseSize.h : 16 / 9
   const layoutPoints = buildLayoutPoints(project)
 
   // Um caminho de câmera por RECORTE: no 16:9 o recorte é sempre a fonte toda (um caminho só); no vertical cada layout
@@ -195,7 +278,7 @@ export function deriveProject(project: Project, data: CursorData, format: Format
     const keys = new Set<string>([mainKey])
     for (const pt of layoutPoints) keys.add(resolveLayout(pt.layout, hasScreen, hasCamera, format.kind))
     for (const key of keys) {
-      const f = layoutFollow(key as LayoutKind, format, screenSize, project.style.presenter)
+      const f = layoutFollow(key as LayoutKind, format, baseSize, project.style.presenter)
       if (key === 'camera' || !hasScreen || f.gain === 0) {
         paths[key] = { view: f.view, path: TRIVIAL_PATH }
         continue
@@ -218,6 +301,8 @@ export function deriveProject(project: Project, data: CursorData, format: Format
     kept,
     outputDurationMs: outputDuration(durationMs, project.cuts),
     data,
+    crop,
+    bar,
     cameraPath,
     paths,
     synthetic,
@@ -392,10 +477,50 @@ function bubble(style: Style, format: FormatSpec, ref: Rect, zoomProgress: numbe
 
 export type ShadowSpec = { blur: number; opacity: number; offsetY: number }
 
+/** A página do cartão da tela: o cartão menos a barra da moldura de navegador (se houver). */
+function pageOf(screen: SceneScreen): Rect {
+  const barH = screen.bar?.h ?? 0
+  return { x: screen.dest.x, y: screen.dest.y + barH, w: screen.dest.w, h: screen.dest.h - barH }
+}
+
+/**
+ * Clicar na prévia (px do canvas) para fixar o foco de um zoom: o ponto vira posição no ESPAÇO DO RECORTE (é nele que o zoom lê o
+ * foco), descontando a barra da moldura de navegador. `null` se o clique caiu fora do cartão ou na barra.
+ */
+export function previewPointToFocus(screen: SceneScreen, p: Point): Point | null {
+  const page = pageOf(screen)
+  if (!(page.w > 0) || !(page.h > 0)) return null
+  if (p.x < page.x || p.x > page.x + page.w || p.y < page.y || p.y > page.y + page.h) return null
+  // do cartão para a tela gravada (o que o desenho enxerga agora)...
+  const sx = screen.src.x + ((p.x - page.x) / page.w) * screen.src.w
+  const sy = screen.src.y + ((p.y - page.y) / page.h) * screen.src.h
+  // ...e da tela gravada para o recorte
+  const b = screen.base
+  const x = b ? (sx - b.x) / b.w : sx
+  const y = b ? (sy - b.y) / b.h : sy
+  return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) }
+}
+
+/** O inverso: onde o foco (no espaço do recorte) cai na prévia agora; `null` se está fora da janela visível do zoom. */
+export function focusToPreviewPoint(screen: SceneScreen, focus: Point): Point | null {
+  const page = pageOf(screen)
+  const b = screen.base
+  const sx = b ? b.x + focus.x * b.w : focus.x
+  const sy = b ? b.y + focus.y * b.h : focus.y
+  const x = page.x + ((sx - screen.src.x) / screen.src.w) * page.w
+  const y = page.y + ((sy - screen.src.y) / screen.src.h) * page.h
+  if (x < page.x || x > page.x + page.w || y < page.y || y > page.y + page.h) return null
+  return { x, y }
+}
+
 export type SceneScreen = {
   dest: Rect
-  /** Recorte da fonte (normalizado 0..1): o que o zoom enxerga. */
+  /** Recorte da fonte (normalizado 0..1 na TELA GRAVADA): o que o zoom enxerga dentro da área-base (o recorte da tela, se houver). */
   src: Rect
+  /** Moldura de navegador (C1): a barra ocupa o topo do cartão (`h` px de `dest`); a página é desenhada abaixo dela. */
+  bar?: { h: number; text: string }
+  /** A área-base agora (o recorte da tela, normalizado na TELA GRAVADA); ausente = a tela inteira. O foco do zoom é lido dentro dela. */
+  base?: Rect
   radius: number
   opacity: number
   shadow: ShadowSpec | null
@@ -570,8 +695,21 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
       ? { blur: style.shadow.blur * unit * scaleBlur, opacity: style.shadow.opacity, offsetY: style.shadow.offsetY * unit * scaleOffset }
       : null
 
+  // O recorte da tela (C1): `srcRect` está no espaço do recorte (0..1 dentro dele); o desenho precisa dele na tela gravada
+  const cropAt = derived.crop ? derived.crop.at(sourceT) : null
+  const inSource = (r: Rect): Rect => (cropAt ? rectFromCrop(cropAt, r) : r)
+  const barOf = (dest: Rect): { h: number; text: string } | undefined => (derived.bar ? { h: Math.round(dest.h * derived.bar.fraction), text: derived.bar.text } : undefined)
+
   const screen: SceneScreen | null = screenBox
-    ? { dest: screenBox.rect, src: srcRect, radius: screenBox.radius, opacity: screenBox.opacity, shadow: shadowOn ? shadowOf(1, 1) : null }
+    ? {
+        dest: screenBox.rect,
+        src: inSource(srcRect),
+        ...(derived.bar ? { bar: barOf(screenBox.rect)! } : {}),
+        ...(cropAt ? { base: cropAt } : {}),
+        radius: screenBox.radius,
+        opacity: screenBox.opacity,
+        shadow: shadowOn ? shadowOf(1, 1) : null
+      }
     : null
 
   // quanto do apresentador recortado já está no ar: entra com a troca para o layout `presenter` e sai com a troca para outro
@@ -610,15 +748,17 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
   const hasBackdrop = (k: string): boolean => k === 'screen-wide' || (vertical && k === 'presenter')
   const wideWeight = (hasBackdrop(curKey) ? e : 0) + (p < 1 && hasBackdrop(prevKey) && prevKey !== curKey ? 1 - e : 0)
   if (vertical && derived.screenSize && wideWeight > 0.002) {
-    backdrop = { src: coverCrop(derived.screenSize, format.w / format.h), darken: 0.58, alpha: Math.min(1, wideWeight) }
+    backdrop = { src: inSource(coverCrop(derived.screenSize, format.w / format.h)), darken: 0.58, alpha: Math.min(1, wideWeight) }
   }
 
   // posição normalizada na fonte → px do quadro de saída (pelo recorte do zoom)
   const toDest = (nx: number, ny: number): { x: number; y: number } | null => {
     if (!screen) return null
+    // com a barra da moldura, a página é só a parte do cartão abaixo dela
+    const barH = screen.bar?.h ?? 0
     return {
       x: screen.dest.x + ((nx - srcRect.x) / srcRect.w) * screen.dest.w,
-      y: screen.dest.y + ((ny - srcRect.y) / srcRect.h) * screen.dest.h
+      y: screen.dest.y + barH + ((ny - srcRect.y) / srcRect.h) * (screen.dest.h - barH)
     }
   }
 

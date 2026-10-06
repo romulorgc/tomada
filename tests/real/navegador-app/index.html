@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Aba</title>
+    <!--
+      Página de teste do recorte do navegador (C1). A ÁREA DA PÁGINA é pintada de uma cor única (magenta), sem texto; um botão
+      ciano no centro recebe o clique (o título da aba conta os cliques: o teste lê o título da janela, de fora do navegador).
+      A barra de abas e a barra de endereço do navegador NUNCA têm magenta nem ciano: o que sobrar dessas cores no vídeo é página.
+    -->
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #ff00ff; }
+      #b { position: fixed; left: 50%; top: 50%; width: 260px; height: 150px; margin: -75px 0 0 -130px; border: 0; padding: 0; background: #00ffff; cursor: default; }
+    </style>
+  </head>
+  <body>
+    <button id="b" aria-label="botão de teste"></button>
+    <script>
+      const aba = new URLSearchParams(location.search).get('aba') || '?'
+      let n = 0
+      document.title = 'Aba ' + aba
+      document.getElementById('b').addEventListener('mousedown', () => {
+        n++
+        document.title = 'Aba ' + aba + ' clique ' + n
+      })
+    </script>
+  </body>
+</html>

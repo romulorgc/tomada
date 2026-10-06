@@ -300,6 +300,22 @@ export type CaptureInfo = {
   cursorHidden?: boolean
   /** Nome da fonte (título da janela ou "Tela 1"), só para exibir. */
   sourceName?: string
+  /**
+   * O navegador cuja janela foi gravada (ou que estava em primeiro plano na gravação de tela), quando o rastreador o reconheceu.
+   * `contentRect`: a página dele foi medida (`events/content-rect.jsonl` existe). Firefox é reconhecido mas não medido.
+   */
+  browser?: { exe: string; engine: 'chromium' | 'gecko'; contentRect: boolean }
+}
+
+/**
+ * Recorte da tela (C1): a área-base que o vídeo mostra. `auto` = a página do navegador que o rastreador mediu
+ * (`events/content-rect.jsonl`); `manual` = o retângulo `manual` (normalizado 0..1 na tela gravada); `off` = a tela inteira.
+ * `browserFrame` (opcional, desligada por padrão): uma barra mínima, desenhada pelo app, com o domínio do site, no topo do recorte.
+ */
+export type ScreenCrop = {
+  mode: 'auto' | 'manual' | 'off'
+  manual?: Rect
+  browserFrame?: { enabled: boolean; domain?: string }
 }
 
 /** Um capítulo do YouTube: onde começa (ms de ORIGEM; o tempo de saída é calculado com os cortes de agora) e o título. */
@@ -354,6 +370,8 @@ export type Project = {
    * desligou o zoom automático (não regenerar).
    */
   zoomPreset?: ZoomPresetId | 'off'
+  /** Recorte da tela (C1), comum aos dois formatos. Ausente = a tela inteira (projeto antigo). */
+  screenCrop?: ScreenCrop
   /** O vertical 9:16 (M4a): zooms, layouts, câmera e legenda próprios. */
   vertical?: VerticalEdit
   /**
@@ -448,6 +466,12 @@ export type ClickEvent = {
 
 /** Retângulo da janela capturada num instante (`events/window.jsonl`, só quando muda). */
 export type WindowRectSample = { t: number; x: number; y: number; w: number; h: number }
+
+/**
+ * Onde está a página do navegador num instante (`events/content-rect.jsonl`, só quando muda): retângulo NORMALIZADO 0..1 no
+ * QUADRO capturado. Tela inteira ou nenhuma página à vista = o quadro todo (0, 0, 1, 1).
+ */
+export type ContentRectSample = { t: number; x: number; y: number; w: number; h: number }
 
 /** "Houve digitação". NUNCA a tecla (privacidade). */
 export type KeyEvent = { t: number }
