@@ -146,7 +146,8 @@ function CameraPreview({ stream, loading, guide = false }: { stream: MediaStream
   const hasVideo = (stream?.getVideoTracks().length ?? 0) > 0
   return (
     <div className="video-frame aspect-video" data-testid="camera-preview" data-live={hasVideo}>
-      <video ref={ref} muted playsInline aria-label={t.record.camera.previewLabel} className={hasVideo ? '' : 'invisible'} />
+      {/* espelhada como a bolha da gravação (Bubble): quem se vê sem espelho acha a imagem "ao contrário" */}
+      <video ref={ref} muted playsInline aria-label={t.record.camera.previewLabel} className={hasVideo ? '' : 'invisible'} style={{ transform: 'scaleX(-1)' }} />
       {!hasVideo ? (
         <p className="absolute inset-0 grid place-items-center p-3 text-center text-[0.875rem] text-muted">
           {loading ? t.record.camera.loading : t.record.camera.off}

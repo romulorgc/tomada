@@ -39,7 +39,8 @@ export function defaultStyle(): Style {
       corner: 'bottom-right',
       borderWidth: 4,
       borderColor: '#ffffff',
-      mirror: false,
+      // espelhada por padrão: a prévia e a bolha da gravação já mostram a pessoa espelhada, e o vídeo sai como ela se viu
+      mirror: true,
       hidden: false,
       shrinkOnZoom: true
     },
