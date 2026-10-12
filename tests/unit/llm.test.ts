@@ -143,7 +143,7 @@ describe('AnthropicApiProvider', () => {
   it('só HTTPS no endereço fixo, chave no cabeçalho, nada da chave no corpo', async () => {
     const seen: { url: string; headers: Record<string, string>; body: string }[] = []
     const provider = createAnthropicApiProvider({
-      getKey: () => 'chave-de-teste-falsa',
+      getKey: () => 'chave-de-teste-falsa-123',
       fetchImpl: (async (url: URL | string, init?: RequestInit) => {
         seen.push({ url: String(url), headers: init?.headers as Record<string, string>, body: String(init?.body) })
         return ok('{"ok":true}')
@@ -152,7 +152,7 @@ describe('AnthropicApiProvider', () => {
     expect(await provider.complete({ task: 't', system: 'S', prompt: 'P', schema })).toEqual({ ok: true })
     expect(seen[0]!.url).toBe(API_URL)
     expect(seen[0]!.url.startsWith('https://')).toBe(true)
-    expect(seen[0]!.headers['x-api-key']).toBe('chave-de-teste-falsa')
+    expect(seen[0]!.headers['x-api-key']).toBe('chave-de-teste-falsa-123')
     expect(seen[0]!.body).not.toContain('chave-secreta')
     expect(JSON.parse(seen[0]!.body)).toMatchObject({ system: 'S', messages: [{ role: 'user', content: 'P' }] })
   })

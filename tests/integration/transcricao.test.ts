@@ -320,7 +320,7 @@ describe('gerente da IA', () => {
 
   it('guardar a chave: cifrada pelo cofre, nunca devolvida; apagar remove', async () => {
     const { manager, saved, prefs } = buildManager({ cli: null })
-    const key = 'chave-de-teste-falsa'
+    const key = 'chave-de-teste-falsa-abcdef'
     const status = await manager.setKey(`  ${key}  `)
     expect(JSON.stringify(status)).not.toContain(key)
     expect(status).toMatchObject({ hasKey: true, provider: 'api', available: true })
@@ -394,7 +394,7 @@ async function buildIpc() {
 describe('IPC da transcrição e da IA', () => {
   it('a chave da IA nunca volta pela ponte e fica cifrada em disco', async () => {
     const { handlers, file } = await buildIpc()
-    const key = 'chave-de-teste-falsa'
+    const key = 'chave-de-teste-falsa-abcdef'
     const after = await handlers['llm:set-key'](key)
     expect(after).toMatchObject({ hasKey: true })
     const surfaces = [
