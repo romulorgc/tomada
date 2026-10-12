@@ -1,5 +1,6 @@
 /**
- * `ClaudeCliProvider`: a IA pelo programa `claude` já instalado e logado neste computador (`claude -p`).
+ * `ClaudeCliProvider`: a IA pelo Claude Code (`claude -p`) que o próprio usuário já instalou e logou neste computador.
+ * O Tomada só executa o programa dele; não pede, não lê e não guarda credenciais.
  *
  * Como o processo filho é aberto (tudo o que a segurança pede):
  *  - **sem shell** (`claude.exe`, nunca `.cmd`) e **prompt pelo stdin**: a transcrição nunca vai na linha de comando;
@@ -97,9 +98,9 @@ export function createClaudeCliProvider(opts: ClaudeCliOptions): LlmProvider {
       if (err instanceof ProcessError) {
         if (err.reason === 'timeout') throw new LlmError('A IA demorou demais para responder. Tente de novo.', true)
         if (err.reason === 'cancelled') throw new LlmError('Cancelado.', false)
-        if (err.reason === 'spawn') throw new LlmError('Não consegui abrir o programa da IA neste computador.', false)
+        if (err.reason === 'spawn') throw new LlmError('Não consegui abrir o Claude Code neste computador.', false)
         const why = tail(err.stderr || err.stdout, 3)
-        throw new LlmError(`A IA não respondeu${why ? `: ${why}` : ''}. Confira se o programa está logado e tente de novo.`, true)
+        throw new LlmError(`O Claude Code não respondeu${why ? `: ${why}` : ''}. Confira se o Claude Code está instalado e logado (rode o comando claude uma vez no terminal) e tente de novo.`, true)
       }
       throw err
     }

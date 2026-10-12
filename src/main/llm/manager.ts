@@ -1,6 +1,7 @@
 /**
- * Quem escolhe a IA que vale agora: o programa de linha de comando deste computador, a chave de API do usuário
- * (cifrada com `safeStorage`, nunca devolvida à interface) ou, só em teste (`TOMADA_LLM=mock`), as respostas gravadas.
+ * Quem escolhe a IA que vale agora: o Claude Code já instalado e logado neste computador (caminho principal; o Tomada nunca
+ * pede nem guarda as credenciais dele), a chave de API da Anthropic do usuário (alternativa; cifrada com `safeStorage`, nunca
+ * devolvida à interface) ou, só em teste (`TOMADA_LLM=mock`), as respostas gravadas.
  * Sem Electron: a cifra entra por parâmetro (`KeyVault`).
  */
 import { mkdirSync, readFileSync } from 'node:fs'
@@ -80,7 +81,7 @@ export function createLlmManager(deps: LlmManagerDeps): LlmManager {
     const hasKey = Boolean(prefs.apiKeyEnc)
     const base = { hasKey, cliFound: cli !== null, preference }
     if (env.TOMADA_LLM === 'mock') return { provider: mockProvider(), status: { ...base, provider: 'mock', available: true, detail: null } }
-    // só em teste: nenhuma IA configurada, mesmo que o programa esteja instalado neste computador
+    // só em teste: nenhuma IA configurada, mesmo que o Claude Code esteja instalado neste computador
     if (env.TOMADA_LLM === 'off') return { provider: null, status: { ...base, provider: null, available: false, detail: 'A IA está desligada neste teste.' } }
 
     const useCli = (): LlmProvider => {
@@ -92,12 +93,12 @@ export function createLlmManager(deps: LlmManagerDeps): LlmManager {
 
     if (preference === 'cli' || (preference === 'auto' && cli)) {
       if (cli) return { provider: useCli(), status: { ...base, provider: 'cli', available: true, detail: null } }
-      return { provider: null, status: { ...base, provider: null, available: false, detail: 'Não achei o programa da IA instalado neste computador.' } }
+      return { provider: null, status: { ...base, provider: null, available: false, detail: 'Não achei o Claude Code instalado neste computador.' } }
     }
     if (hasKey) return { provider: useApi(), status: { ...base, provider: 'api', available: true, detail: null } }
     return {
       provider: null,
-      status: { ...base, provider: null, available: false, detail: preference === 'api' ? 'Cole a chave da IA nos Ajustes.' : 'A IA não está configurada: instale o programa ou cole uma chave nos Ajustes.' }
+      status: { ...base, provider: null, available: false, detail: preference === 'api' ? 'Cole a chave de API da Anthropic nos Ajustes.' : 'A IA não está configurada: instale o Claude Code e entre com a sua conta, ou cole uma chave de API da Anthropic nos Ajustes.' }
     }
   }
 
