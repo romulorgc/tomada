@@ -73,7 +73,8 @@ export function legibleZoom(args: { textSrcPx: number; destW: number; baseW: num
 /**
  * Como cada layout usa a janela. `anchorY` = onde o ponto de foco cai na altura da janela (0 = topo): nos quadrados no centro; no
  * V-E, acima da cabeça de quem fala (a pessoa cobre a metade de baixo). `safeY` = faixa da altura da janela em que o foco conta como
- * enquadrado. `minZoom` dá folga para a janela andar na vertical (no V-E a altura inteira da página não deixa folga).
+ * enquadrado. `minZoom` é o chão do zoom (1 = a janela com a altura inteira da página): nenhum perfil o sobe além do que a letra pede, para a letra
+ * ficar na faixa de 28 a 32 px (o V-E tinha 1,25 e dava 34 px; a folga na vertical é pequena de qualquer jeito, porque a pessoa cobre a metade de baixo).
  */
 export type LegibleProfile = {
   anchorY: number
@@ -89,7 +90,7 @@ export const LEGIBLE_PROFILES: Partial<Record<LayoutKind, LegibleProfile>> = {
   'screen-center': SQUARE,
   stack: SQUARE,
   presenter: SQUARE,
-  greenscreen: { anchorY: 0.36, safeY: [0.08, 0.44], safeX: 0.8, minZoom: 1.25, visibleFrac: 0.5 },
+  greenscreen: { anchorY: 0.36, safeY: [0.08, 0.44], safeX: 0.8, minZoom: 1, visibleFrac: 0.5 },
   'greenscreen-corner': { anchorY: 0.42, safeY: [0.1, 0.84], safeX: 0.8, minZoom: 1.1, visibleFrac: 1 }
 }
 

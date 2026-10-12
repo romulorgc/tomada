@@ -314,6 +314,26 @@ describe('mesma regra na prévia e na exportação', () => {
   })
 })
 
+describe('a letra em repouso fica na faixa de 28 a 32 px, em todos os layouts com janela legível', () => {
+  // a tela das gravações do usuário (1920×1080 e 1920×912) com o corpo estimado em 13 px por 1080 de altura; o cursor parado no meio da página
+  for (const screen of [{ w: 1920, h: 1080 }, { w: 1920, h: 912 }]) {
+    it(`página de ${screen.w}×${screen.h}`, () => {
+      const durationMs = 20_000
+      const data = prepareEvents({ cursor: Array.from({ length: 201 }, (_, i) => ({ t: i * 100, x: 0.3, y: 0.3 })), clicks: [click(3000, 0.3, 0.3)], keys: [] }, durationMs)
+      for (const layout of ['screen-center', 'stack', 'presenter', 'greenscreen', 'greenscreen-corner'] as const) {
+        const p = createProject({ title: 'x', sources: { screen: { path: 'media/screen.mp4', w: screen.w, h: screen.h, fps: 30, durationMs }, camera: { path: 'media/camera.mp4', w: 1920, h: 1080, fps: 30, durationMs } } })
+        p.vertical = { layout, layouts: [], zooms: [], zoomPreset: 'off' }
+        const view = projectForFormat(p, 'vertical')
+        const d = deriveProject(view, data, VERTICAL_1080)
+        const scene = evaluateScene(view, d, 6000, VERTICAL_1080)
+        const px = textPxOnFrame(d.body.textSrcPx, scene.screen!.dest.w, scene.screen!.src.w * d.screenSize!.w)
+        expect(px, `${layout} em ${screen.w}×${screen.h}`).toBeGreaterThanOrEqual(TEXT_RANGE_PX.min)
+        expect(px, `${layout} em ${screen.w}×${screen.h}`).toBeLessThanOrEqual(TEXT_RANGE_PX.max)
+      }
+    })
+  }
+})
+
 describe('constantes das referências', () => {
   it('as constantes são as medidas', () => {
     expect(WINDOW_MOVE_MS).toBeGreaterThanOrEqual(800) // 0,89 s do Screen Studio
