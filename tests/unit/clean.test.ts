@@ -27,7 +27,8 @@ function words(spec: [string, number, number, Word['kind']?][]): Word[] {
   return spec.map(([text, start, end, kind], i) => ({ i, text, start, end, prob: 0.9, kind: kind ?? (isHesitation(text) ? 'filler' : 'word') }))
 }
 
-const OPT = (over: Partial<CleanOptions> = {}): CleanOptions => ({ ...DEFAULT_CLEAN, ...over })
+/** As opções de antes do ritmo (F1): `pacing: null` desliga a moldagem e o modo é o Rápido de sempre. */
+const OPT = (over: Partial<CleanOptions> = {}): CleanOptions => ({ ...DEFAULT_CLEAN, silence: 'fast', pacing: null, ...over })
 
 describe('léxico das muletas', () => {
   it('hesitações puras: hã, hum, ahn, éé, eh (com pontuação e caixa) — e só elas', () => {

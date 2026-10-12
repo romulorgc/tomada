@@ -5,7 +5,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_CLEAN, computeClean, type CleanInput, type CleanOptions } from '@shared/clean'
+import { DEFAULT_CLEAN as RITMO_CLEAN, computeClean, type CleanInput, type CleanOptions } from '@shared/clean'
+
+/** As opções de antes do ritmo (F1): sem moldar os cortes e com o modo Rápido de sempre. */
+const DEFAULT_CLEAN: CleanOptions = { ...RITMO_CLEAN, silence: 'fast', pacing: null }
 import { planClean } from '@shared/clean-plan'
 import { parseTranscript } from '@shared/transcript'
 import { PAUSE_CHIP_MIN_MS, buildParagraphs, pauseAfter, struckWords } from '@shared/text-edit'

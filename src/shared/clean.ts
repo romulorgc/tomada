@@ -12,23 +12,34 @@
  *    Fala que o VAD marcou e nenhuma palavra cobre (`gap-speech`) NÃO é silêncio.
  *  - **Hesitação pura corta por padrão; muleta com sentido só vira sugestão** ("né", "tipo", "então", "é").
  */
+import { cutRangeAround } from './edges'
 import { isHesitation, isSoftCrutch } from './fillers'
 import { MIN_CUT_MS } from './cuts'
+import { PACING, RETAKE_GAIN_BONUS_MS, countSeams, shapeCuts, type PacingId, type ShapeCut } from './pacing'
 import { nextSegId } from './segments'
 import type { Cut, Mute, Range, Word } from './types'
 import type { RetakeSpan } from './transcription'
+import { buildVoiceProfile, isLoudGapSpeech, type VoiceProfile } from './voice-profile'
 
 // ---------------------------------------------------------------------------
 // Parâmetros
 
-export type SilenceMode = 'natural' | 'fast' | 'faster'
+export type SilenceMode = 'tutorial' | 'natural' | 'fast' | 'faster'
 
-/** Silêncio acima de `minMs` é cortado e DEIXA `keepMs` de pausa (metade de cada lado). */
+/**
+ * Silêncio acima de `minMs` é cortado e DEIXA `keepMs` de pausa. Sem ritmo (`pacing: null`) metade de cada lado; com ritmo,
+ * ~2/3 depois da palavra anterior e ~1/3 antes da seguinte (100 + 50 ms no vertical), como nos vídeos de referência.
+ * `tutorial` (padrão) é o ritmo do YouTube/aula: só tira pausa ≥ 0,6 s e deixa 0,28 s (`PACING.horizontal`); `fast` é o do vertical.
+ */
 export const SILENCE_MODES: Record<SilenceMode, { minMs: number; keepMs: number }> = {
+  tutorial: { minMs: PACING.horizontal.minSilenceMs, keepMs: PACING.horizontal.keepMs },
   natural: { minMs: 700, keepMs: 250 },
-  fast: { minMs: 400, keepMs: 150 },
+  fast: { minMs: PACING.vertical.minSilenceMs, keepMs: PACING.vertical.keepMs },
   faster: { minMs: 250, keepMs: 100 }
 }
+
+/** Que ritmo (teto de emendas por minuto) cada modo de silêncio pede quando `pacing` não é dito. */
+const PACING_OF_MODE: Record<SilenceMode, PacingId> = { tutorial: 'horizontal', natural: 'horizontal', fast: 'vertical', faster: 'vertical' }
 
 export type FillerMode = 'cut' | 'mute' | 'mixed'
 
@@ -43,10 +54,21 @@ export type CleanOptions = {
   fillerMode: FillerMode
   /** Inclui os recomeços que a IA apontou (`CleanInput.retakes`). */
   retakes: boolean
+  /**
+   * Ritmo (F1): bordas pelo vale de energia, lascas, trechos curtos e teto de emendas por minuto. Ausente = o que o modo de silêncio
+   * pede; `null` = cortes crus, como antes (sem moldar). Ver `pacing.ts`.
+   */
+  pacing?: PacingId | null
 }
 
-/** O que a limpeza automática aplica por padrão: silêncio Rápido + hesitações puras, cortando. */
-export const DEFAULT_CLEAN: CleanOptions = { silence: 'fast', hesitations: true, crutches: false, fillerMode: 'cut', retakes: false }
+/** O que a limpeza automática aplica por padrão: silêncio no ritmo de tutorial + hesitações puras, cortando. */
+export const DEFAULT_CLEAN: CleanOptions = { silence: 'tutorial', hesitations: true, crutches: false, fillerMode: 'cut', retakes: false }
+
+/** O ritmo que vale para estas opções (`null` = sem moldar). */
+export function pacingOf(options: Pick<CleanOptions, 'silence' | 'pacing'>): PacingId | null {
+  if (options.pacing === null) return null
+  return options.pacing ?? PACING_OF_MODE[options.silence ?? 'tutorial']
+}
 
 /** Folga mínima e máxima (ms) entre a borda de um corte e a palavra que fica. */
 export const GUARD_MIN_MS = 30
@@ -79,24 +101,24 @@ const percentile = (sorted: readonly number[], q: number): number => (sorted.len
  * Limiar de "quieto" de uma faixa: o chão de ruído (percentil 10) mais um terço do caminho até a fala (percentil
  * 95), entre -60 e -35 dBFS. Ruído de fundo alto empurra o limiar para cima; silêncio digital o deixa em -60.
  */
-export function quietThreshold(frames: readonly number[]): number {
+export function quietThreshold(frames: readonly number[], minDb = -60): number {
   const s = sortedCopy(frames)
   const floor = percentile(s, 0.1)
   const speech = percentile(s, 0.95)
   const t = floor + Math.max(6, (speech - floor) / 3)
-  return Math.min(-35, Math.max(-60, t))
+  return Math.min(-35, Math.max(minDb, t))
 }
 
 type QuietMask = { frameMs: number; startMs: number; quiet: Uint8Array }
 
 /** Um quadro é quieto quando TODAS as faixas que existem estão abaixo do limiar. */
-function buildQuietMask(levels: Levels): QuietMask | null {
+function buildQuietMask(levels: Levels, minDb = -60): QuietMask | null {
   const channels = [levels.mic, levels.system].filter((c): c is readonly number[] => c !== null && c.length > 0)
   if (channels.length === 0) return null
   const n = Math.max(...channels.map((c) => c.length))
   const quiet = new Uint8Array(n).fill(1)
   for (const ch of channels) {
-    const thr = quietThreshold(ch)
+    const thr = quietThreshold(ch, minDb)
     for (let k = 0; k < n; k++) {
       const v = ch[k]
       if (v !== undefined && v > thr) quiet[k] = 0
@@ -198,6 +220,10 @@ export type CleanInput = {
   levels?: Levels | null
   /** Recomeços já validados (`validateRetakes`). */
   retakes?: readonly RetakeSpan[]
+  /** Tela ativa (clique, tecla, página mudando; ver `screen-activity.ts`): nenhum silêncio é cortado por cima dela. */
+  screenActive?: readonly Range[]
+  /** Cortes que já valem e a limpeza não decide (manuais, marcas de "errei"): contam nas emendas e nunca são desfeitos. */
+  fixedCuts?: readonly Range[]
 }
 
 export type CleanResult = {
@@ -210,6 +236,29 @@ export type CleanResult = {
   cutMs: number
   /** Total de voz silenciada (ms). */
   muteMs: number
+  /** O que o ritmo fez (F1); ausente quando a limpeza rodou sem moldar (`pacing: null`). */
+  pacing?: PacingReport
+}
+
+export type PacingReport = {
+  id: PacingId
+  /** Cortes desfeitos por lasca, por fala curta entre cortes e por passar do teto de emendas por minuto. */
+  dropped: { sliver: number; speech: number; budget: number }
+  /** Lascas sem palavra que viraram parte do corte. */
+  filled: number
+  /** Cortes que não foram feitos porque a borda não cai numa pausa. */
+  unsafeEdges: number
+  /** "Fala sem palavra" alta mantida como fala (não é hesitação). */
+  keptGapSpeech: number
+  /** Silêncios (ms) que a tela ativa segurou: não foram tirados. */
+  screenHeldMs: number
+  /** Emendas por minuto do vídeo de saída que esta limpeza deixa (com os cortes fixos). */
+  seamsPerMin: number
+  seams: number
+  /** O perfil da voz: se o nível separa voz de chiado (senão, só os tempos das palavras decidiram as bordas). */
+  voice: { ok: boolean; gainDb: number; reason: string | null } | null
+  /** Avisos para a Revisão (voz fraca demais, fala sem palavra mantida…), em português. */
+  notices: string[]
 }
 
 const EMPTY_COUNTS = (): Record<CleanCategory, number> => ({ silence: 0, hesitation: 0, 'gap-speech': 0, crutch: 0, retake: 0 })
@@ -223,14 +272,28 @@ function fmtSeconds(ms: number): string {
   return `${(Math.round(ms / 100) / 10).toString().replace('.', ',')} s`
 }
 
-/** Itens de silêncio: pausas entre as palavras onde o microfone, o som do computador e o VAD estão quietos. */
-export function silenceItems(input: CleanInput, mode: SilenceMode): CleanItem[] {
+/** Quanto de um silêncio "segurado" pela tela ativa (ms) a última chamada de `silenceItems` deixou de cortar (para o relatório). */
+export type SilenceOptions = {
+  /** Repartição da pausa que sobra: `even` metade de cada lado (antes do ritmo); `lead` ~2/3 depois da palavra anterior e ~1/3 antes da seguinte. */
+  split?: 'even' | 'lead'
+  /** Piso do limiar de "quieto" (dBFS): vozes muito fracas pedem um piso mais baixo que −60. */
+  quietFloorDb?: number
+  /** Recebe quantos ms de silêncio a tela ativa segurou. */
+  onHeld?(ms: number): void
+}
+
+/** Itens de silêncio: pausas entre as palavras onde o microfone, o som do computador e o VAD estão quietos (e a tela parada). */
+export function silenceItems(input: CleanInput, mode: SilenceMode, opts: SilenceOptions = {}): CleanItem[] {
   const { words, durationMs } = input
   if (words.length === 0 || !(durationMs > 0)) return []
   const { minMs, keepMs } = SILENCE_MODES[mode]
-  const half = clamp(keepMs / 2, GUARD_MIN_MS, GUARD_MAX_MS)
-  const mask = input.levels ? buildQuietMask(input.levels) : null
+  const lead = opts.split === 'lead'
+  // pausa que fica depois da palavra anterior / antes da seguinte
+  const keepAfter = clamp(lead ? (keepMs * 2) / 3 : keepMs / 2, GUARD_MIN_MS, GUARD_MAX_MS)
+  const keepBefore = clamp(lead ? keepMs / 3 : keepMs / 2, GUARD_MIN_MS, GUARD_MAX_MS)
+  const mask = input.levels ? buildQuietMask(input.levels, opts.quietFloorDb) : null
   const vad = [...(input.vad ?? [])].sort((p, q) => p.start - q.start)
+  const active = [...(input.screenActive ?? [])].sort((p, q) => p.start - q.start)
   const sorted = [...words].sort((p, q) => p.start - q.start)
 
   const gaps: { start: number; end: number; open: 'start' | 'end' | null }[] = []
@@ -239,18 +302,23 @@ export function silenceItems(input: CleanInput, mode: SilenceMode): CleanItem[] 
   gaps.push({ start: sorted[sorted.length - 1]!.end, end: durationMs, open: 'end' })
 
   const items: CleanItem[] = []
+  let held = 0
   for (const gap of gaps) {
     if (gap.end - gap.start < minMs) continue
-    const quiet = subtractRanges(quietParts(mask, gap.start, gap.end), vad)
+    const still = subtractRanges(quietParts(mask, gap.start, gap.end), vad)
+    // a tela ativa segura o silêncio: só o miolo parado pode sair (o resto fica como está)
+    const quiet = active.length > 0 ? subtractRanges(still, active) : still
+    if (active.length > 0) held += still.reduce((acc, r) => acc + (r.end - r.start), 0) - quiet.reduce((acc, r) => acc + (r.end - r.start), 0)
     for (const q of quiet) {
       if (q.end - q.start < minMs) continue
       // no começo e no fim do vídeo não há palavra de um dos lados: o corte vai até a ponta
-      const start = gap.open === 'start' && q.start <= gap.start ? 0 : q.start + half
-      const end = gap.open === 'end' && q.end >= gap.end ? durationMs : q.end - half
+      const start = gap.open === 'start' && q.start <= gap.start ? 0 : q.start + keepAfter
+      const end = gap.open === 'end' && q.end >= gap.end ? durationMs : q.end - keepBefore
       if (end - start < MIN_CUT_MS) continue
       items.push({ kind: 'cut', reason: 'silence', category: 'silence', start: Math.round(start), end: Math.round(end), label: `pausa de ${fmtSeconds(q.end - q.start)}` })
     }
   }
+  opts.onHeld?.(held)
   return items
 }
 
@@ -295,8 +363,21 @@ export function computeClean(input: CleanInput, options: CleanOptions): CleanRes
   const items: CleanItem[] = []
   const counts = EMPTY_COUNTS()
 
+  // Ritmo (F1): com ele, as bordas seguem o vale de energia, a "fala sem palavra" alta é fala, e o conjunto é moldado no fim.
+  const pacingId = pacingOf(options)
+  const pacing = pacingId ? PACING[pacingId] : null
+  const profile: VoiceProfile | null = pacing ? buildVoiceProfile(input.levels, words) : null
+  const report: PacingReport | null = pacing
+    ? { id: pacing.id, dropped: { sliver: 0, speech: 0, budget: 0 }, filled: 0, unsafeEdges: 0, keptGapSpeech: 0, screenHeldMs: 0, seamsPerMin: 0, seams: 0, voice: profile ? { ok: profile.ok, gainDb: profile.gainDb, reason: profile.reason } : null, notices: [] }
+    : null
+  if (report) {
+    if (!profile) report.notices.push('Sem o nível do microfone: as bordas dos cortes seguiram só os tempos das palavras.')
+    else if (!profile.ok) report.notices.push(`Voz baixa demais para o nível decidir os cortes (${profile.reason}): usei só os tempos das palavras. Regrave com o microfone mais perto.`)
+  }
+
   if (options.silence) {
-    for (const it of silenceItems({ ...input, words }, options.silence)) {
+    const silenceOpts: SilenceOptions = report ? { split: 'lead', quietFloorDb: -85, onHeld: (ms) => { report.screenHeldMs += ms } } : {}
+    for (const it of silenceItems({ ...input, words }, options.silence, silenceOpts)) {
       items.push(it)
       counts.silence++
     }
@@ -309,20 +390,43 @@ export function computeClean(input: CleanInput, options: CleanOptions): CleanRes
     return category === 'crutch' ? 'mute' : 'cut'
   }
 
-  const wordItem = (k: number, category: CleanCategory, label: string): CleanItem => {
+  /** O trecho a cortar de `a..b`: com ritmo, bordas no vale (e `null` se a borda não cai numa pausa); sem ele, `cutAround`. */
+  const cutRange = (a: number, b: number): Range | null => {
+    if (!report) return cutAround(words, a, b, durationMs)
+    const r = cutRangeAround(words, a, b, durationMs, { profile })
+    if (!r.ok) {
+      report.unsafeEdges++
+      return null
+    }
+    return { start: r.start, end: r.end }
+  }
+
+  const wordItem = (k: number, category: CleanCategory, label: string): CleanItem | null => {
     const kind = fillerKind(category)
-    const range = kind === 'cut' ? cutAround(words, k, k, durationMs) : muteAround(words, k, durationMs)
+    const range = kind === 'cut' ? cutRange(k, k) : muteAround(words, k, durationMs)
+    if (!range) return null
     return { kind, reason: 'filler', category, start: range.start, end: range.end, words: [words[k]!.i, words[k]!.i], label }
   }
 
   if (options.hesitations) {
     words.forEach((w, k) => {
       if (w.kind === 'gap-speech') {
-        items.push(wordItem(k, 'gap-speech', 'fala sem palavra'))
-        counts['gap-speech']++
+        // fala que o motor não transcreveu, mas ALTA como a voz, é fala de verdade (G1: 16 trechos, +0,5 a −3,6 dB da voz): fica
+        if (report && isLoudGapSpeech(profile, w)) {
+          report.keptGapSpeech++
+          return
+        }
+        const it = wordItem(k, 'gap-speech', 'fala sem palavra')
+        if (it) {
+          items.push(it)
+          counts['gap-speech']++
+        }
       } else if (isHesitationWord(w)) {
-        items.push(wordItem(k, 'hesitation', w.text.trim().replace(/[.,;:!?…]+$/u, '')))
-        counts.hesitation++
+        const it = wordItem(k, 'hesitation', w.text.trim().replace(/[.,;:!?…]+$/u, ''))
+        if (it) {
+          items.push(it)
+          counts.hesitation++
+        }
       }
     })
   }
@@ -330,8 +434,11 @@ export function computeClean(input: CleanInput, options: CleanOptions): CleanRes
   const suggested = suggestedCrutchIndexes(words, durationMs)
   if (options.crutches) {
     for (const k of suggested) {
-      items.push(wordItem(k, 'crutch', words[k]!.text.trim().replace(/[.,;:!?…]+$/u, '')))
-      counts.crutch++
+      const it = wordItem(k, 'crutch', words[k]!.text.trim().replace(/[.,;:!?…]+$/u, ''))
+      if (it) {
+        items.push(it)
+        counts.crutch++
+      }
     }
   }
 
@@ -341,15 +448,73 @@ export function computeClean(input: CleanInput, options: CleanOptions): CleanRes
       const a = byIndex.get(r.from)
       const b = byIndex.get(r.to)
       if (a === undefined || b === undefined || b < a) continue
-      const range = cutAround(words, a, b, durationMs)
+      const range = cutRange(a, b)
+      if (!range) continue
       items.push({ kind: 'cut', reason: 'retake', category: 'retake', start: range.start, end: range.end, words: [r.from, r.to], label: r.reason || 'recomeço' })
       counts.retake++
     }
   }
 
-  items.sort((a, b) => a.start - b.start || a.end - b.end)
-  const total = (kind: 'cut' | 'mute'): number => unionLength(items.filter((i) => i.kind === kind))
-  return { items, counts, suggestedCrutches: suggested.length, cutMs: total('cut'), muteMs: total('mute') }
+  let final = items
+  if (pacing && report) final = shapeItems(items, words, input, pacing, report, counts)
+
+  final.sort((a, b) => a.start - b.start || a.end - b.end)
+  const total = (kind: 'cut' | 'mute'): number => unionLength(final.filter((i) => i.kind === kind))
+  const result: CleanResult = { items: final, counts, suggestedCrutches: suggested.length, cutMs: total('cut'), muteMs: total('mute') }
+  if (report) result.pacing = report
+  return result
+}
+
+/** Ganho de um corte para o ritmo: o tempo que ele tira (ms), e mais que isso se é recomeço. */
+const gainOf = (it: CleanItem): number => it.end - it.start + (it.reason === 'retake' ? RETAKE_GAIN_BONUS_MS : 0)
+
+/**
+ * Molda os cortes (lasca, fala curta, teto de emendas; ver `pacing.ts`) e devolve a lista final. Atualiza as contagens e o
+ * relatório. Os silenciamentos (`mute`) passam direto: não criam emenda.
+ */
+function shapeItems(items: CleanItem[], words: readonly Word[], input: CleanInput, pacing: (typeof PACING)[PacingId], report: PacingReport, counts: Record<CleanCategory, number>): CleanItem[] {
+  const { durationMs } = input
+  const candidates: ShapeCut[] = []
+  items.forEach((it, id) => {
+    if (it.kind === 'cut') candidates.push({ id, start: it.start, end: it.end, gain: gainOf(it), fixed: false })
+  })
+  const fixedBase = items.length
+  ;(input.fixedCuts ?? []).forEach((f, n) => candidates.push({ id: fixedBase + n, start: f.start, end: f.end, gain: Number.MAX_SAFE_INTEGER / 1e6, fixed: true }))
+  // fala que fica: as palavras que nenhum corte candidato cobre
+  const speech = words.filter((w) => !candidates.some((c) => c.start <= w.start + 1 && c.end >= w.end - 1)).map((w) => ({ start: w.start, end: w.end }))
+  const shaped = shapeCuts({ durationMs, cuts: candidates, speech, pacing })
+  report.dropped = shaped.dropped
+  report.filled = shaped.fill.length
+
+  const kept: CleanItem[] = items.filter((it, id) => it.kind !== 'cut' || shaped.keep.has(id))
+  for (const f of shaped.fill) kept.push({ kind: 'cut', reason: 'silence', category: 'silence', start: Math.round(f.start), end: Math.round(f.end), label: 'resto entre dois cortes' })
+
+  // contagens: refeitas a partir do que sobrou
+  for (const key of Object.keys(counts) as CleanCategory[]) counts[key] = 0
+  for (const it of kept) counts[it.category]++
+
+  const spans = unionRanges([...kept.filter((it) => it.kind === 'cut'), ...(input.fixedCuts ?? [])])
+  const removed = spans.reduce((acc, r) => acc + (r.end - r.start), 0)
+  report.seams = countSeams(spans, durationMs)
+  report.seamsPerMin = durationMs - removed > 0 ? (report.seams / (durationMs - removed)) * 60_000 : 0
+  const d = shaped.dropped
+  const undone = d.sliver + d.speech + d.budget
+  if (undone > 0) report.notices.push(`Ritmo: ${undone} corte(s) pequeno(s) ficaram de fora para o vídeo não picotar (${d.budget} pelo teto de ${pacing.maxSeamsPerMin} emendas por minuto).`)
+  if (report.keptGapSpeech > 0) report.notices.push(`${report.keptGapSpeech} trecho(s) de fala sem palavra transcrita foram mantidos (o volume é de fala, não de hesitação). Confira na Revisão.`)
+  if (report.unsafeEdges > 0) report.notices.push(`${report.unsafeEdges} corte(s) não foram feitos porque a borda cairia no meio da fala.`)
+  return kept
+}
+
+/** Une os intervalos que se tocam ou se sobrepõem. */
+function unionRanges(spans: readonly Pick<Range, 'start' | 'end'>[]): Range[] {
+  const sorted = spans.filter((r) => r.end > r.start).map((r) => ({ start: r.start, end: r.end })).sort((a, b) => a.start - b.start || a.end - b.end)
+  const out: Range[] = []
+  for (const r of sorted) {
+    const last = out[out.length - 1]
+    if (last && r.start <= last.end) last.end = Math.max(last.end, r.end)
+    else out.push(r)
+  }
+  return out
 }
 
 /** Trecho a silenciar de uma palavra: ela inteira com folga de `GUARD_MIN_MS` e sem passar das palavras vizinhas. */
