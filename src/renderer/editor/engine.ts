@@ -162,6 +162,8 @@ export class PreviewEngine {
   private audioAborts = 0
   /** O último aviso de falha real do `play()` (o mesmo texto não se repete a cada quadro). Zera ao trocar o áudio. */
   private lastAudioFailure = ''
+  /** O `currentTime` do áudio quando o aviso de falha apareceu: se ele andar depois, o som voltou e o aviso sai. */
+  private failureMark: number | null = null
   /** O último quadro desenhado antes de uma emenda que dissolve (F1): a prévia o desfaz sobre o novo, como a exportação. */
   private dissolveSnap: HTMLCanvasElement | null = null
   /** Trechos em que a voz fica muda (muletas silenciadas): ordenados, só os ligados. */
@@ -317,6 +319,7 @@ export class PreviewEngine {
     this.o.onAudioError(null)
     this.audioWatch.quiet()
     this.lastAudioFailure = ''
+    this.failureMark = null
     this.audio.src = url
     this.audio.dataset.treated = String(treated)
     this.audio.load()
@@ -370,7 +373,17 @@ export class PreviewEngine {
       if (!this.lastAudioFailure) this.o.onAudioError(act.text) // já há um motivo mais exato na pílula
     } else if (act.kind === 'clear') {
       this.lastAudioFailure = ''
+      this.failureMark = null
       this.o.onAudioError(null)
+    }
+    // uma falha real do play() que já passou (o sistema deixou tocar depois): o áudio anda de novo, o aviso sai
+    if (this.lastAudioFailure) {
+      if (this.failureMark === null) this.failureMark = a.currentTime
+      else if (!a.paused && Math.abs(a.currentTime - this.failureMark) > 0.5) {
+        this.lastAudioFailure = ''
+        this.failureMark = null
+        this.o.onAudioError(null)
+      }
     }
   }
 

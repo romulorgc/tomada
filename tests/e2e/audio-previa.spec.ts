@@ -90,6 +90,7 @@ test('uma falha REAL do play() (o sistema recusa) vira aviso visível com o moti
   await openWithTreatedAudio(s)
   await page.evaluate(() => {
     const original = HTMLMediaElement.prototype.play
+    ;(window as unknown as { __playOriginal: typeof original }).__playOriginal = original
     HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
       if (this instanceof HTMLAudioElement) return Promise.reject(new DOMException('play() failed because the user did not interact with the document first.', 'NotAllowedError'))
       return original.call(this)
@@ -102,6 +103,12 @@ test('uma falha REAL do play() (o sistema recusa) vira aviso visível com o moti
   await page.waitForTimeout(1500)
   const lines = readLog(s).split('\n').filter((l) => /não tocou: o sistema não deixou/.test(l))
   expect(lines.length).toBe(1)
+  // o sistema volta a deixar tocar: o áudio anda de novo e o aviso sai sozinho (nada de pílula amarela até o fim da sessão)
+  await page.evaluate(() => {
+    HTMLMediaElement.prototype.play = (window as unknown as { __playOriginal: HTMLMediaElement['play'] }).__playOriginal
+  })
+  await expect(chip).toHaveAttribute('data-treated', 'true', { timeout: 15_000 })
+  expect(await chip.getAttribute('data-tone')).toBeNull()
 })
 
 test('o áudio que devia tocar e não começa: o vigia tenta de novo e AVISA em vez de ficar mudo', async () => {
