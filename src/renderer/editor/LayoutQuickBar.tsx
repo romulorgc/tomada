@@ -15,7 +15,11 @@ const T = t.editor.layout
 
 const mapClip = (doc: Project, id: string, fn: (c: Clip) => Clip): Project => ({ ...doc, clips: doc.clips.map((c) => (c.id === id ? fn(c) : c)) })
 
-/** O estado do recorte do fundo, em uma linha: andamento, retomada, falha com "Tentar de novo" ou o motor ainda não preparado. */
+/**
+ * O estado do recorte do fundo, em uma linha, lido do que o serviço da câmera já publica (`useCamera.jobs` do trabalho `matte`, o motor e
+ * `matte.url`): andamento, falha com "Tentar de novo", cancelado com "Recortar agora" ou o motor ainda não preparado. Só CONSOME o estado do
+ * recorte; quem gera, retoma e persiste o recorte é o pipeline do processo principal.
+ */
 export function MatteNotice() {
   const { detail, matte, hasCamera } = useEditor()
   const job = useCamera((s) => s.jobs[cameraJobKey(detail.id, 'matte')])
@@ -29,7 +33,6 @@ export function MatteNotice() {
     return (
       <div className="matte-notice" role="status" data-testid="matte-notice" data-state={job!.state} data-fallback={String(matte.fallback)}>
         <span>{queued ? M.queued : matte.fallback ? M.runningFallback(pct) : M.running(pct)}</span>
-        {job!.resumedFrom && job!.resumedFrom > 0 ? <span className="mn-sub">{M.resumed}</span> : null}
         <span className="mn-meter" role="progressbar" aria-label={M.running(pct)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
           <i style={{ width: `${pct}%` }} />
         </span>

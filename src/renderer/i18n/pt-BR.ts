@@ -330,7 +330,7 @@ export const ptBR = {
       },
       presenter: {
         title: 'Você sem fundo (green screen)',
-        help: 'Vale para os layouts em que você aparece sem o fundo da webcam, na frente da tela: "Você sem fundo" no 16:9 e "Green screen" no 9:16. O recorte é feito neste computador, na placa de vídeo, sozinho depois de gravar, uma vez por gravação.',
+        help: 'Vale para os layouts em que você aparece sem o fundo da webcam, na frente da tela: "Você sem fundo" no 16:9 e "Green screen" no 9:16. O recorte é feito neste computador, na placa de vídeo, uma vez por gravação.',
         notActive: 'O layout atual não usa você sem fundo.',
         side: 'Canto',
         sides: { left: 'Esquerda', right: 'Direita' },
@@ -344,9 +344,8 @@ export const ptBR = {
         status: {
           queued: 'Na fila para recortar você do fundo…',
           running: (pct: number): string => `Recortando você do fundo: ${pct}%`,
-          resumed: 'Retomado de onde parou: o que já estava feito não é refeito.',
           ready: 'Você já está recortado do fundo.',
-          missing: 'Você ainda não foi recortado do fundo. Isso acontece sozinho depois de gravar; se não começou, use o botão abaixo.',
+          missing: 'Você ainda não foi recortado do fundo. Isso começa sozinho quando um layout usa você sem fundo; se não começou, use o botão abaixo.',
           start: 'Recortar você do fundo agora',
           redo: 'Recortar de novo',
           failed: 'Não consegui recortar você do fundo',
@@ -435,7 +434,7 @@ export const ptBR = {
         'screen-wide': 'A tela inteira na largura, com o mesmo vídeo desfocado ao fundo. Para telas de letra grande.',
         camera: 'Só a câmera, em tela cheia.',
         presenter:
-          'Você, sem o fundo da webcam, na frente da tela: do peito para cima e com as mãos, na borda de baixo. No 16:9 fica num canto; no vertical a tela vai em cima (seguindo o cursor) e você embaixo. O recorte do fundo é feito sozinho depois de gravar (aba Câmera). Mostre o tronco e as mãos, com a luz de frente.',
+          'Você, sem o fundo da webcam, na frente da tela: do peito para cima e com as mãos, na borda de baixo. No 16:9 fica num canto; no vertical a tela vai em cima (seguindo o cursor) e você embaixo. O recorte do fundo é feito sozinho, na placa de vídeo (aba Câmera). Mostre o tronco e as mãos, com a luz de frente.',
         greenscreen:
           'Só no vertical. A página em tela cheia atrás, com a janela seguindo o que você mostra e a letra legível, e você sem o fundo embaixo, com cerca de metade da altura. É você explicando aquela página, como no TikTok. A legenda fica logo acima da sua cabeça.',
         'greenscreen-corner':
@@ -449,11 +448,10 @@ export const ptBR = {
         queued: 'Na fila para recortar você do fundo…',
         running: (pct: number): string => `Recortando você do fundo: ${pct}%`,
         runningFallback: (pct: number): string => `Recortando você do fundo: ${pct}%. Até terminar, a prévia mostra o layout sem recorte.`,
-        resumed: 'Retomado de onde parou.',
         failed: 'Não consegui recortar você do fundo',
         retry: 'Tentar de novo',
         needsEngine: 'O green screen precisa do recorte do fundo, e o app ainda não está preparado para isso. Prepare na aba Câmera. Até lá a prévia mostra o layout sem recorte.',
-        cancelled: 'O recorte do fundo foi interrompido. Ele continua de onde parou.',
+        cancelled: 'O recorte do fundo foi cancelado, e o green screen só sai com ele.',
         start: 'Recortar agora'
       },
       quick: {

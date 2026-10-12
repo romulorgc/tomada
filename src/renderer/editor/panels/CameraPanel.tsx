@@ -94,7 +94,6 @@ function MatteStatus() {
         <p className="ctl-note" aria-live="polite">
           {job!.state === 'queued' ? P.status.queued : P.status.running(pct)}
         </p>
-        {job!.resumedFrom && job!.resumedFrom > 0 ? <p className="ctl-note">{P.status.resumed}</p> : null}
         <div className="meter" role="progressbar" aria-label={P.status.running(pct)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
           <i style={{ width: `${pct}%` }} />
         </div>

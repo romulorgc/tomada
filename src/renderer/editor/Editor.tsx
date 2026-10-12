@@ -375,14 +375,13 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   const chosenNeedsMatte = usesPresenter(chosenScene, previewClip ? 'vertical' : formatKind)
   const clipsNeedMatte = useMemo(() => doc.clips.some((c) => usesPresenter(clipScene(doc, c), 'vertical')), [doc])
   const needsMatteAny = needsMatte || chosenNeedsMatte || clipsNeedMatte
-  // Toda gravação com câmera tem o recorte do fundo, qualquer que seja o layout (ele nasce sozinho depois de gravar; aqui é a rede de
-  // segurança do projeto antigo, do trabalho interrompido e do motor que só ficou pronto agora). Volta na hora se o guardado vale para
-  // esta câmera; se já está na fila ou rodando (ou pela metade, em pedaços), devolve o trabalho que existe e ele continua de onde parou.
+  // Pede o recorte do fundo (se o motor está pronto e ainda não existe) sempre que o que o usuário ESCOLHEU usa você sem fundo: o 9:16 com câmera
+  // nasce no Green screen. Volta na hora se o guardado vale para esta câmera; se já está na fila ou rodando, devolve o trabalho que existe.
   const matteEngineReady = useCamera((s) => s.view?.matte.state === 'ready')
   useEffect(() => {
-    if (!hasCamera || !matteEngineReady || matteUrl) return
+    if (!hasCamera || !needsMatteAny || !matteEngineReady || matteUrl) return
     void useCamera.getState().analyze(detail.id, 'matte')
-  }, [detail.id, hasCamera, matteEngineReady, matteUrl])
+  }, [detail.id, hasCamera, needsMatteAny, matteEngineReady, matteUrl])
   // a prévia só existe no 9:16 e enquanto o corte existe
   useEffect(() => {
     if (previewId && (format !== 'vertical' || !previewClip)) clips.getState().preview(null)

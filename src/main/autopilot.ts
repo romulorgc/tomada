@@ -284,9 +284,9 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       case 'layouts': {
         const t = await deps.transcription.getTranscript(id)
         const e = await events(dir, duration, project)
-        // Toda gravação com câmera tem o recorte do fundo (F2/R7: ele nasce sozinho depois de gravar, qualquer que seja o estilo). Com ele
-        // pronto, o 9:16 é o V-E "Green screen" e o 16:9 segue o estilo escolhido (Apresentador ou Quadro ao lado); sem ele, os dois ficam
-        // no quadro ao lado e no V-B, e o aviso diz por quê.
+        // Com câmera, o 9:16 é o V-E "Green screen" (F2) e precisa do recorte do fundo, qualquer que seja o estilo escolhido ao gravar: o piloto
+        // o pede aqui (a fila da câmera devolve o trabalho que já existe) e espera. Com ele pronto, o 16:9 segue o estilo escolhido (Você sem
+        // fundo ou Quadro ao lado); sem ele, os dois ficam no quadro ao lado e no Câmera + tela, e o aviso diz por quê.
         let hasMatte = false
         let notice = ''
         if (deps.camera && project.sources.camera && !project.style.camera.hidden) {
@@ -517,8 +517,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
         })
         await settleIntent(id)
         if (prefs.mode === 'nothing') return
-        // O recorte do fundo começa logo depois da gravação, na fila da câmera, atrás da análise do rosto (qualquer estilo de câmera).
-        if (before.sources.camera && !before.style.camera.hidden) void deps.camera?.analyze(id, 'matte').catch(() => undefined)
+        // Apresentador: o recorte do fundo começa logo depois da gravação, na fila da câmera, atrás da análise do rosto.
+        if (before.cameraStyle === 'presenter' && before.sources.camera) void deps.camera?.analyze(id, 'matte').catch(() => undefined)
         await enqueue(() => run(id))
       } finally { active.delete(id) }
     },
