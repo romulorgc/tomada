@@ -12,6 +12,8 @@ export type ReviewItem = {
   phase?: 'queued' | 'exporting' | 'ready' | 'error'; exportPath?: string; textPath?: string; error?: string
   /** Corte entregue abaixo da nota configurada: revisão explícita antes de publicar. */
   lowScore?: boolean
+  /** A prova de emenda do arquivo exportado (F1): `ok: false` aparece como aviso na Revisão; nunca bloqueia. */
+  seamProof?: { ok: boolean; summary: string }
   captionsEnabled?: boolean; captionStyle?: CaptionStyle['style']; layout?: LayoutKind
   zoom?: 'softer' | 'stronger' | 'off' | 'auto'; trim?: Range; disabledReasons?: CutReason[]; keepFillers?: string[]
   disabledCutIds?: string[]; disabledZoomIds?: string[]; disabledLayoutIds?: string[]; keptFillerCutIds?: string[]

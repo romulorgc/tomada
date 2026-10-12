@@ -304,6 +304,11 @@ export function ExportDialog() {
                 {T.report(progress.report.width, progress.report.height, Math.round(progress.report.fps), (progress.report.bytes / 1e6).toFixed(1), progress.report.audioVideoDiffMs)}
               </p>
             ) : null}
+            {progress.report?.seamProof ? (
+              <p className="export-detail" data-tone={progress.report.seamProof.ok ? undefined : 'warn'} role={progress.report.seamProof.ok ? undefined : 'alert'} data-testid="export-seam-proof" data-ok={String(progress.report.seamProof.ok)}>
+                {progress.report.seamProof.summary}
+              </p>
+            ) : null}
             <div className="result-actions">
               <button type="button" className="btn btn-primary" data-testid="export-play" {...{ 'data-autofocus': true }} onClick={() => void run('open', progress.outputPath!)}>
                 <PlayFolderIcon size={16} />

@@ -159,7 +159,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       if (textPath) await resolveProjectFile(dir, textPath)
       await change(id, (p) => {
         if (protectionFingerprint(p) !== protection) throw new Error(PROTECTION_CHANGED_MESSAGE)
-        return settle(p, { phase: 'ready', exportPath: path, textPath })
+        return settle(p, { phase: 'ready', exportPath: path, textPath, seamProof: done.report?.seamProof ? { ok: done.report.seamProof.ok, summary: done.report.seamProof.summary } : undefined })
       })
       if (done.message) throw new Error(done.message)
     } catch (err) {

@@ -19,7 +19,7 @@ import { reviewDocument } from '@shared/review'
 import { itemOf } from '@shared/review'
 import type { FileHandle } from 'node:fs/promises'
 import { constants, existsSync } from 'node:fs'
-import { copyFile, link, mkdir, open, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, link, mkdir, open, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { normalizeRanges } from '@shared/clips'
 import {
@@ -34,13 +34,16 @@ import {
 import { EVENT_FILES } from '@shared/events'
 import { FACE_FILE } from '@shared/face'
 import { currentMatteUrl } from './camera/matte-file'
-import type { ExportJob, ExportProgress, ExportReport, ExportRequest, ExporterResult } from '@shared/ipc'
+import type { ExportJob, ExportProgress, ExportReport, ExportRequest, ExporterResult, SeamProof } from '@shared/ipc'
 import { mediaUrl } from '@shared/media-url'
 import { projectDurationMs } from '@shared/project'
 import { buildClipText, buildYoutubeText, fallbackClipMeta, heuristicChapters, resolveClipMeta } from '@shared/publish'
 import { uniqueName } from '@shared/recording'
 import { estimateExportBytes, type DiskEstimate } from '@shared/disk'
 import { keptRanges, outputDuration } from '@shared/timeline'
+import { planSeams } from '@shared/seams'
+import { measureSeams, seamSummary } from '@shared/seam-proof'
+import { pcmFromBytes } from '@shared/peaks'
 import { projectForFormat } from '@shared/vertical'
 import type { Clip, Project, Word } from '@shared/types'
 import {
@@ -52,6 +55,7 @@ import {
   buildSilentAudioArgs,
   parseLoudnormMeasure
 } from './audio-graph'
+import { buildPeaksPcmArgs } from './ffmpeg-args'
 import type { Ffmpeg } from './ffmpeg'
 import { checkDiskSpace, diskWarning } from './disk-space'
 import { pathExists } from './fs-utils'
@@ -65,6 +69,8 @@ import { measureVoiceNoise } from './voice-noise'
 export const MAX_AV_DIFF_MS = 50
 /** Sem sinal de vida da janela de vídeo por tanto tempo, a exportação é dada como travada. */
 export const STALL_TIMEOUT_MS = 120_000
+/** Taxa do áudio decodificado para a prova de emenda: 8 kHz basta para o nível em quadros de 10 ms. */
+const PROOF_SAMPLE_RATE = 8000
 
 export class ExportError extends Error {
   override readonly name = 'ExportError'
@@ -469,6 +475,9 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       // conferência
       setPhase(run, 'checking')
       const report = await checkOutput(ff, run, videoResult.frames)
+      // prova de emenda (R6): o app mede o PRÓPRIO arquivo; reprovar só avisa (log e Revisão), nunca derruba a exportação
+      const proof = await proveSeams(ff, run, report.durationMs)
+      if (proof) report.seamProof = proof
       await assertProtection(run)
       run.finalPath = await placeFinal(run)
       run.placedFinal = true
@@ -550,6 +559,31 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       }
     }
     return target
+  }
+
+  /**
+   * Prova de emenda (F1 · R6): decodifica o áudio do arquivo exportado e mede emendas por minuto, menor trecho, queda de nível em cada
+   * emenda e emendas dentro de fala (`seam-proof.ts`). Devolve `null` (e diz o motivo no log) se não conseguiu medir.
+   */
+  async function proveSeams(ff: Ffmpeg, run: Run, durationMs: number): Promise<SeamProof | null> {
+    try {
+      const seams = planSeams(keptRanges(projectDurationMs(run.project), run.project.cuts))
+      const pcmFile = await run.tmp!.file('prova-emenda.pcm')
+      await ff.run(buildPeaksPcmArgs({ input: run.partialFinal, output: pcmFile, sampleRate: PROOF_SAMPLE_RATE }), { signal: run.abort.signal })
+      const bytes = await readFile(pcmFile)
+      const pcm = pcmFromBytes(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength))
+      const samples = new Float32Array(pcm.length)
+      for (let i = 0; i < pcm.length; i++) samples[i] = pcm[i]! / 32768
+      const result = measureSeams(samples, PROOF_SAMPLE_RATE, seams.map((s) => s.outMs), durationMs, { format: run.req.format ?? 'horizontal' })
+      const summary = seamSummary(result)
+      if (result.ok) logger.info(`Exportação ${run.id}: ${summary}`)
+      else logger.warn(`Exportação ${run.id}: ${summary}`)
+      return { ok: result.ok, summary, failures: result.failures, seams: result.seams, seamsPerMin: result.seamsPerMin, shortestMs: result.shortestMs, maxDropDb: result.maxDropDb, inSpeech: result.inSpeech }
+    } catch (err) {
+      if (run.cancelled || run.abort.signal.aborted) throw err
+      logger.warn(`Exportação ${run.id}: não consegui medir as emendas do arquivo exportado (${messageOf(err)}).`)
+      return null
+    }
   }
 
   /** ffprobe do arquivo final: trilhas, duração, taxa constante e diferença áudio × vídeo. */

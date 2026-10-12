@@ -12,5 +12,6 @@ export const reviewItemSchema = z.looseObject({
   restoreAutoZooms:z.boolean().optional(),restoreAutoLayouts:z.boolean().optional(),
   revision: z.number().int().nonnegative().optional(),
   lowScore: z.boolean().optional(),
+  seamProof: z.object({ ok: z.boolean(), summary: z.string().max(2000) }).optional(),
   title: z.string().max(200).optional(), hook: z.string().max(200).optional(), text: z.string().max(10000).optional()
 })

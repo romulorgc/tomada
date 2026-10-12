@@ -246,6 +246,19 @@ export type ExportRequest = ExportOptions & { projectId: string }
 
 export type ExportPhase = 'preparing' | 'rendering' | 'mux' | 'checking' | 'done' | 'error' | 'cancelled'
 
+/** A prova de emenda (F1 · R6) do arquivo exportado: o que o app mediu no PRÓPRIO vídeo e se passou nos limites. Não bloqueia. */
+export type SeamProof = {
+  ok: boolean
+  /** Uma linha em português para o log e para a Revisão. */
+  summary: string
+  failures: string[]
+  seams: number
+  seamsPerMin: number
+  shortestMs: number | null
+  maxDropDb: number | null
+  inSpeech: number
+}
+
 /** Resultado da conferência final (ffprobe) e da medição da exportação. */
 export type ExportReport = {
   outputPath: string
@@ -266,6 +279,8 @@ export type ExportReport = {
   profile: string | null
   /** Onde o tempo do vídeo foi (decodificar, desenhar, codificar), para depurar a velocidade. */
   timing: string | null
+  /** A prova de emenda; ausente quando não deu para medir (o motivo vai no log). */
+  seamProof?: SeamProof
 }
 
 export type ExportProgress = {

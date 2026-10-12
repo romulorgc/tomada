@@ -15,10 +15,11 @@
  *
  * Tudo que é regra (avanço, deriva, pré-busca) está em `@shared/playback` e tem teste de unidade.
  */
-import { createRenderCache, renderFrame, type CanvasFactory, type Ctx2D, type FrameSource, type RenderCache } from '@shared/render'
+import { createRenderCache, drawDissolve, renderFrame, type CanvasFactory, type Ctx2D, type FrameSource, type RenderCache } from '@shared/render'
 import { evaluateScene, type Derived, type FormatSpec, type Scene } from '@shared/scene'
 import {
   DRIFT_SETTLE_FRAMES,
+  type ClockStep,
   advanceClock,
   driftFix,
   frameDurationMs,
@@ -26,6 +27,7 @@ import {
   shuttleRate,
   stepOutputMs
 } from '@shared/playback'
+import { equalPowerGains, keptIndexOf } from '@shared/seams'
 import { outputToSource, rangesLength, sourceToOutput } from '@shared/timeline'
 import type { Project } from '@shared/types'
 import { cameraVideoOffsetMs } from '@shared/camera-sync'
@@ -142,6 +144,17 @@ export class PreviewEngine {
   private audio: HTMLAudioElement | null = null
   private audioOffsetMs = 0
   private audioNudging = false
+  /**
+   * A segunda cópia do áudio (F1): na emenda as duas se cruzam em potência igual (`equalPowerGains`, o `qsin` do `acrossfade` da
+   * exportação) por `2 × halfMs`, com o meio do cruzamento no corte da imagem, em vez de um salto seco do `currentTime`.
+   */
+  private audioB: HTMLAudioElement | null = null
+  /** Índice do trecho para o qual `audioB` já foi posicionado (-1 = nenhum). */
+  private audioPrepared = -1
+  private xfade: { from: HTMLAudioElement; to: HTMLAudioElement; startedAt: number; durationMs: number } | null = null
+  private xfadeTimer = 0
+  /** O último quadro desenhado antes de uma emenda que dissolve (F1): a prévia o desfaz sobre o novo, como a exportação. */
+  private dissolveSnap: HTMLCanvasElement | null = null
   /** Trechos em que a voz fica muda (muletas silenciadas): ordenados, só os ligados. */
   private mutes: { start: number; end: number }[] = []
 
@@ -228,6 +241,8 @@ export class PreviewEngine {
     this.dirty = true
     // cortes novos mudam a emenda: a pré-busca antiga pode apontar para o lugar errado
     this.prefetched = null
+    this.cancelCrossfade()
+    this.dissolveSnap = null
     // Mesmo pausada, a câmera deve buscar o quadro novo quando o usuário corrige a sincronia.
     if (oldCameraOffset !== cameraVideoOffsetMs(project)) {
       for (const track of this.tracks) {
@@ -262,11 +277,17 @@ export class PreviewEngine {
    */
   setAudio(url: string | null, offsetMs: number, treated: boolean): void {
     const wasPlaying = this.playing && this.rate > 0
+    this.cancelCrossfade()
     if (!url) {
       if (this.audio) {
         this.audio.pause()
         this.audio.remove()
         this.audio = null
+      }
+      if (this.audioB) {
+        this.audioB.pause()
+        this.audioB.remove()
+        this.audioB = null
       }
       return
     }
@@ -289,6 +310,11 @@ export class PreviewEngine {
     this.audio.dataset.treated = String(treated)
     this.audio.load()
     this.audio.currentTime = this.audioSeconds(this.sourceMs)
+    if (this.audioB) {
+      this.audioB.src = url
+      this.audioB.load()
+    }
+    this.audioPrepared = -1
     this.o.playback.setState({ audioTreated: treated })
     if (wasPlaying) {
       this.audio.muted = this.rate !== 1
@@ -359,6 +385,8 @@ export class PreviewEngine {
     this.o.canvas.dataset.playCount = String(Number(this.o.canvas.dataset.playCount ?? '0') + 1)
     this.setError(null)
     if (rate > 0 && this.outputMs >= rangesLength(d.kept) - 40) this.seekSource(outputToSource(0, d.kept))
+    this.cancelCrossfade()
+    this.dissolveSnap = null
     this.rate = rate
     this.playing = true
     this.prefetched = null
@@ -394,6 +422,8 @@ export class PreviewEngine {
     this.rate = 0
     this.waiting = null
     this.prefetched = null
+    this.cancelCrossfade()
+    this.audioB?.pause()
     for (const t of this.tracks) {
       t.active.pause()
       t.active.playbackRate = 1
@@ -428,6 +458,8 @@ export class PreviewEngine {
     const max = d ? d.durationMs : Number.POSITIVE_INFINITY
     this.sourceMs = Math.min(max, Math.max(0, ms))
     this.prefetched = null
+    this.cancelCrossfade()
+    this.dissolveSnap = null
     this.seekMedia(this.sourceMs)
     if (this.playing && this.rate > 0) this.hold()
     this.dirty = true
@@ -526,11 +558,12 @@ export class PreviewEngine {
     }
     const a = this.audio
     // muleta silenciada: a voz fica muda enquanto o relógio está dentro do trecho (a imagem e o tempo seguem)
-    if (a) {
-      const wantVolume = this.mutes.some((m) => this.sourceMs >= m.start && this.sourceMs < m.end) ? 0 : 1
+    if (a && !this.xfade) {
+      const wantVolume = this.mutedAt(this.sourceMs) ? 0 : 1
       if (a.volume !== wantVolume) a.volume = wantVolume
     }
-    if (a && !a.error && !a.seeking && !a.ended && a.readyState >= 1) {
+    // durante o cruzamento da emenda ninguém corrige a deriva: o áudio que entra já está no lugar e o que sai some em 70 ms
+    if (a && !this.xfade && !a.error && !a.seeking && !a.ended && a.readyState >= 1) {
       const want = this.audioSeconds(this.sourceMs)
       const fix = driftFix((a.currentTime - want) * 1000, frame, rate, {
         nudge: AUDIO_NUDGE,
@@ -553,6 +586,7 @@ export class PreviewEngine {
     const target = prefetchTarget(d.kept, this.sourceMs, PREFETCH_LEAD_MS * this.rate)
     if (!target || this.prefetched?.index === target.index) return
     this.prefetched = target
+    this.prepareSeamAudio(target.index)
     for (const t of this.tracks) {
       if (t.active.error) continue
       const s = t.standby
@@ -582,7 +616,124 @@ export class PreviewEngine {
       }
       v.currentTime = this.fileSeconds(t.kind, v, to)
     }
-    if (this.audio) this.audio.currentTime = this.audioSeconds(to)
+    // com o cruzamento em curso o áudio que entra já toca no lugar certo: nada de busca (é ela que faz o "tchu" da emenda)
+    if (this.audio && !this.xfade) this.audio.currentTime = this.audioSeconds(to)
+  }
+
+  // --- áudio da emenda (F1) -----------------------------------------------------------------------------
+  private mutedAt(sourceMs: number): boolean {
+    return this.mutes.some((m) => sourceMs >= m.start && sourceMs < m.end)
+  }
+
+  private ensureAudioB(): HTMLAudioElement | null {
+    const a = this.audio
+    if (!a) return null
+    if (!this.audioB) {
+      const b = document.createElement('audio')
+      b.preload = 'auto'
+      b.preservesPitch = true
+      b.dataset.testid = 'preview-audio-standby'
+      b.src = a.currentSrc || a.src
+      b.load()
+      this.o.host.appendChild(b)
+      this.audioB = b
+    }
+    return this.audioB
+  }
+
+  /** Perto de uma emenda: a segunda cópia do áudio espera parada `halfMs` ANTES do começo do trecho seguinte. */
+  private prepareSeamAudio(index: number): void {
+    const d = this.derived
+    if (!d || this.rate !== 1) return
+    const seam = d.seams[index - 1]
+    if (!seam || seam.halfMs <= 0) return
+    const b = this.ensureAudioB()
+    if (!b) return
+    b.pause()
+    b.volume = 0
+    b.currentTime = this.audioSeconds(seam.rightStart - seam.halfMs)
+    this.audioPrepared = index
+  }
+
+  /** Começa o cruzamento `halfMs` antes do corte da imagem (o meio dele cai no corte), como o `acrossfade` da exportação. */
+  private startSeamAudio(d: Derived, before: number, step: ClockStep): void {
+    if (this.rate !== 1 || !this.audio || this.xfade) return
+    const idx = keptIndexOf(d.kept, before)
+    const seam = idx >= 0 ? d.seams[idx] : undefined
+    if (!seam || seam.halfMs <= 0) return
+    if (step.jump === null && step.t < seam.leftEnd - seam.halfMs) return
+    const b = this.audioB
+    // sem a cópia pronta (acabou de buscar, o arquivo ainda carrega): o pulo faz a busca de sempre
+    if (!b || this.audioPrepared !== idx + 1 || b.readyState < 2) return
+    this.audioPrepared = -1
+    b.playbackRate = 1
+    b.muted = false
+    b.volume = 0
+    void b.play().catch((err: unknown) => this.o.onAudioError(`O áudio da prévia não tocou (${err instanceof Error ? err.message : String(err)}).`))
+    this.xfade = { from: this.audio, to: b, startedAt: performance.now(), durationMs: seam.halfMs * 2 }
+    window.clearInterval(this.xfadeTimer)
+    this.xfadeTimer = window.setInterval(() => this.stepCrossfade(performance.now()), 6)
+  }
+
+  private stepCrossfade(now: number): void {
+    const x = this.xfade
+    if (!x) {
+      window.clearInterval(this.xfadeTimer)
+      return
+    }
+    const u = (now - x.startedAt) / x.durationMs
+    const g = equalPowerGains(u)
+    const mute = this.mutedAt(this.sourceMs)
+    x.from.volume = mute ? 0 : g.out
+    x.to.volume = mute ? 0 : g.in
+    if (u >= 1) this.finishCrossfade()
+  }
+
+  /** O cruzamento acabou: quem entrou vira o áudio da prévia e quem saiu vira a cópia de espera. */
+  private finishCrossfade(): void {
+    const x = this.xfade
+    window.clearInterval(this.xfadeTimer)
+    if (!x) return
+    this.xfade = null
+    x.from.pause()
+    x.from.volume = 0
+    x.from.dataset.testid = 'preview-audio-standby'
+    x.to.dataset.testid = 'preview-audio'
+    x.to.dataset.treated = x.from.dataset.treated ?? 'false'
+    x.to.volume = this.mutedAt(this.sourceMs) ? 0 : 1
+    this.audio = x.to
+    this.audioB = x.from
+    this.audioNudging = false
+  }
+
+  /** Para o cruzamento sem trocar nada: o áudio de antes continua sendo o da prévia, inteiro. */
+  private cancelCrossfade(): void {
+    window.clearInterval(this.xfadeTimer)
+    const x = this.xfade
+    this.xfade = null
+    this.audioPrepared = -1
+    if (!x) return
+    x.to.pause()
+    x.to.volume = 0
+    x.from.volume = this.mutedAt(this.sourceMs) ? 0 : 1
+  }
+
+  /** O último quadro desenhado fica guardado se a emenda a que o relógio acaba de pular dissolve. */
+  private snapshotForDissolve(d: Derived, to: number): void {
+    const idx = keptIndexOf(d.kept, to)
+    if (idx < 1 || !d.dissolves[idx - 1]) {
+      this.dissolveSnap = null
+      return
+    }
+    const src = this.o.canvas
+    let snap = this.dissolveSnap
+    if (!snap || snap.width !== src.width || snap.height !== src.height) {
+      snap = document.createElement('canvas')
+      snap.width = src.width
+      snap.height = src.height
+    }
+    snap.getContext('2d')?.drawImage(src, 0, 0)
+    this.dissolveSnap = snap
   }
 
   private mediaFailed(kind: MediaKind, el: HTMLVideoElement): void {
@@ -641,6 +792,7 @@ export class PreviewEngine {
       this.seekMedia(this.sourceMs)
     }
 
+    const before = this.sourceMs
     const step = advanceClock(this.sourceMs, dt, this.rate, d.kept)
     this.sourceMs = step.t
     if (step.ended) {
@@ -651,9 +803,12 @@ export class PreviewEngine {
       this.seekSource(forward ? Math.max(0, (last?.end ?? 1) - 1) : (first?.start ?? 0))
       return
     }
+    if (this.rate > 0) this.startSeamAudio(d, before, step)
     if (step.jump) {
-      if (this.rate > 0) this.jumpClock(step.jump.to)
-      else this.seekMedia(step.jump.to)
+      if (this.rate > 0) {
+        this.snapshotForDissolve(d, step.jump.to)
+        this.jumpClock(step.jump.to)
+      } else this.seekMedia(step.jump.to)
     } else if (this.rate > 0) {
       this.prefetch()
     }
@@ -676,6 +831,8 @@ export class PreviewEngine {
     const camera = this.tracks.find((t) => t.kind === 'camera')?.active
     const matte = this.source(this.tracks.find((t) => t.kind === 'matte')?.active)
     renderFrame(this.ctx, scene, { screen: this.source(screen), camera: this.source(camera), matte }, this.cache)
+    // dissolve da emenda (cortado ≥ 1 s e a tela mudou): o último quadro de antes se desfaz sobre o novo, como na exportação
+    if (scene.dissolve > 0 && this.dissolveSnap && this.dissolveSnap.width === canvas.width && this.dissolveSnap.height === canvas.height) drawDissolve(this.ctx, this.dissolveSnap, scene.dissolve)
     this.lastScene = scene
     this.frames++
     canvas.dataset.sourceMs = this.sourceMs.toFixed(1)
@@ -709,8 +866,16 @@ export class PreviewEngine {
     this.destroyed = true
     cancelAnimationFrame(this.raf)
     this.playing = false
+    this.cancelCrossfade()
     for (const t of this.tracks) t.dispose()
     this.tracks.length = 0
+    if (this.audioB) {
+      this.audioB.pause()
+      this.audioB.removeAttribute('src')
+      this.audioB.load()
+      this.audioB.remove()
+      this.audioB = null
+    }
     if (this.audio) {
       this.audio.pause()
       this.audio.removeAttribute('src')
