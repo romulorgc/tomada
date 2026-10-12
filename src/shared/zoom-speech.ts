@@ -5,8 +5,9 @@
  * O zoom por clique nasce de `[clique − antecipação, clique + segura]`: um instante qualquer, que cai no meio de uma palavra e
  * larga a frase pela metade. Aqui cada janela ganha forma de zoom de verdade (medida no Screen Studio, estudo 12/10, seção 2.2):
  *
- *  - **começa num limite da fala**: o início de uma frase (até 2,5 s antes do pedido) ou, na falta, o início de uma palavra
- *    (até 1,2 s antes). Nunca no meio de uma palavra: a rampa de entrada chega junto com o que está sendo dito;
+ *  - **começa num limite da fala**: o início de uma frase (até 1,5 s antes do pedido, que já abre 0,5 s antes do clique: no máximo 2 s
+ *    de zoom antes da ação) ou, na falta, o início de uma palavra (até 1 s antes). Nunca no meio de uma palavra: a rampa de entrada
+ *    chega junto com o que está sendo dito. Antes de a ação aparecer a imagem ainda é outra: abrir mais cedo seria zoom sem motivo;
  *  - **termina num limite da fala**: o fim da frase (até 3 s depois do mínimo) ou o fim de uma palavra. Nunca no meio de uma palavra:
  *    o zoom só começa a sair depois que a palavra acabou;
  *  - **platô de pelo menos 4 s** (mediana medida: 4,0 s), contado no tempo de SAÍDA quando há cortes: o zoom que vira um pisca-pisca
@@ -37,6 +38,8 @@ export type ZoomShaping = {
   /** Quanto ANTES do pedido se aceita o início de uma frase / o início de uma palavra (ms). */
   startBackSentenceMs: number
   startBackWordMs: number
+  /** Último recurso: começo de palavra mais distante (até tanto antes) só para a rampa de entrada não atravessar uma emenda. */
+  startBackSeamMs: number
   /** Quanto DEPOIS do pedido ainda se aceita um início (o clique cai um pouco mais adiante na rampa, que já está em 70%+). */
   startAheadMs: number
   /** Quanto DEPOIS do fim mínimo se aceita o fim de uma frase / o fim de uma palavra (ms). */
@@ -50,8 +53,9 @@ export const HORIZONTAL_SHAPING: ZoomShaping = {
   rampMs: ZOOM_RAMP_MS,
   plateauMinMs: ZOOM_PLATEAU_MIN_MS,
   separationMs: ZOOM_SEPARATION_MS,
-  startBackSentenceMs: 2500,
-  startBackWordMs: 1200,
+  startBackSentenceMs: 1500,
+  startBackWordMs: 1000,
+  startBackSeamMs: 2500,
   startAheadMs: 150,
   endSentenceMs: 3000,
   endWordMs: 1500,
@@ -155,7 +159,7 @@ function sentenceAround(b: SpeechBounds, t: number): Token | null {
  *  1. numa pausa (fora de qualquer frase e de qualquer palavra) o próprio pedido: a rampa começa no silêncio, antes da frase;
  *  2. dentro de uma frase, o começo dela (até `startBackSentenceMs` antes): o zoom chega junto com o que está sendo dito;
  *  3. o começo de uma palavra (até `startBackWordMs` antes); mais perto do pedido primeiro;
- *  4. de último, começos de palavra mais distantes (até 2,5 s): só servem para a rampa não atravessar uma emenda.
+ *  4. de último, começos de palavra mais distantes (`startBackSeamMs`, 2,5 s): só servem para a rampa não atravessar uma emenda.
  * Nenhum deles cai no meio de uma palavra.
  */
 export function zoomStartCandidates(b: SpeechBounds, want: number, s: ZoomShaping = HORIZONTAL_SHAPING): number[] {
@@ -165,7 +169,7 @@ export function zoomStartCandidates(b: SpeechBounds, want: number, s: ZoomShapin
   if (!inToken && !sentence) out.push(want)
   if (sentence && want - sentence.start <= s.startBackSentenceMs) out.push(sentence.start)
   out.push(...descendingIn(b.tokenStarts, want - s.startBackWordMs, want + s.startAheadMs))
-  out.push(...descendingIn(b.tokenStarts, want - s.startBackSentenceMs, want - s.startBackWordMs - 1e-6))
+  out.push(...descendingIn(b.tokenStarts, want - s.startBackSeamMs, want - s.startBackWordMs - 1e-6))
   if (!inToken && sentence) out.push(want) // entre duas palavras de uma frase (a pausa de respiração): pior que o começo da palavra, melhor que nada
   const around = tokenAround(b, want)
   if (around) out.push(around.start)

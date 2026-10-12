@@ -113,6 +113,24 @@ describe('começo e fim do zoom em limites da fala: nunca no meio de uma palavra
     expect(snapZoomStart(b, 9500 + 700)).toBe(9300)
   })
 
+  it('o zoom não abre mais que ~2 s antes da ação: a frase que começou há mais de 1,5 s do pedido não puxa o início para trás', () => {
+    const words: Word[] = [
+      { i: 0, text: 'vou', start: 7500, end: 7700, prob: 1, kind: 'word' },
+      { i: 1, text: 'abrir', start: 7800, end: 8200, prob: 1, kind: 'word' },
+      { i: 2, text: 'aqui', start: 8300, end: 8700, prob: 1, kind: 'word' },
+      { i: 3, text: 'o', start: 9100, end: 9200, prob: 1, kind: 'word' },
+      { i: 4, text: 'sistema.', start: 9250, end: 9900, prob: 1, kind: 'word' }
+    ]
+    const b = speechBounds(words)
+    // pedido em 9500 (clique em 10 000): a frase começou 2,0 s antes; o início vai para uma palavra a menos de 1 s do pedido
+    const start = snapZoomStart(b, 9500)
+    expect(start).toBeGreaterThanOrEqual(9500 - HORIZONTAL_SHAPING.startBackWordMs)
+    expect(start).not.toBe(7500)
+    expect(insideWord(words, start)).toBe(false)
+    // a 1,4 s do pedido a frase ainda vale
+    expect(snapZoomStart(b, 7500 + 1400)).toBe(7500)
+  })
+
   it('sem frase por perto, o início vai para o começo da palavra; sem fala nenhuma fica onde foi pedido', () => {
     const words: Word[] = [
       { i: 0, text: 'um', start: 5000, end: 5400, prob: 1, kind: 'word' },
