@@ -5,8 +5,10 @@
  */
 import { FACE_TRACK_VERSION, type FaceBox, type FaceTrack } from '@shared/face'
 import type { PrepareTracker } from '../transcription/prepare-tracker'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { existsSync } from 'node:fs'
+import { mkdir, rename, stat, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { contiguousChunks, matteChunkName, type MatteChunk } from '@shared/matte-parts'
 import { runProcess } from '../process-runner'
 import type { CameraEngine, CameraCheck, DetectFacesOptions, MakeMatteOptions, MatteResult } from './types'
 
@@ -23,7 +25,7 @@ export type MockCameraOptions = {
   noFace?: boolean
   /** O ffmpeg: com ele a máscara de teste é um VÍDEO de verdade (a silhueta de uma pessoa); sem ele, um arquivo qualquer. */
   ffmpeg?: () => string | null
-  /** A máscara de teste falha uma vez (prova a mensagem e o "tentar de novo"). */
+  /** A máscara de teste falha uma vez (prova a mensagem e o "tentar de novo"). Em pedaços, falha depois do primeiro pedaço pronto. */
   failMatte?: boolean
   /** O fps e o tamanho da máscara de teste (o da câmera do projeto de exemplo: 30 qps, 640×360). */
   matteFps?: number
@@ -114,18 +116,54 @@ export function createMockCamera(opts: MockCameraOptions): CameraEngine {
       const fps = opts.matteFps ?? 30
       const size = opts.matteSize ?? { w: 640, h: 360 }
       const seconds = Math.max(0.1, o.durationMs / 1000)
-      if (opts.delayMs) {
-        const steps = 5
-        for (let i = 1; i <= steps; i++) {
+      const parts = o.parts
+      let chunks: MatteChunk[] | undefined
+      if (parts) {
+        // EM PEDAÇOS: um arquivo por pedaço (o nome final só depois de pronto), o andamento avisado a cada um, a parada a pedido no fim do pedaço
+        await mkdir(parts.dir, { recursive: true })
+        const done = contiguousChunks(parts.done)
+        const total = Math.max(1, Math.ceil(o.durationMs / (parts.chunkSeconds * 1000)))
+        const perChunkMs = opts.delayMs ? opts.delayMs / total : 0
+        chunks = [...done]
+        for (let i = done.length; i < total; i++) {
+          const ticks = 5
+          for (let t = 1; t <= ticks && perChunkMs > 0; t++) {
+            if (o.signal?.aborted) throw new Error('Cancelado.')
+            await new Promise((r) => setTimeout(r, perChunkMs / ticks))
+            o.onProgress?.(Math.min(0.99, (i + t / ticks) / total))
+          }
           if (o.signal?.aborted) throw new Error('Cancelado.')
-          await new Promise((r) => setTimeout(r, opts.delayMs! / steps))
-          o.onProgress?.(i / (steps + 1))
+          if (opts.failMatte && !matteFailed && i >= 1) {
+            matteFailed = true
+            throw new Error('Falha simulada no recorte do fundo (TOMADA_TEST_MATTE_FAIL).')
+          }
+          const final = join(parts.dir, matteChunkName(i))
+          await writeFile(`${final}.tmp`, `pedaço ${i} da máscara de teste`)
+          await rename(`${final}.tmp`, final)
+          const frames = i < total - 1 ? Math.round(parts.chunkSeconds * fps) : Math.max(1, Math.round((o.durationMs / 1000 - i * parts.chunkSeconds) * fps))
+          const chunk: MatteChunk = { index: i, frames, bytes: (await stat(final)).size }
+          chunks.push(chunk)
+          parts.onChunk(chunk)
+          o.onProgress?.(Math.min(0.99, (i + 1) / total))
+          if (i < total - 1 && existsSync(parts.stopFile)) {
+            return { engine: 'teste', device: 'teste', frames: chunks.reduce((n, c) => n + c.frames, 0), fps, frame: size, seconds: 0, msPerFrame: 0, stopped: true, chunks }
+          }
+        }
+      } else {
+        if (opts.delayMs) {
+          const steps = 5
+          for (let i = 1; i <= steps; i++) {
+            if (o.signal?.aborted) throw new Error('Cancelado.')
+            await new Promise((r) => setTimeout(r, opts.delayMs! / steps))
+            o.onProgress?.(i / (steps + 1))
+          }
+        }
+        if (opts.failMatte && !matteFailed) {
+          matteFailed = true
+          throw new Error('Falha simulada no recorte do fundo (TOMADA_TEST_MATTE_FAIL).')
         }
       }
-      if (opts.failMatte && !matteFailed) {
-        matteFailed = true
-        throw new Error('Falha simulada no recorte do fundo (TOMADA_TEST_MATTE_FAIL).')
-      }
+      // o vídeo da máscara (a junção dos pedaços, no motor de verdade)
       await mkdir(dirname(o.out), { recursive: true })
       const ffmpeg = opts.ffmpeg?.() ?? null
       if (ffmpeg) {
@@ -136,7 +174,7 @@ export function createMockCamera(opts: MockCameraOptions): CameraEngine {
         await writeFile(o.out, 'mascara de teste (sem ffmpeg)')
       }
       o.onProgress?.(1)
-      return { engine: 'teste', device: 'teste', frames: Math.round(seconds * fps), fps, frame: size, seconds: 0, msPerFrame: 0 }
+      return { engine: 'teste', device: 'teste', frames: Math.round(seconds * fps), fps, frame: size, seconds: 0, msPerFrame: 0, ...(chunks ? { chunks } : {}) }
     }
   }
 }

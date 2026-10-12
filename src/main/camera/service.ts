@@ -5,27 +5,35 @@
  *  - `face`: onde está o rosto ao longo da gravação (`media/camera-face.json`), uma vez por gravação, em segundo plano. O editor
  *    e a exportação enquadram a câmera por ele.
  *  - `matte`: o recorte do fundo (`media/camera-matte.mp4`, a pessoa em branco, mais `camera-matte.json` com a origem para o cache).
- *    O apresentador recortado desenha a câmera por ele. Só roda quando a pessoa escolhe um layout que precisa dele.
+ *    O apresentador recortado desenha a câmera por ele. Desde a etapa R1 roda SEMPRE, em segundo plano, logo depois de gravar (qualquer que seja
+ *    o estilo da câmera), em PEDAÇOS de 10 s com o andamento guardado no projeto (`media/camera-matte.progress.json`): fechar o app no meio
+ *    não perde o trabalho, e a rodada seguinte continua do último pedaço inteiro. Dá lugar à exportação, à transcrição e à prévia (a placa
+ *    é uma só): para no fim do pedaço em curso e retoma quando a placa fica livre.
  *
  * Segurança: tudo que vem da interface é um id de projeto e o tipo. O vídeo é o `sources.camera` do documento, resolvido por
  * `resolveProjectFile` (relativo, dentro da pasta do projeto, conferido com `realpath`), e o resultado também. Quem executa o
  * motor é o processo principal, com caminhos que ele mesmo montou.
  */
-import { readFile, rename, rm, stat } from 'node:fs/promises'
+import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { CAMERA_KINDS, type CameraJob, type CameraKind, type CameraView } from '@shared/camera-analysis'
 import { FACE_FILE, FACE_TRACK_VERSION, faceCoverage, parseFaceTrack, type FaceTrack } from '@shared/face'
 import type { IpcEvents } from '@shared/ipc'
 import { MATTE_FILE, MATTE_META_FILE, MATTE_PARTIAL_FILE, MATTE_VERSION, type MatteMeta } from '@shared/matte'
+import { chunksFraction, MATTE_CHUNK_SECONDS, MATTE_PARTS_DIR, MATTE_PROGRESS_FILE, MATTE_PROGRESS_VERSION, progressMatchesCamera, type MatteChunk, type MatteProgress } from '@shared/matte-parts'
 import { mediaUrl } from '@shared/media-url'
 import { documentFilePaths } from '@shared/safe-path'
 import type { PrepareSnapshot } from '@shared/transcription'
 import type { Project } from '@shared/types'
 import { writeFileAtomic } from '../fs-utils'
+import type { GpuGate } from '../gpu-queue'
 import type { Logger } from '../logger'
 import { resolveProjectFile } from '../project-files'
 import { createPrepareTracker } from '../transcription/prepare-tracker'
 import { freshMatte } from './matte-file'
-import type { CameraEngine } from './types'
+import { MatteJoinError } from './matte-join'
+import { loadResume, readProgress, removeProgress, removePartsDir, writeProgress } from './matte-resume'
+import type { CameraEngine, MatteResult } from './types'
 
 export interface CameraService {
   view(): Promise<CameraView>
@@ -40,9 +48,15 @@ export interface CameraService {
   cancel(projectId: string, kind: CameraKind): void
   /** A URL do resultado guardado, se existe e vale para a câmera de agora (senão `null`). */
   result(projectId: string, kind: CameraKind): Promise<string | null>
+  /**
+   * Ao abrir o app: olha o projeto e, se o recorte do fundo ficou pela metade (o app fechou, caiu, ou sobrou o `.partial` de antes dos
+   * pedaços), RETOMA sozinho e deixa no log o que encontrou. Devolve o que fez. Nunca lança.
+   */
+  recoverMatte(projectId: string): Promise<'resumed' | 'regenerated' | 'failed' | 'idle'>
   /** Espera a preparação e a fila terminarem (testes). */
   idle(): Promise<void>
-  shutdown(): void
+  /** Para tudo. O recorte em curso fica ANOTADO como interrompido (log + andamento no projeto) e continua ao reabrir; a promessa só resolve depois disso. */
+  shutdown(): Promise<void>
 }
 
 export type CameraServiceDeps = {
@@ -51,6 +65,12 @@ export type CameraServiceDeps = {
   read(id: string): Promise<{ project: Project; dir: string }>
   emit<K extends 'camera:prepare' | 'camera:job'>(channel: K, payload: IpcEvents[K]): void
   now?: () => number
+  /** A placa é uma só: o recorte de fundo espera (e dá lugar a) exportação, transcrição e prévia. Sem isso, roda sempre. */
+  gpu?: GpuGate
+  /** Duração de cada pedaço do recorte (s). Padrão `MATTE_CHUNK_SECONDS`; os testes usam pedaços curtos. */
+  chunkSeconds?: number
+  /** Quanto esperar o motor parar sozinho no fim do pedaço antes de matá-lo, quando a placa precisa ser liberada (ms). */
+  stopGraceMs?: number
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -59,7 +79,7 @@ const MAX_JOBS_KEPT = 50
 /** Os arquivos que cada análise grava na pasta do projeto (todos em `media/`). */
 const DERIVED_FILES: Record<CameraKind, readonly string[]> = {
   face: [FACE_FILE],
-  matte: [MATTE_FILE, MATTE_META_FILE, MATTE_PARTIAL_FILE]
+  matte: [MATTE_FILE, MATTE_META_FILE, MATTE_PARTIAL_FILE, MATTE_PROGRESS_FILE]
 }
 
 /** A limpeza do arquivo parcial falhou: o motivo precisa chegar à pessoa (um parcial aberto no Windows não se apaga). */
@@ -113,6 +133,10 @@ type FaceFileHead = { version?: number; source?: string; sourceMtimeMs?: number 
 export function createCameraService(deps: CameraServiceDeps): CameraService {
   const { logger, engine } = deps
   const now = deps.now ?? ((): number => Date.now())
+  const chunkSeconds = deps.chunkSeconds ?? MATTE_CHUNK_SECONDS
+  const stopGraceMs = deps.stopGraceMs ?? 20_000
+  /** O app está fechando: o que for interrompido agora fica anotado como "interrompido" (continua ao reabrir), não como cancelado. */
+  let closing = false
 
   // --- preparação -------------------------------------------------------------------------------------------
   let snapshot: PrepareSnapshot | null = null
@@ -151,7 +175,7 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
 
   // --- fila de trabalhos ---------------------------------------------------------------------------------------
   const jobs = new Map<string, CameraJob>()
-  const queue: { projectId: string; kind: CameraKind }[] = []
+  const queue: { projectId: string; kind: CameraKind; force: boolean }[] = []
   let running: { projectId: string; kind: CameraKind; ctl: AbortController; promise: Promise<void> } | null = null
   /**
    * Pedidos que já começaram (consulta ao motor, leitura do projeto, cache) mas ainda não chegaram à fila. A CHAVE é reservada aqui,
@@ -176,8 +200,9 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
     deps.emit('camera:job', job)
   }
 
+  type CameraFile = { project: Project; dir: string; video: string; mtimeMs: number; relPath: string }
   /** O arquivo da câmera do documento: caminho absoluto (resolvido) e a data dele; ou `null` se o projeto não tem câmera. */
-  async function cameraFile(projectId: string): Promise<{ project: Project; dir: string; video: string; mtimeMs: number; relPath: string } | null> {
+  async function cameraFile(projectId: string): Promise<CameraFile | null> {
     const { project, dir } = await deps.read(projectId)
     const cam = project.sources.camera
     if (!cam) return null
@@ -206,13 +231,164 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
     return { url: mediaUrl(projectId, FACE_FILE, have.mtimeMs), faces: track.boxes.length, coverage: faceCoverage(track) }
   }
 
-  async function runMatteJob(projectId: string, cam: NonNullable<Awaited<ReturnType<typeof cameraFile>>>, ctl: AbortController, onProgress: (f: number) => void): Promise<void> {
+  /** Anota no projeto que o recorte foi PEDIDO (a fila pode demorar, e o app pode fechar antes de ele começar): ao reabrir, `recoverMatte` o encontra. */
+  async function markMatteRequested(projectId: string, cam: CameraFile): Promise<void> {
+    const progressFile = await resolveProjectFile(cam.dir, MATTE_PROGRESS_FILE)
+    const existing = await readProgress(progressFile)
+    if (existing && progressMatchesCamera(existing, cam.relPath, cam.mtimeMs, chunkSeconds)) return
+    if (existing) {
+      // o andamento é de OUTRA câmera (o arquivo foi trocado): os pedaços não servem
+      logger.warn(`Recorte do fundo do projeto ${projectId}: a câmera do projeto mudou desde o último recorte; os pedaços guardados foram descartados.`)
+      await removePartsDir(await resolveProjectFile(cam.dir, MATTE_PARTS_DIR))
+    }
+    const stamp = new Date(now()).toISOString()
+    await writeProgress(progressFile, {
+      version: MATTE_PROGRESS_VERSION,
+      source: cam.relPath,
+      sourceMtimeMs: cam.mtimeMs,
+      chunkSeconds,
+      chunks: [],
+      status: 'running',
+      fraction: 0,
+      attempts: 0,
+      startedAt: stamp,
+      updatedAt: stamp
+    })
+  }
+
+  async function runMatteJob(projectId: string, cam: CameraFile, ctl: AbortController, force: boolean): Promise<void> {
     const kind: CameraKind = 'matte'
     await assertDerivedClear(cam.project, cam.dir, kind)
     const partial = await resolveProjectFile(cam.dir, MATTE_PARTIAL_FILE)
+    const partsDir = await resolveProjectFile(cam.dir, MATTE_PARTS_DIR)
+    const progressFile = await resolveProjectFile(cam.dir, MATTE_PROGRESS_FILE)
+    const stopFile = join(partsDir, 'parar')
+    const durationMs = cam.project.sources.camera?.durationMs ?? 0
+    const label = `Recorte do fundo do projeto ${projectId}`
+    const startedAt = now()
+
+    // um `.partial.mp4` (de antes dos pedaços, ou de uma junção interrompida) não abre e não se retoma: sai, com aviso no log
+    const oldPartialBytes = await stat(partial).then((i) => i.size, () => 0)
     await removePartial(partial, MATTE_PARTIAL_FILE)
+    const resume = await loadResume({ partsDir, progressFile, cameraPath: cam.relPath, cameraMtimeMs: cam.mtimeMs, chunkSeconds, force })
+    if (resume.discarded) {
+      logger.warn(
+        resume.restart
+          ? `${label}: ${resume.discarded}; os pedaços guardados foram descartados e o recorte recomeça do zero.`
+          : `${label}: ${resume.discarded}; continuo dos ${resume.chunks.length} pedaço(s) inteiros.`
+      )
+    }
+    if (oldPartialBytes > 0) {
+      logger.warn(`${label}: sobrou um recorte parcial de antes dos pedaços (${(oldPartialBytes / 1024 / 1024).toFixed(1)} MB, sem índice: não abre). Descartado; ${resume.chunks.length > 0 ? `continuo dos ${resume.chunks.length} pedaços prontos` : 'refaço em pedaços'}.`)
+    }
+
+    const stamp = (): string => new Date(now()).toISOString()
+    let progress: MatteProgress = {
+      version: MATTE_PROGRESS_VERSION,
+      source: cam.relPath,
+      sourceMtimeMs: cam.mtimeMs,
+      chunkSeconds,
+      chunks: resume.chunks,
+      status: 'running',
+      fraction: chunksFraction(resume.chunks.length, chunkSeconds, durationMs),
+      attempts: (resume.progress?.attempts ?? 0) + 1,
+      startedAt: resume.progress?.startedAt || stamp(),
+      updatedAt: stamp()
+    }
+    let writes: Promise<void> = Promise.resolve()
+    /** Guarda o andamento no projeto, uma gravação por vez e em ordem. Falhar ao guardar é aviso no log, não derruba o recorte. */
+    const save = (patch: Partial<MatteProgress>): Promise<void> => {
+      progress = { ...progress, ...patch, updatedAt: stamp() }
+      const snapshot = progress
+      writes = writes.then(() => writeProgress(progressFile, snapshot)).catch((err) => logger.warn(`${label}: não consegui guardar o andamento no projeto: ${messageOf(err)}`))
+      return writes
+    }
+    const resumed = (): boolean => progress.chunks.length > 0
+    const pct = (f: number): number => Math.round(f * 100)
+
+    let best = progress.fraction
+    let lastPct = -1
+    const report = (f: number): void => {
+      best = Math.max(best, Math.min(0.999, f))
+      if (pct(best) === lastPct) return
+      lastPct = pct(best)
+      setJob({ projectId, kind, state: 'running', fraction: best, ...(resumed() ? { resumed: true } : {}) })
+    }
+    const onChunk = (chunk: MatteChunk): void => {
+      if (progress.chunks.some((c) => c.index === chunk.index)) return
+      const chunks = [...progress.chunks, chunk]
+      void save({ chunks, fraction: Math.min(0.99, Math.max(best, chunksFraction(chunks.length, chunkSeconds, durationMs))) })
+      logger.info(`${label}: pedaço ${chunk.index + 1} pronto (${chunk.frames} quadros, ${Math.round(chunk.bytes / 1024)} KB).`)
+    }
+
+    await save({})
+    if (resumed()) {
+      logger.info(`${label}: retomando do pedaço ${progress.chunks.length + 1} (${pct(best)}% já pronto; rodada ${progress.attempts}).`)
+    } else {
+      logger.info(`${label}: começando, em pedaços de ${chunkSeconds} s${progress.attempts > 1 ? ` (rodada ${progress.attempts})` : ''}.`)
+    }
+    lastPct = -1
+    report(best)
+
     try {
-      const result = await engine.makeMatte({ video: cam.video, out: partial, durationMs: cam.project.sources.camera?.durationMs ?? 0, signal: ctl.signal, onProgress })
+      let result: MatteResult | undefined
+      for (;;) {
+        // a placa tem dono mais importante agora (exportação, transcrição, prévia)? espera a vez, sem perder nada do que está pronto
+        let announced = false
+        while (deps.gpu?.busy()) {
+          if (!announced) {
+            announced = true
+            const why = deps.gpu.busy()
+            logger.info(`${label}: em espera, a placa está com ${why === 'preview' ? 'a prévia do editor' : 'uma exportação ou transcrição'}; continua do pedaço ${progress.chunks.length + 1} quando ela ficar livre.`)
+            setJob({ projectId, kind, state: 'queued', fraction: best, waiting: 'gpu', ...(resumed() ? { resumed: true } : {}) })
+          }
+          await deps.gpu.whenIdle(ctl.signal)
+        }
+        if (announced) {
+          logger.info(`${label}: a placa ficou livre; continuando do pedaço ${progress.chunks.length + 1}.`)
+          lastPct = -1
+          report(best)
+        }
+        if (ctl.signal.aborted) throw new Error('Cancelado.')
+
+        const run = new AbortController()
+        const relay = (): void => run.abort()
+        ctl.signal.addEventListener('abort', relay, { once: true })
+        let yielded = false
+        let grace: NodeJS.Timeout | undefined
+        const offBusy = deps.gpu?.onBusy(() => {
+          if (yielded) return
+          yielded = true
+          // pede ao motor para parar no fim do pedaço em curso; passado o prazo, ele é encerrado à força (perde só esse pedaço)
+          void writeFile(stopFile, '').catch(() => undefined)
+          grace = setTimeout(() => run.abort(), stopGraceMs)
+        })
+        try {
+          result = await engine.makeMatte({
+            video: cam.video,
+            out: partial,
+            durationMs,
+            signal: run.signal,
+            onProgress: report,
+            lowPriority: true,
+            parts: { dir: partsDir, chunkSeconds, done: progress.chunks, onChunk, stopFile }
+          })
+        } catch (err) {
+          if (!(yielded && run.signal.aborted && !ctl.signal.aborted)) throw err
+          result = undefined // encerrado à força depois do prazo: o pedaço em curso se perdeu, os prontos ficam
+        } finally {
+          offBusy?.()
+          if (grace) clearTimeout(grace)
+          ctl.signal.removeEventListener('abort', relay)
+          await rm(stopFile, { force: true }).catch(() => undefined)
+        }
+        if (result && !result.stopped) break
+        await writes
+        const again = await loadResume({ partsDir, progressFile, cameraPath: cam.relPath, cameraMtimeMs: cam.mtimeMs, chunkSeconds })
+        progress = { ...progress, chunks: again.chunks }
+        if (yielded) logger.info(`${label}: parou no pedaço ${again.chunks.length} para dar lugar a outro trabalho na placa.`)
+      }
+
       if (ctl.signal.aborted) throw new Error('Cancelado.')
       const final = await resolveProjectFile(cam.dir, MATTE_FILE)
       try {
@@ -224,32 +400,56 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
       }
       const meta: MatteMeta = {
         version: MATTE_VERSION,
-        engine: result.engine,
+        engine: result!.engine,
         source: cam.relPath,
         sourceMtimeMs: cam.mtimeMs,
-        frames: result.frames,
-        fps: result.fps,
-        frame: result.frame,
+        frames: result!.frames,
+        fps: result!.fps,
+        frame: result!.frame,
         createdAt: new Date(now()).toISOString()
       }
       await writeFileAtomic(await resolveProjectFile(cam.dir, MATTE_META_FILE), `${JSON.stringify(meta, null, 2)}\n`)
       const info = await stat(final)
-      setJob({ projectId, kind, state: 'done', fraction: 1, url: mediaUrl(projectId, MATTE_FILE, Math.trunc(info.mtimeMs)) })
+      // pronto: os pedaços e o andamento não servem mais
+      await writes
+      await removePartsDir(partsDir).catch((err) => logger.warn(`${label}: não consegui apagar os pedaços já juntados: ${messageOf(err)}`))
+      await removeProgress(progressFile).catch((err) => logger.warn(`${label}: não consegui apagar o andamento já concluído: ${messageOf(err)}`))
+      setJob({ projectId, kind, state: 'done', fraction: 1, url: mediaUrl(projectId, MATTE_FILE, Math.trunc(info.mtimeMs)), ...(progress.attempts > 1 || resume.chunks.length > 0 ? { resumed: true } : {}) })
+      const elapsed = (now() - startedAt) / 1000
       logger.info(
-        `Recorte do fundo do projeto ${projectId}: ${result.frames} quadros em ${result.seconds.toFixed(1)} s (${result.msPerFrame.toFixed(1)} ms por quadro, ${result.device}, ${result.engine}).`
+        `Recorte do fundo do projeto ${projectId}: ${result!.frames} quadros em ${result!.seconds.toFixed(1)} s no motor, ${elapsed.toFixed(1)} s no total (${result!.msPerFrame.toFixed(1)} ms por quadro, ${result!.device}, ${result!.engine})${progress.attempts > 1 ? `, em ${progress.attempts} rodadas` : ''}.`
       )
     } catch (err) {
+      await writes
+      if (ctl.signal.aborted) {
+        const done = progress.chunks.length
+        if (closing) {
+          await save({ status: 'interrupted', error: 'O app foi fechado no meio do recorte.' })
+          logger.warn(`${label}: interrompido pelo fechamento do app em ${pct(best)}% (${done} pedaço(s) prontos); continua do pedaço ${done + 1} quando o app abrir de novo.`)
+        } else {
+          await save({ status: 'cancelled', error: 'Cancelado pela pessoa.' })
+          logger.warn(`${label}: cancelado em ${pct(best)}%; os ${done} pedaço(s) prontos ficam guardados para continuar.`)
+        }
+      } else if (err instanceof MatteJoinError) {
+        // a junção não bateu: os pedaços não servem, o próximo "tentar de novo" começa do zero
+        logger.error(`${label}: ${messageOf(err)} Os pedaços foram descartados.`, err)
+        await removePartsDir(partsDir).catch(() => undefined)
+        await removeProgress(progressFile).catch(() => undefined)
+      } else {
+        await save({ status: 'failed', error: messageOf(err) })
+      }
       // o que falhou (ou o cancelamento) vem primeiro; se a limpeza também falhar, a limpeza é o que a pessoa precisa ver
       await removePartial(partial, MATTE_PARTIAL_FILE).catch((cleanup) => {
-        logger.error(`Recorte do fundo do projeto ${projectId}: ${messageOf(err)}`, err)
+        logger.error(`${label}: ${messageOf(err)}`, err)
         throw cleanup
       })
       throw err
     }
   }
 
-  async function runJob(projectId: string, kind: CameraKind, ctl: AbortController): Promise<void> {
-    setJob({ projectId, kind, state: 'running', fraction: 0 })
+  async function runJob(projectId: string, kind: CameraKind, ctl: AbortController, force = false): Promise<void> {
+    // o recorte anuncia o próprio andamento (com o "retomando"); o rosto começa em 0
+    if (kind !== 'matte') setJob({ projectId, kind, state: 'running', fraction: 0 })
     try {
       const cam = await cameraFile(projectId)
       if (!cam) throw new Error('Esta gravação não tem o vídeo da câmera, então não há o que analisar.')
@@ -262,7 +462,7 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
         }
       }
       if (kind === 'matte') {
-        await runMatteJob(projectId, cam, ctl, onProgress)
+        await runMatteJob(projectId, cam, ctl, force)
         return
       }
       if (kind === 'face') {
@@ -280,7 +480,7 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
       throw new Error(`Análise desconhecida: ${String(kind)}.`)
     } catch (err) {
       if (ctl.signal.aborted && !(err instanceof CleanupError)) {
-        setJob({ projectId, kind, state: 'cancelled', fraction: 0, error: 'Análise cancelada.' })
+        setJob({ projectId, kind, state: 'cancelled', fraction: 0, error: closing ? 'O app foi fechado no meio; a análise continua quando ele abrir de novo.' : 'Análise cancelada.' })
         return
       }
       logger.error(`Análise da câmera (${kind}) do projeto ${projectId} falhou.`, err)
@@ -293,11 +493,25 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
     const next = queue.shift()
     if (!next) return
     const ctl = new AbortController()
-    const promise = runJob(next.projectId, next.kind, ctl).finally(() => {
+    const promise = runJob(next.projectId, next.kind, ctl, next.force).finally(() => {
       running = null
       pump()
     })
     running = { ...next, ctl, promise }
+  }
+
+  /** A pessoa cancelou o recorte na fila: o pedido anotado no projeto passa a "cancelado" (não recomeça sozinho ao reabrir). */
+  async function markCancelledWhileQueued(projectId: string): Promise<void> {
+    try {
+      const cam = await cameraFile(projectId)
+      if (!cam) return
+      const file = await resolveProjectFile(cam.dir, MATTE_PROGRESS_FILE)
+      const progress = await readProgress(file)
+      if (progress) await writeProgress(file, { ...progress, status: 'cancelled', error: 'Cancelado pela pessoa.', updatedAt: new Date(now()).toISOString() })
+      logger.info(`Recorte do fundo do projeto ${projectId}: cancelado na fila.`)
+    } catch (err) {
+      logger.warn(`Recorte do fundo do projeto ${projectId}: não consegui anotar o cancelamento no projeto: ${messageOf(err)}`)
+    }
   }
 
   async function startAnalysis(projectId: string, kind: CameraKind, opts: { force?: boolean }, entry: { cancelled: boolean }): Promise<CameraJob> {
@@ -329,9 +543,11 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
       }
     }
     if (entry.cancelled) return cancelledJob()
+    // anota no projeto que o recorte foi pedido: se o app fechar antes de ele começar (ou no meio), ao reabrir ele continua
+    if (kind === 'matte') await markMatteRequested(projectId, cam).catch((err) => logger.warn(`Recorte do fundo do projeto ${projectId}: não consegui anotar o pedido no projeto: ${messageOf(err)}`))
     const job: CameraJob = { projectId, kind, state: 'queued', fraction: 0 }
     setJob(job)
-    queue.push({ projectId, kind })
+    queue.push({ projectId, kind, force: opts.force === true })
     pump()
     return job
   }
@@ -388,7 +604,11 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
           removed = true
         }
       }
-      if (removed) setJob({ projectId, kind, state: 'cancelled', fraction: 0, error: 'Análise cancelada.' })
+      if (removed) {
+        setJob({ projectId, kind, state: 'cancelled', fraction: 0, error: 'Análise cancelada.' })
+        // cancelou na fila: o pedido anotado no projeto não pode fazer o recorte começar sozinho ao reabrir
+        if (kind === 'matte') void markCancelledWhileQueued(projectId)
+      }
       if (running?.projectId === projectId && running.kind === kind) running.ctl.abort()
     },
 
@@ -411,10 +631,69 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
       }
     },
 
+    async recoverMatte(projectId) {
+      try {
+        const check = await engine.check()
+        if (check.matte.state !== 'ready') return 'idle'
+        const cam = await cameraFile(projectId)
+        if (!cam) return 'idle'
+        const label = `Recorte do fundo do projeto ${projectId}`
+        const progressFile = await resolveProjectFile(cam.dir, MATTE_PROGRESS_FILE)
+        const partsDir = await resolveProjectFile(cam.dir, MATTE_PARTS_DIR)
+        const partial = await resolveProjectFile(cam.dir, MATTE_PARTIAL_FILE)
+        const progress = await readProgress(progressFile)
+        const partialBytes = await stat(partial).then((i) => i.size, () => 0)
+        if (await freshMatte(projectId, cam.dir, cam.relPath, cam.mtimeMs)) {
+          if (progress || partialBytes > 0) {
+            // sobras de um recorte que já terminou (o app fechou entre juntar e limpar)
+            await rm(partial, { force: true }).catch(() => undefined)
+            await removePartsDir(partsDir).catch(() => undefined)
+            await removeProgress(progressFile).catch(() => undefined)
+            logger.info(`${label}: o recorte já estava pronto; limpei as sobras do andamento.`)
+          }
+          return 'idle'
+        }
+        const active = jobs.get(keyOf(projectId, 'matte'))
+        if (active && (active.state === 'queued' || active.state === 'running')) return 'idle'
+        const durationMs = cam.project.sources.camera?.durationMs ?? 0
+        if (progress && progressMatchesCamera(progress, cam.relPath, cam.mtimeMs, chunkSeconds)) {
+          if (progress.status === 'cancelled') return 'idle'
+          if (progress.status === 'failed') {
+            logger.warn(`${label}: a última tentativa falhou (${progress.error ?? 'sem motivo anotado'}); o editor mostra o aviso com "Tentar de novo".`)
+            setJob({ projectId, kind: 'matte', state: 'error', fraction: 0, error: progress.error ?? 'O recorte do fundo falhou da última vez.' })
+            return 'failed'
+          }
+          const done = progress.chunks.length
+          if (done > 0) {
+            logger.warn(
+              `${label}: estava em andamento (${Math.round(chunksFraction(done, progress.chunkSeconds, durationMs) * 100)}%, ${done} pedaço(s) prontos) quando o app fechou; vou continuar do pedaço ${done + 1}.`
+            )
+          } else {
+            logger.info(`${label}: estava na fila quando o app fechou; vou começar agora.`)
+          }
+          await api.analyze(projectId, 'matte')
+          return 'resumed'
+        }
+        if (partialBytes > 0) {
+          logger.warn(`${label}: sobrou um recorte parcial antigo (${(partialBytes / 1024 / 1024).toFixed(1)} MB, sem índice, não abre); vou refazer em pedaços.`)
+          await api.analyze(projectId, 'matte')
+          return 'regenerated'
+        }
+        return 'idle'
+      } catch (err) {
+        logger.warn(`Recorte do fundo do projeto ${projectId}: não consegui conferir se ficou pela metade: ${messageOf(err)}`)
+        return 'idle'
+      }
+    },
+
     shutdown() {
+      closing = true
       preparing?.ctl.abort()
-      running?.ctl.abort()
+      const current = running
+      for (const q of queue) logger.info(`Recorte do fundo do projeto ${q.projectId}: estava na fila e fica anotado no projeto; começa quando o app abrir de novo.`)
       queue.length = 0
+      current?.ctl.abort()
+      return current ? current.promise.then(() => undefined, () => undefined) : Promise.resolve()
     }
   }
   return api
