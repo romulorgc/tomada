@@ -6,13 +6,16 @@
  *  - o progresso vindo do stderr, o resultado, o erro do script com o motivo à vista e a recusa de caminhos suspeitos.
  * O motor DE VERDADE (RVM na placa) é provado em `camera-motor.test.ts`, que roda pela fila pesada.
  */
-import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, truncateSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { createPythonCamera, MATTE_MODEL, YUNET_FILE, cameraModelDir } from '../../src/main/camera/python-engine'
+import { MatteJoinError } from '../../src/main/camera/matte-join'
+import { locateFfmpeg } from '../../src/main/ffmpeg'
 import { createMemoryLogger } from '../../src/main/logger'
 import { toolPaths, type ToolPaths } from '../../src/main/transcription/tools-dir'
 import { useTmpDir } from '../helpers/env'
+import { probeJson } from '../helpers/media'
 
 const tmp = useTmpDir()
 
@@ -34,12 +37,29 @@ process.stdin.on('end', () => {
   }
   if (mode === 'lixo') return process.stdout.write('isto não é json')
   if (mode === 'vazio') return process.stdout.write(JSON.stringify({ frames: 0, fps: 30, frame: { w: 640, h: 360 } }))
+  if (req.parts) {
+    // EM PEDAÇOS: de verdade (ffmpeg), um mp4 de 2 s (60 quadros) por pedaço, o último com 20; no modo pedacos-parou entrega um e para
+    const cp = require('node:child_process')
+    const total = Number(fs.readFileSync(path.join(__dirname, 'total.txt'), 'utf8'))
+    const made = []
+    for (let i = req.parts.startChunk; i < total; i++) {
+      const frames = i === total - 1 ? 20 : 60
+      const file = path.join(req.parts.dir, 'p' + String(i).padStart(4, '0') + '.mp4')
+      fs.mkdirSync(req.parts.dir, { recursive: true })
+      cp.execFileSync(req.ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=gray:s=160x90:r=30', '-frames:v', String(frames), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '14', '-pix_fmt', 'yuv420p', '-g', '30', '-bf', '0', '-f', 'mp4', file])
+      process.stderr.write('CHUNK ' + i + ' ' + frames + ' ' + fs.statSync(file).size + '\\n')
+      made.push({ index: i, frames })
+      if (mode === 'pedacos-parou') break
+    }
+    const last = mode === 'pedacos-buraco' ? total + 2 : total - 1
+    return process.stdout.write(JSON.stringify({ engine: 'rvm', device: 'cuda', frames: 0, fps: 30, frame: { w: 160, h: 90 }, chunks: made, lastChunk: last, stopped: mode === 'pedacos-parou', stats: { seconds: 1, msPerFrame: 10 } }))
+  }
   fs.writeFileSync(req.out, 'máscara')
   process.stdout.write(JSON.stringify({ engine: 'rvm', device: 'cuda', frames: 90, fps: 30, frame: { w: 640, h: 360 }, stats: { seconds: 3, msPerFrame: 33.3 } }))
 })
 `
 
-type Setup = { tools: ToolPaths; script: string; modo: (m: string) => void; pedido: () => { mode: string; video: string; out: string; model: string; ffmpeg: string; maxSide: number; crf: number } }
+type Setup = { tools: ToolPaths; script: string; modo: (m: string) => void; total: (n: number) => void; pedido: () => { mode: string; video: string; out: string; model: string; ffmpeg: string; maxSide: number; crf: number } }
 
 /** Um arquivo do tamanho certo sem escrever os bytes (o modelo do recorte tem 107 MB). */
 function sparse(path: string, size: number): void {
@@ -74,10 +94,12 @@ function setup(opts: { providers?: string[]; gpu?: string | null; matteModel?: b
   const script = join(dir, 'camera_tools.js')
   writeFileSync(script, FAKE_SCRIPT)
   writeFileSync(join(dir, 'modo.txt'), 'ok')
+  writeFileSync(join(dir, 'total.txt'), '3')
   return {
     tools,
     script,
     modo: (m) => writeFileSync(join(dir, 'modo.txt'), m),
+    total: (n) => writeFileSync(join(dir, 'total.txt'), String(n)),
     pedido: () => JSON.parse(readFileSync(join(dir, 'pedido.json'), 'utf8'))
   }
 }
@@ -196,5 +218,88 @@ describe('makeMatte com o interpretador falso', () => {
     const ctl = new AbortController()
     ctl.abort()
     await expect(engineOf(s).makeMatte({ video, out, durationMs: 3000, signal: ctl.signal })).rejects.toBeDefined()
+  })
+})
+
+describe('makeMatte EM PEDAÇOS com o interpretador falso (e o ffmpeg de verdade juntando)', () => {
+  const realFfmpeg = (): string => locateFfmpeg()!.ffmpeg
+  let s: Setup
+  let dir: string
+  let video: string
+  let out: string
+  let stop: string
+  beforeAll(() => {
+    s = setup()
+    dir = join(s.tools.base, 'pedacos ô')
+    mkdirSync(dir, { recursive: true })
+    video = join(s.tools.base, 'camera.mp4')
+    out = join(s.tools.base, 'saida', 'camera-matte.partial.mp4')
+    stop = join(dir, 'parar')
+    mkdirSync(join(s.tools.base, 'saida'), { recursive: true })
+  })
+  const parts = (done: { index: number; frames: number; bytes: number }[], onChunk: (c: { index: number; frames: number; bytes: number }) => void = () => undefined) => ({ dir, chunkSeconds: 2, done, onChunk, stopFile: stop })
+
+  it('pede os pedaços ao script (a partir do primeiro que falta), recebe cada um pelo stderr, junta tudo sem recodificar e confere a duração', async () => {
+    s.modo('pedacos')
+    s.total(3)
+    const heard: number[] = []
+    const r = await engineOf(s, realFfmpeg()).makeMatte({ video, out, durationMs: 4667, lowPriority: true, parts: parts([], (c) => heard.push(c.index)) })
+    const req = s.pedido() as unknown as { mode: string; out?: string; parts: { dir: string; chunkSeconds: number; startChunk: number; warmupSeconds: number; stopFile: string }; lowPriority: boolean; parentPid: number; maxSide: number }
+    expect(req.mode).toBe('matte')
+    expect(req.out).toBeUndefined()
+    expect(req.parts).toEqual({ dir, chunkSeconds: 2, startChunk: 0, warmupSeconds: 1, stopFile: stop })
+    expect(req.lowPriority).toBe(true)
+    expect(req.parentPid).toBe(process.pid)
+    expect(req.maxSide).toBe(1280)
+    expect(heard).toEqual([0, 1, 2])
+    expect(r.stopped).toBeUndefined()
+    expect(r.frames).toBe(140)
+    expect(r.chunks?.map((c) => c.index)).toEqual([0, 1, 2])
+    const v = probeJson(out).streams.find((x) => x.codec_type === 'video')!
+    expect(Number(v.nb_frames)).toBe(140)
+    expect(v.r_frame_rate).toBe('30/1')
+    expect(Number(probeJson(out).format.duration)).toBeCloseTo(140 / 30, 2)
+  })
+
+  it('RETOMADA: com os dois primeiros pedaços já prontos o script recebe startChunk 2, faz só o que falta e o arquivo final tem tudo', async () => {
+    s.modo('pedacos')
+    s.total(3)
+    const heard: number[] = []
+    const done = [
+      { index: 0, frames: 60, bytes: 0 },
+      { index: 1, frames: 60, bytes: 0 }
+    ]
+    // os dois primeiros ficaram de uma rodada anterior (estão no disco, o script não os refaz)
+    const r = await engineOf(s, realFfmpeg()).makeMatte({ video, out, durationMs: 4667, parts: parts(done, (c) => heard.push(c.index)) })
+    expect((s.pedido() as unknown as { parts: { startChunk: number } }).parts.startChunk).toBe(2)
+    expect(heard).toEqual([2])
+    expect(r.frames).toBe(140)
+    expect(r.chunks?.map((c) => c.index)).toEqual([0, 1, 2])
+    expect(Number(probeJson(out).streams.find((x) => x.codec_type === 'video')!.nb_frames)).toBe(140)
+  })
+
+  it('PARADA a pedido: o script devolve "stopped" no fim de um pedaço, o motor não junta nada e devolve os pedaços prontos', async () => {
+    s.modo('pedacos-parou')
+    s.total(6)
+    rmSync(out, { force: true })
+    const r = await engineOf(s, realFfmpeg()).makeMatte({ video, out, durationMs: 11_000, parts: parts([{ index: 0, frames: 60, bytes: 0 }]) })
+    expect(r.stopped).toBe(true)
+    expect(r.chunks?.map((c) => c.index)).toEqual([0, 1])
+    expect(existsSync(out)).toBe(false)
+  })
+
+  it('pedaço que falta no meio da conta: erro de junção (os pedaços não servem) em vez de um recorte curto dado como bom', async () => {
+    s.modo('pedacos-buraco')
+    s.total(3)
+    rmSync(out, { force: true })
+    await expect(engineOf(s, realFfmpeg()).makeMatte({ video, out, durationMs: 4667, parts: parts([]) })).rejects.toBeInstanceOf(MatteJoinError)
+    expect(existsSync(out)).toBe(false)
+  })
+
+  it('recusa pasta de pedaços ou arquivo de parada relativos ou que viram opção', async () => {
+    s.modo('pedacos')
+    const e = engineOf(s, realFfmpeg())
+    await expect(e.makeMatte({ video, out, durationMs: 1000, parts: { ...parts([]), dir: 'pedacos' } })).rejects.toThrow(/Caminho inválido/)
+    await expect(e.makeMatte({ video, out, durationMs: 1000, parts: { ...parts([]), stopFile: '-y' } })).rejects.toThrow(/Caminho inválido/)
   })
 })
