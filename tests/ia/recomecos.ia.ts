@@ -32,7 +32,7 @@ function words(): Word[] {
 
 it('a IA aponta o recomeço do botão de login, com índices que existem', async () => {
   const exe = locateClaude()
-  expect(exe, 'o programa da IA não está instalado neste computador (precisa do `claude` no PATH ou em ~/.local/bin)').not.toBeNull()
+  expect(exe, 'o Claude Code não está instalado neste computador (precisa do `claude` no PATH ou em ~/.local/bin)').not.toBeNull()
   const cwd = join(tmpdir(), 'tomada-ia-teste')
   mkdirSync(cwd, { recursive: true })
   const provider = createClaudeCliProvider({ exe: exe!, cwd })
