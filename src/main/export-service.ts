@@ -578,7 +578,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
       const summary = seamSummary(result)
       if (result.ok) logger.info(`Exportação ${run.id}: ${summary}`)
       else logger.warn(`Exportação ${run.id}: ${summary}`)
-      return { ok: result.ok, summary, failures: result.failures, seams: result.seams, seamsPerMin: result.seamsPerMin, shortestMs: result.shortestMs, maxDropDb: result.maxDropDb, inSpeech: result.inSpeech }
+      return { ok: result.ok, summary, failures: result.failures, seams: result.seams, seamsPerMin: result.seamsPerMin, shortestMs: result.shortestMs, shortestBetweenMs: result.shortestBetweenMs, maxDropDb: result.maxDropDb, inSpeech: result.inSpeech }
     } catch (err) {
       if (run.cancelled || run.abort.signal.aborted) throw err
       logger.warn(`Exportação ${run.id}: não consegui medir as emendas do arquivo exportado (${messageOf(err)}).`)

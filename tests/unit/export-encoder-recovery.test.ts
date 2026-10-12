@@ -68,7 +68,7 @@ vi.mock('mediabunny', () => ({
   StreamTarget: class {}
 }))
 vi.mock('@shared/render', () => ({ createRenderCache: () => ({ images: new Map() }), renderFrame: () => {}, drawShadow: () => {}, roundedRectPath: () => {} }))
-vi.mock('@shared/scene', () => ({ prepareEvents: () => ({}), evaluateScene: () => ({}), deriveProject: () => ({ kept: [{ start: 0, end: 100 }], outputDurationMs: 100 }) }))
+vi.mock('@shared/scene', () => ({ prepareEvents: () => ({}), evaluateScene: () => ({}), deriveProject: () => ({ kept: [{ start: 0, end: 100 }], outputDurationMs: 100, seams: [], dissolves: [], punch: [1] }) }))
 vi.mock('../../src/renderer/fonts', () => ({ ensureCaptionFonts: async () => {}, captionFontsLoaded: () => true }))
 
 const project = createProject({ id: 'teste', title: 'Teste', sources: { screen: { path: 'media/screen.mp4', w: 640, h: 360, fps: 30, durationMs: 100 } } })

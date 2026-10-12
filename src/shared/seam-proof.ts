@@ -16,8 +16,10 @@
 export const SEAM_LIMITS = {
   /** Queda de nível máxima na emenda (dB) em relação à média dos 100 ms em volta. */
   maxDropDb: 6,
-  /** Menor trecho entre duas emendas (ms). */
+  /** Menor trecho entre duas emendas (ms). A ponta do vídeo (antes da 1ª e depois da última emenda) não é "entre emendas": vale o mínimo de lasca. */
   minSegmentMs: 1200,
+  /** Menor ponta do vídeo (ms): uma sobra menor que isto, colada numa emenda, é lasca. */
+  minEdgeMs: 400,
   /** Teto de emendas por minuto do vídeo final. */
   maxSeamsPerMin: { horizontal: 6, vertical: 12 },
   /** Emendas dentro de fala aceitas. */
@@ -55,8 +57,10 @@ export type SeamReport = {
   durationMs: number
   seams: number
   seamsPerMin: number
-  /** Menor trecho entre emendas (e ponta a ponta), em ms; `null` sem emendas. */
+  /** Menor trecho do vídeo, pontas incluídas (a conta do "antes", comparável), em ms; `null` sem emendas. */
   shortestMs: number | null
+  /** Menor trecho ENTRE duas emendas (sem as pontas), em ms; `null` com menos de duas emendas. É o que o limite de 1,2 s olha. */
+  shortestBetweenMs: number | null
   under1500: number
   maxDropDb: number | null
   /** Instante de saída (ms) da maior queda. */
@@ -98,7 +102,7 @@ export function voiceReference(x: Float32Array, sampleRate: number): { voiceDb: 
 
 export type SeamMeasureOptions = {
   format?: 'horizontal' | 'vertical'
-  limits?: Partial<{ maxDropDb: number; minSegmentMs: number; maxSeamsPerMin: number; maxInSpeech: number }>
+  limits?: Partial<{ maxDropDb: number; minSegmentMs: number; minEdgeMs: number; maxSeamsPerMin: number; maxInSpeech: number }>
 }
 
 /**
@@ -109,6 +113,7 @@ export function measureSeams(samples: Float32Array, sampleRate: number, seamMs: 
   const lim = {
     maxDropDb: options.limits?.maxDropDb ?? SEAM_LIMITS.maxDropDb,
     minSegmentMs: options.limits?.minSegmentMs ?? SEAM_LIMITS.minSegmentMs,
+    minEdgeMs: options.limits?.minEdgeMs ?? SEAM_LIMITS.minEdgeMs,
     maxSeamsPerMin: options.limits?.maxSeamsPerMin ?? SEAM_LIMITS.maxSeamsPerMin[options.format ?? 'horizontal'],
     maxInSpeech: options.limits?.maxInSpeech ?? SEAM_LIMITS.maxInSpeech
   }
@@ -143,6 +148,9 @@ export function measureSeams(samples: Float32Array, sampleRate: number, seamMs: 
   const edges = [0, ...seamMs, durationMs]
   const segments = edges.slice(1).map((e, i) => e - edges[i]!)
   const shortestMs = seamMs.length > 0 ? Math.min(...segments) : null
+  const between = segments.slice(1, -1)
+  const shortestBetweenMs = between.length > 0 ? Math.min(...between) : null
+  const edgeMs = seamMs.length > 0 ? Math.min(segments[0]!, segments[segments.length - 1]!) : null
   const under1500 = segments.filter((s) => s < 1500).length
   const worst = measures.reduce<SeamMeasure | null>((w, m) => (w === null || m.dropDb > w.dropDb ? m : w), null)
   const inSpeech = measures.filter((m) => m.inSpeech).length
@@ -153,7 +161,8 @@ export function measureSeams(samples: Float32Array, sampleRate: number, seamMs: 
     const n = measures.filter((m) => m.dropDb > lim.maxDropDb).length
     failures.push(`${n} emenda(s) com buraco no som acima de ${lim.maxDropDb} dB (a pior, aos ${(worst.outMs / 1000).toFixed(1).replace('.', ',')} s, cai ${worst.dropDb.toFixed(1).replace('.', ',')} dB)`)
   }
-  if (shortestMs !== null && shortestMs < lim.minSegmentMs) failures.push(`trecho de ${Math.round(shortestMs)} ms entre duas emendas (o mínimo é ${lim.minSegmentMs} ms)`)
+  if (shortestBetweenMs !== null && shortestBetweenMs < lim.minSegmentMs) failures.push(`trecho de ${Math.round(shortestBetweenMs)} ms entre duas emendas (o mínimo é ${lim.minSegmentMs} ms)`)
+  if (edgeMs !== null && edgeMs < lim.minEdgeMs) failures.push(`sobra de ${Math.round(edgeMs)} ms na ponta do vídeo, colada numa emenda (o mínimo é ${lim.minEdgeMs} ms)`)
   if (seamsPerMin > lim.maxSeamsPerMin + 1e-9) failures.push(`${seamsPerMin.toFixed(1).replace('.', ',')} emendas por minuto (o teto é ${lim.maxSeamsPerMin})`)
   if (inSpeech > lim.maxInSpeech) failures.push(`${inSpeech} emenda(s) caem dentro da fala`)
 
@@ -162,6 +171,7 @@ export function measureSeams(samples: Float32Array, sampleRate: number, seamMs: 
     seams: seamMs.length,
     seamsPerMin,
     shortestMs,
+    shortestBetweenMs,
     under1500,
     maxDropDb: worst ? worst.dropDb : null,
     worstDropAtMs: worst ? worst.outMs : null,
@@ -177,6 +187,6 @@ export function measureSeams(samples: Float32Array, sampleRate: number, seamMs: 
 /** Uma linha para o log e para a Revisão (o que foi medido e, se reprovou, por quê). */
 export function seamSummary(r: SeamReport): string {
   const f = (v: number | null, d = 1): string => (v === null ? '—' : v.toFixed(d).replace('.', ','))
-  const head = `${r.seams} emenda(s), ${f(r.seamsPerMin)} por minuto, menor trecho ${r.shortestMs === null ? '—' : `${f(r.shortestMs / 1000)} s`}, maior queda de som ${f(r.maxDropDb)} dB, ${r.inSpeech} em fala`
+  const head = `${r.seams} emenda(s), ${f(r.seamsPerMin)} por minuto, menor trecho entre emendas ${r.shortestBetweenMs === null ? '—' : `${f(r.shortestBetweenMs / 1000)} s`}, maior queda de som ${f(r.maxDropDb)} dB, ${r.inSpeech} em fala`
   return r.ok ? `Prova de emenda: passou (${head}).` : `Prova de emenda: reprovou (${head}). ${r.failures.join('; ')}.`
 }

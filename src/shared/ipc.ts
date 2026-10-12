@@ -255,6 +255,7 @@ export type SeamProof = {
   seams: number
   seamsPerMin: number
   shortestMs: number | null
+  shortestBetweenMs: number | null
   maxDropDb: number | null
   inSpeech: number
 }

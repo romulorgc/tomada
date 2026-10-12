@@ -98,6 +98,20 @@ describe('emendas por minuto, menor trecho e limites', () => {
     expect(dense.failures.join(' ')).toContain('700 ms')
   })
 
+  it('a ponta do vídeo não é "entre emendas": 1,1 s de sobra no fim passa; sobra de 300 ms colada numa emenda é lasca', () => {
+    const r = measureSeams(x, SR, [10_000, 20_000, 58_900], 60_000, { limits: { maxInSpeech: 99, maxDropDb: 99 } })
+    expect(r.shortestMs).toBe(1100)
+    expect(r.shortestBetweenMs).toBe(10_000)
+    expect(r.failures.join(' ')).not.toContain('entre duas emendas')
+    expect(r.failures.join(' ')).not.toContain('ponta')
+    const lasca = measureSeams(x, SR, [10_000, 20_000, 59_700], 60_000, { limits: { maxInSpeech: 99, maxDropDb: 99 } })
+    expect(lasca.shortestBetweenMs).toBe(10_000)
+    expect(lasca.failures.join(' ')).toContain('sobra de 300 ms na ponta do vídeo')
+    const umaSo = measureSeams(x, SR, [30_000], 60_000, { limits: { maxInSpeech: 99, maxDropDb: 99 } })
+    expect(umaSo.shortestBetweenMs).toBeNull()
+    expect(SEAM_LIMITS.minEdgeMs).toBe(400)
+  })
+
   it('YouTube aceita 6 por minuto e o vertical 12; passou do teto reprova com o número', () => {
     const times = Array.from({ length: 9 }, (_, i) => 5000 + i * 5500)
     const h = measureSeams(x, SR, times, 60_000, { format: 'horizontal', limits: { maxInSpeech: 99, maxDropDb: 99 } })
@@ -112,12 +126,12 @@ describe('emendas por minuto, menor trecho e limites', () => {
 
   it('sem emendas: nada a medir, passa', () => {
     const r = measureSeams(x, SR, [], 60_000)
-    expect(r).toMatchObject({ seams: 0, shortestMs: null, maxDropDb: null, inSpeech: 0, ok: true })
+    expect(r).toMatchObject({ seams: 0, shortestMs: null, shortestBetweenMs: null, maxDropDb: null, inSpeech: 0, ok: true })
   })
 
   it('a linha de resumo diz o que foi medido e, se reprovou, por quê', () => {
     const ok = seamSummary(measureSeams(x, SR, [10_000, 20_000], 60_000, { limits: { maxInSpeech: 99 } }))
-    expect(ok).toMatch(/^Prova de emenda: passou \(2 emenda\(s\), 2,0 por minuto, menor trecho 10,0 s/)
+    expect(ok).toMatch(/^Prova de emenda: passou \(2 emenda\(s\), 2,0 por minuto, menor trecho entre emendas 10,0 s/)
     const bad = seamSummary(measureSeams(x, SR, [10_000, 10_500], 60_000, { limits: { maxInSpeech: 99, maxDropDb: 99 } }))
     expect(bad).toContain('reprovou')
     expect(bad).toContain('500 ms')

@@ -78,7 +78,7 @@ try {
   const report = lib.measureSeams(samples, SAMPLE_RATE, seams.map((s) => s.outMs), durationMs, { format })
   const f = (n, d = 1) => (n === null || n === undefined ? '—' : n.toFixed(d))
   console.log(`${path.basename(video)} · ${format} · ${(durationMs / 1000).toFixed(2)} s · ${(sourceMs / 1000).toFixed(2)} s de origem`)
-  console.log(`emendas: ${report.seams} (${f(report.seamsPerMin)}/min) · menor trecho ${report.shortestMs === null ? '—' : `${Math.round(report.shortestMs)} ms`} · trechos < 1,5 s: ${report.under1500} · emendas em fala: ${report.inSpeech}`)
+  console.log(`emendas: ${report.seams} (${f(report.seamsPerMin)}/min) · menor trecho (pontas incluídas) ${report.shortestMs === null ? '—' : `${Math.round(report.shortestMs)} ms`} · menor entre emendas ${report.shortestBetweenMs === null ? '—' : `${Math.round(report.shortestBetweenMs)} ms`} · trechos < 1,5 s: ${report.under1500} · emendas em fala: ${report.inSpeech}`)
   console.log(`voz ${f(report.voiceDb)} dBFS · chão ${f(report.floorDb)} dBFS · maior queda ${f(report.maxDropDb)} dB${report.worstDropAtMs === null ? '' : ` aos ${(report.worstDropAtMs / 1000).toFixed(2)} s`}`)
   console.log('  emenda   saída(s)  lateral(dB)  buraco(dB)  queda(dB)  na emenda(dB)  fala')
   for (const m of report.measures) {
