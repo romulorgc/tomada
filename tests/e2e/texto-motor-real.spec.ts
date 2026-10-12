@@ -14,7 +14,7 @@ import { EXAMPLE_FOLDER, launchTomada, shot, type Session } from './helpers'
 import { DEFAULT_DICTIONARY } from '../../src/shared/dictionary'
 
 let s: Session | undefined
-test('dicionário padrão do usuário não alucina seus nomes em áudio sintético sem esses termos', async () => {
+test('dicionário padrão não alucina seus termos em áudio sintético que não os diz', async () => {
   test.setTimeout(180000)
   s = await launchTomada({ env: { TOMADA_TRANSCRIBER: 'faster-whisper', TOMADA_TOOLS_DIR: '', TOMADA_LLM: 'off' } })
   expect(await s.page.evaluate(() => window.tomada.dictionary.get())).toEqual([...DEFAULT_DICTIONARY])
@@ -50,7 +50,7 @@ test('transcreve o exemplo com o faster-whisper de verdade, limpa sozinho e apag
   // TOMADA_TOOLS_DIR vazio: vale a pasta de ferramentas do usuário (a que a preparação pela interface criou)
   s = await launchTomada({ env: { TOMADA_TRANSCRIBER: 'faster-whisper', TOMADA_TOOLS_DIR: '', TOMADA_LLM: 'off' } })
   const { page } = s
-  // O gabarito foi medido com o prompt-base: os nomes do usuário mudam a grafia
+  // O gabarito foi medido com o prompt-base: os termos do dicionário mudam a grafia
   // de hesitações no Whisper. Este áudio sintético não usa esse vocabulário.
   await page.evaluate(() => window.tomada.dictionary.set([]))
   const file = join(s.projects, EXAMPLE_FOLDER, 'transcript.json')

@@ -73,8 +73,8 @@ describe('processCursor', () => {
     expect(distinct.size).toBeLessThanOrEqual(5)
 
     // tremor curto (< 100 ms) fica totalmente parado
-    const especificação = [s(0, 0.5, 0.5), s(8, 0.504, 0.5), s(16, 0.496, 0.5), s(24, 0.5, 0.5), s(32, 0.5, 0.5)]
-    const g = processCursor(especificação, [], { durationMs: 32 })
+    const shortTrack = [s(0, 0.5, 0.5), s(8, 0.504, 0.5), s(16, 0.496, 0.5), s(24, 0.5, 0.5), s(32, 0.5, 0.5)]
+    const g = processCursor(shortTrack, [], { durationMs: 32 })
     expect(g.x.every((v) => v === 0.5)).toBe(true)
   })
 

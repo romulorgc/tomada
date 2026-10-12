@@ -58,7 +58,7 @@ export type FormatSpec = {
 export const HORIZONTAL_1080: FormatSpec = { kind: 'horizontal', w: 1920, h: 1080 }
 export const VERTICAL_1080: FormatSpec = { kind: 'vertical', w: 1080, h: 1920 }
 
-/** Constantes do projeto / especificação (tempos em ms, tamanhos em px na altura de 1080). */
+/** Constantes de layout e transição (tempos em ms, tamanhos em px na altura de 1080). */
 export const LAYOUT_TRANSITION_MS = 400
 export const RIPPLE_MS = 500
 export const RIPPLE_RADIUS = 40

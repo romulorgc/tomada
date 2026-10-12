@@ -128,7 +128,7 @@ export const CAPTION_Y_WIDE = 0.71
  */
 export function verticalCaptionY(layout: LayoutKind, presenter?: PresenterStyle): number {
   if (layout === 'screen-wide') return CAPTION_Y_WIDE
-  // V-D (apresentador recortado): logo ACIMA da cabeça, sem cobrir o rosto (nos Shorts verdes medidos o centro da legenda fica de 3 a 12 pontos acima do topo da cabeça, mediana 4,5; ver `estudo/green-screen-2026-10-05.md`)
+  // V-D (apresentador recortado): logo ACIMA da cabeça, sem cobrir o rosto (nos Shorts verdes medidos o centro da legenda fica de 3 a 12 pontos acima do topo da cabeça, mediana 4,5)
   if (layout === 'presenter') return 1 - resolvePresenter(presenter).heightV - PRESENTER.captionGapV
   if (layout === 'stack') {
     const seam = STACK_SPLIT / VERTICAL_H

@@ -145,8 +145,7 @@ export type SideBySideStyle = {
 
 /**
  * O apresentador recortado (M4c, layout `presenter`): a webcam SEM o fundo (máscara local), a pessoa do peito para cima e as mãos na
- * frente da tela, ancorada na borda de baixo. Tudo opcional (ausente = os padrões medidos em vídeos reais, ver
- * `estudo/green-screen-2026-10-05.md`).
+ * frente da tela, ancorada na borda de baixo. Tudo opcional (ausente = os padrões medidos em vídeos reais de referência).
  */
 export type PresenterStyle = {
   /** Canto do 16:9 em que a pessoa fica (ausente = direita; nos 11 vídeos medidos todos estavam à direita). */

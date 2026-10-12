@@ -14,7 +14,7 @@
  *    anuncia (rolagem, página nova) já aparece como mudança de conteúdo.
  *
  * Ideia registrada (a linha do tempo ainda não tem trecho acelerado): em vez de só PRESERVAR o silêncio com tela ativa, acelerá-lo
- * em 3× (teto de 2 s) como faz o time-lapse de espera; ver `docs/etapas/F1-emendas.md`.
+ * em 3× (teto de 2 s) como faz o time-lapse de espera.
  */
 import type { CursorData } from './scene'
 import type { Range } from './types'

@@ -25,7 +25,7 @@ export const TRUE_PEAK_DB = -1
 export const SYSTEM_GAIN_DB = -9
 export const OUTPUT_SAMPLE_RATE = 48_000
 export const OUTPUT_AUDIO_BITRATE = '320k'
-/** O mesmo áudio de publicação nos dois formatos (decisão do usuário, 06/10/2026). */
+/** O mesmo áudio de publicação nos dois formatos (decisão de produto). */
 export const VERTICAL_AUDIO_BITRATE = OUTPUT_AUDIO_BITRATE
 /** Reserva para a reconstrução AAC: Maria medida a -0,99 dBTP após loudnorm com teto -1. */
 export const AAC_HEADROOM_DB = 0.15

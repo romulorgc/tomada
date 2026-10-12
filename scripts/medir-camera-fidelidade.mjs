@@ -10,7 +10,7 @@
  *   node scripts/medir-camera-fidelidade.mjs --reuse <pasta>      (só refaz a análise de uma rodada anterior)
  *
  * Cada tamanho/bitrate roda sem e com a tela gravando ao mesmo tempo. Os arquivos ficam em C:\tmp\tomada-camera-medicao\
- * (rosto do usuário: só nesta máquina; docs/LIXO.md). `--long N` grava também N segundos em tamanho cheio com a tela, para as
+ * (contêm o rosto de quem mede: ficam só nesta máquina; apague ao terminar). `--long N` grava também N segundos em tamanho cheio com a tela, para as
  * medições de processamento 4K (`tests/medir/camera-4k.run.ts`).
  */
 import { spawnSync } from 'node:child_process'

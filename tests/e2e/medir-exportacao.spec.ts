@@ -22,7 +22,7 @@ const CONFIGS: { nome: string; resolution: '1080p' | '1440p'; fps: 30 | 60; form
 ]
 
 test('exportar 1 minuto: tempo e taxa por configuração', async () => {
-  test.skip(process.env.TOMADA_MEDIR_EXPORTACAO !== '1', 'Medição manual: TOMADA_MEDIR_EXPORTACAO=1 (docs/etapas/acabamento-exportacao.md).')
+  test.skip(process.env.TOMADA_MEDIR_EXPORTACAO !== '1', 'Medição manual: TOMADA_MEDIR_EXPORTACAO=1.')
   test.setTimeout(900_000)
   const rotulo = process.env.TOMADA_MEDIR_ROTULO ?? 'depois'
   s = await launchTomada({ seed: false })

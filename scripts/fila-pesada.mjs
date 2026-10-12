@@ -1,5 +1,5 @@
 // Fila para o que é PESADO e não pode rodar em paralelo nesta máquina (bateria e2e, captura real, pip no
-// venv compartilhado, medições na GPU): vários cópias de trabalho trabalham ao mesmo tempo em cópias separadas do
+// venv compartilhado, medições na GPU): várias baterias podem ser disparadas ao mesmo tempo a partir de cópias separadas do
 // repositório, mas a tela, o mouse e a placa de vídeo são uma só. Uso:
 //   node scripts/fila-pesada.mjs npm run test:e2e
 // Espera a vez (trava em C:\tmp\tomada-pesado.lock), roda o comando, solta a trava. Também espera enquanto
@@ -78,7 +78,7 @@ for (;;) {
       if (pid && !vivo(Number(pid))) fs.rmSync(LOCK, { recursive: true, force: true })
     } catch {}
     if (!avisou) {
-      console.log('[fila-pesada] esperando a vez (outro cópia de trabalho está com a máquina)…')
+      console.log('[fila-pesada] esperando a vez (outra bateria está usando a máquina)…')
       avisou = true
     }
     await dorme(15000)

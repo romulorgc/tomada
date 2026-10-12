@@ -531,7 +531,7 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     expect(detail).toContain('A placa de vídeo ficou sem memória.')
     expect(layoutsOf(w.project()).vertical).toBe('stack')
   })
-  /** O usuário do teste real: a tela tem atividade de mouse o tempo todo (clique a cada 1,2 s, cursor sempre andando). */
+  /** O cenário do teste real: a tela tem atividade de mouse o tempo todo (clique a cada 1,2 s, cursor sempre andando). */
   const busyScreen = async (dir: string): Promise<void> => {
     const cursor = Array.from({ length: 400 }, (_, i) => ({ t: i * 50, x: 0.2 + 0.6 * ((i % 40) / 40), y: 0.3 + 0.4 * (Math.floor(i / 40) % 2 === 0 ? (i % 40) / 40 : 1 - (i % 40) / 40) }))
     const clicks = Array.from({ length: 16 }, (_, i) => ({ t: 800 + i * 1200, x: 0.3 + 0.4 * ((i * 7) % 10) / 10, y: 0.4 + 0.3 * ((i * 3) % 10) / 10, button: 'left', upT: 880 + i * 1200 }))
