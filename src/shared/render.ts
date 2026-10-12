@@ -877,6 +877,18 @@ export function protectScreen(cache: RenderCache, frame: FrameSource | null | un
  * Desenha o quadro da `scene` em `ctx`. O canvas precisa ter o tamanho de `scene.format`.
  * Faltando o quadro de uma fonte (ainda carregando), o retângulo dela sai escuro: nunca lança.
  */
+/**
+ * Dissolve de emenda (F1): por cima do quadro já desenhado, o último quadro do trecho anterior (`previous`, um canvas do mesmo
+ * tamanho) com o peso `weight` (0..1). Prévia e exportação usam esta mesma função. Sem quadro guardado ou peso 0, não faz nada.
+ */
+export function drawDissolve(ctx: Ctx2D, previous: unknown | null, weight: number): void {
+  if (!previous || !(weight > 0)) return
+  const alpha = ctx.globalAlpha
+  ctx.globalAlpha = Math.min(1, weight)
+  ctx.drawImage(previous, 0, 0)
+  ctx.globalAlpha = alpha
+}
+
 export function renderFrame(ctx: Ctx2D, scene: Scene, frames: FrameSet, cache: RenderCache): void {
   const { w, h } = scene.format
   ctx.setTransform(1, 0, 0, 1, 0, 0)

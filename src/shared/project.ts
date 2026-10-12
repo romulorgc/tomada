@@ -152,6 +152,7 @@ const cameraStyleSchema = z.looseObject({
   mirror: z.boolean().default(D.camera.mirror),
   hidden: z.boolean().default(D.camera.hidden),
   shrinkOnZoom: z.boolean().default(D.camera.shrinkOnZoom),
+  punchIn: z.boolean().optional(),
   framing: z.looseObject({ auto: z.boolean().optional(), zoom: z.number().optional(), dx: z.number().optional(), dy: z.number().optional() }).optional()
 })
 

@@ -123,6 +123,8 @@ export type CameraStyle = {
   hidden: boolean
   /** A bolha encolhe enquanto um zoom está aberto (padrão: sim). */
   shrinkOnZoom: boolean
+  /** Aproximar o rosto (~1,28×) em trechos alternados, para a emenda não ser a mesma imagem pulando. Ausente = ligado (F1). */
+  punchIn?: boolean
   /** Enquadramento do rosto (M4c). Ausente = automático. */
   framing?: CameraFraming
 }

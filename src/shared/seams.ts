@@ -74,3 +74,16 @@ export function keptIndexOf(kept: readonly Range[], t: number): number {
   }
   return -1
 }
+
+// ---------------------------------------------------------------------------
+// Curva do cruzamento
+
+/**
+ * Ganhos do cruzamento de potência igual no ponto `u` (0 = começo, 1 = fim): o `qsin` do ffmpeg (`acrossfade ... c1=qsin c2=qsin`).
+ * Quem sai vale cos(u·π/2) e quem entra sin(u·π/2), então `out² + in² = 1` em todo o cruzamento (−3 dB para cada lado no meio).
+ * A prévia usa esta mesma função nos volumes dos dois `<audio>`.
+ */
+export function equalPowerGains(u: number): { out: number; in: number } {
+  const x = Math.min(1, Math.max(0, u))
+  return { out: Math.cos((x * Math.PI) / 2), in: Math.sin((x * Math.PI) / 2) }
+}

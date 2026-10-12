@@ -31,6 +31,8 @@ import {
   resolveSideBySide,
   styleUnit
 } from './styles'
+import { DISSOLVE_SCREEN_CHANGE_MIN, contentDifference, dissolveFlags, dissolveWeight, punchCrop, punchScales } from './punch-in'
+import { keptIndexOf, planSeams, type Seam } from './seams'
 import { keptRanges, outputDuration, sourceToOutput } from './timeline'
 import type { Background, ClickEvent, ContentRectSample, CursorSample, KeyEvent, LayoutKind, Point, Project, Range, Rect, Size, Style, Word } from './types'
 import { GRID_HZ } from './cursor'
@@ -172,6 +174,12 @@ export type Derived = {
   /** Duração da gravação (ms, tempo de origem). */
   durationMs: number
   kept: Range[]
+  /** As emendas entre os trechos mantidos (F1): onde o áudio cruza e a imagem pode mudar de enquadramento ou dissolver. */
+  seams: Seam[]
+  /** O fator do punch-in de cada trecho mantido (1 ou ~1,28): alterna a cada emenda; só vale nos layouts com o rosto em destaque. */
+  punch: number[]
+  /** Que emendas dissolvem (removido ≥ 1 s e a tela mudou); alinhado a `seams`. */
+  dissolves: boolean[]
   /** Duração do vídeo de saída (ms). */
   outputDurationMs: number
   data: CursorData
@@ -262,6 +270,10 @@ export function deriveProject(project: Project, rawData: CursorData, format: For
   const kept = keptRanges(durationMs, project.cuts)
   // O recorte da tela (C1): a área-base passa a ser a página; o cursor e os cliques já vêm no espaço dela
   const data = applyScreenCrop(rawData, project)
+  // Emendas (F1): o plano que a prévia e a exportação leem igual (punch-in alternado e dissolve quando a tela mudou)
+  const seams = planSeams(kept)
+  const punch = project.style.camera.punchIn === false ? kept.map(() => 1) : punchScales(kept)
+  const dissolves = dissolveFlags(seams, (a, b) => contentDifference(data.contentMap, a, b) >= DISSOLVE_SCREEN_CHANGE_MIN)
   const crop = data.crop
   const full = sizeOf(project.sources.screen)
   const barOn = crop !== null && format.kind === 'horizontal' && project.screenCrop?.browserFrame?.enabled === true
@@ -320,6 +332,9 @@ export function deriveProject(project: Project, rawData: CursorData, format: For
     format,
     durationMs,
     kept,
+    seams,
+    punch,
+    dissolves,
     outputDurationMs: outputDuration(durationMs, project.cuts),
     data,
     crop,
@@ -623,6 +638,10 @@ export type Scene = {
   captions: SceneCaptions | null
   /** O título de gancho dos 2 primeiros segundos do vertical. */
   hook: SceneHook | null
+  /** Dissolve de emenda (F1): peso (0..1) do quadro que SAI sobre o que entra; 0 = corte seco. Quem desenha guarda o último quadro. */
+  dissolve: number
+  /** O punch-in de agora na câmera (1 = sem). Só diagnóstico e teste. */
+  punchIn: number
   debug: { layout: LayoutKind; previous: LayoutKind; transition: number; zoom: { scale: number; cx: number; cy: number } }
 }
 
@@ -751,18 +770,31 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
       ? { weight: cutWeight, outline: presenterStyle.outline ? presenterStyle.outlineWidth * unit : 0, shadow: presenterStyle.shadow ? presenterShadow(unit) : null }
       : null
 
+  // Punch-in alternado (F1): nos layouts em que a câmera/rosto aparece com destaque, os trechos ímpares aproximam o rosto (~1,28×),
+  // centrado nele; a troca acontece na emenda, em corte seco. Nos layouts da bolha o rosto é pequeno e a emenda é da tela: não vale.
+  const punchOf = (key: LayoutKind): number => (key === 'side-by-side' || key === 'presenter' || key === 'stack' || key === 'camera' ? 1 : 0)
+  const punchWeight = clamp01(punchOf(curKey) * e + (p < 1 && prevKey !== curKey ? punchOf(prevKey) * (1 - e) : 0))
+  const keptAt = keptIndexOf(derived.kept, sourceT)
+  const punchScale = keptAt >= 0 ? (derived.punch[keptAt] ?? 1) : 1
+  const punchNow = 1 + (punchScale - 1) * punchWeight
+
+  const faceAim = derived.cameraSize && derived.face ? faceAimAt(derived.face, sourceT) : null
   const camera: SceneCamera | null =
     cameraBox && derived.cameraSize
       ? {
           dest: cameraBox.rect,
           // o recorte da imagem da câmera: centrado no rosto (se a análise existe) e com o ajuste manual por cima (M4c); o do
           // apresentador põe a cabeça perto do topo da janela
-          src: cameraCropRect(
-            derived.cameraSize,
-            cameraBox.rect.w / cameraBox.rect.h,
-            derived.face ? faceAimAt(derived.face, sourceT) : null,
-            style.camera.framing,
-            cutWeight > 0 ? lerpTarget(BUBBLE_TARGET, PRESENTER_TARGET, cutWeight) : BUBBLE_TARGET
+          src: punchCrop(
+            cameraCropRect(
+              derived.cameraSize,
+              cameraBox.rect.w / cameraBox.rect.h,
+              faceAim,
+              style.camera.framing,
+              cutWeight > 0 ? lerpTarget(BUBBLE_TARGET, PRESENTER_TARGET, cutWeight) : BUBBLE_TARGET
+            ),
+            punchNow,
+            faceAim
           ),
           radius: cameraBox.radius,
           opacity: cameraBox.opacity,
@@ -909,6 +941,8 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
     backdrop,
     captions,
     hook,
+    dissolve: derived.seams.length > 0 ? dissolveWeight(derived.seams, derived.dissolves, derived.kept, sourceToOutput(sourceT, derived.kept)) : 0,
+    punchIn: camera ? punchNow : 1,
     debug: { layout, previous: prev, transition: p, zoom: sample }
   }
 }

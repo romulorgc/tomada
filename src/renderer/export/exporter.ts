@@ -20,6 +20,7 @@ import {
   type VideoSample
 } from 'mediabunny'
 import { avcCodecString, fileTimeSeconds, outputFrameCount, sourceTimeOfFrame } from '@shared/export'
+import { dissolveSnapFrames } from '@shared/punch-in'
 import { cameraVideoOffsetMs } from '@shared/camera-sync'
 import { eventsFromText } from '@shared/events'
 import { parseFaceTrack, type FaceTrack } from '@shared/face'
@@ -27,6 +28,7 @@ import type { ExportJob } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
 import {
   createRenderCache,
+  drawDissolve,
   drawShadow,
   renderFrame,
   roundedRectPath,
@@ -93,6 +95,14 @@ class FrameHold {
 }
 
 const canvasFactory: CanvasFactory = (w, h) => new OffscreenCanvas(w, h) as unknown as ReturnType<CanvasFactory>
+
+/** Um canvas do tamanho do quadro para guardar o último quadro de um trecho (dissolve de emenda). */
+function createSnapshotCanvas(format: FormatSpec): { canvas: OffscreenCanvas; ctx: Ctx2D } {
+  const canvas = new OffscreenCanvas(format.w, format.h)
+  const ctx = canvas.getContext('2d', { alpha: false })
+  if (!ctx) throw new Error('Não consegui criar o canvas do dissolve de emenda.')
+  return { canvas, ctx: ctx as unknown as Ctx2D }
+}
 
 /** Pré-carrega a imagem de fundo (se o estilo usa uma) para o cache do render. */
 export async function loadBackgroundImage(project: Project, projectId: string, cache: RenderCache): Promise<void> {
@@ -247,6 +257,10 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
     const { derived, project } = c
     const total = outputFrameCount(derived.outputDurationMs, fps)
     if (total === 0) throw new Error('Não há nada para exportar: todos os trechos foram cortados.')
+    // cópia do último quadro antes de cada emenda que dissolve (só existe se alguma emenda dissolve)
+    const snapFrames = dissolveSnapFrames(derived.seams, derived.dissolves, fps)
+    let snapReady = false
+    const snap = snapFrames.size > 0 ? createSnapshotCanvas(format) : null
 
     const codec = avcCodecString(format.w, format.h, fps)
     let encoderNote = codec
@@ -355,6 +369,14 @@ export async function renderVideoJob(job: ExportJob, io: VideoRenderIo): Promise
       const scene = evaluateScene(project, derived, sourceTimeOfFrame(i, fps, derived.kept), format)
       const frames: FrameSet = { screen: screenHold.source(), camera: cameraHold.source(), matte: matteHold.source() }
       renderFrame(c.ctx, scene, frames, c.cache)
+      // Dissolve de emenda (F1): o último quadro do trecho anterior se desfaz sobre o novo (só quando o cortado tem ≥ 1 s e a tela mudou)
+      if (snap) {
+        if (scene.dissolve > 0 && snapReady) drawDissolve(c.ctx, snap.canvas, scene.dissolve)
+        if (snapFrames.has(i)) {
+          snap.ctx.drawImage(c.canvas, 0, 0)
+          snapReady = true
+        }
+      }
       spent.draw += performance.now() - t0
       t0 = performance.now()
       try {
