@@ -310,11 +310,17 @@ export function shapeZoomWindows<T extends ZoomWindow>(wins: readonly T[], shapi
  * Os problemas de uma lista de zooms contra a fala (para teste e diagnóstico): começo ou fim no meio de uma palavra, e em
  * trecho cortado. Lista vazia = tudo alinhado.
  */
-export function zoomBoundaryProblems(zooms: readonly { id: string; start: number; end: number }[], words: readonly Word[] | null | undefined, kept?: readonly Range[] | null): string[] {
+export function zoomBoundaryProblems(
+  zooms: readonly { id: string; start: number; end: number }[],
+  words: readonly Word[] | null | undefined,
+  kept?: readonly Range[] | null,
+  durationMs: number = Number.POSITIVE_INFINITY
+): string[] {
   const problems: string[] = []
   for (const z of zooms) {
     if (insideWord(words, z.start)) problems.push(`${z.id}: começa no meio de uma palavra (${Math.round(z.start)} ms)`)
-    if (insideWord(words, z.end)) problems.push(`${z.id}: termina no meio de uma palavra (${Math.round(z.end)} ms)`)
+    // o zoom que vai até o último quadro do vídeo termina onde o vídeo termina (a última palavra pode passar do fim do arquivo)
+    if (z.end < durationMs && insideWord(words, z.end)) problems.push(`${z.id}: termina no meio de uma palavra (${Math.round(z.end)} ms)`)
     if (kept && kept.length > 0) {
       if (!startKept(kept, z.start)) problems.push(`${z.id}: começa dentro de um corte (${Math.round(z.start)} ms)`)
       if (!endKept(kept, z.end)) problems.push(`${z.id}: termina dentro de um corte (${Math.round(z.end)} ms)`)

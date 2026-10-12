@@ -148,7 +148,7 @@ describe('começo e fim do zoom em limites da fala: nunca no meio de uma palavra
       const clicks = Array.from({ length: 14 }, () => click(2000 + Math.floor(r() * (DURATION - 8000))))
       const zooms = horizontal(clicks, { words })
       total += zooms.length
-      expect(zoomBoundaryProblems(zooms, words), `semente ${seed}`).toEqual([])
+      expect(zoomBoundaryProblems(zooms, words, null, DURATION), `semente ${seed}`).toEqual([])
     }
     expect(total).toBeGreaterThan(40)
   })
@@ -163,7 +163,7 @@ describe('começo e fim do zoom em limites da fala: nunca no meio de uma palavra
       const clicks = Array.from({ length: 14 }, () => click(2000 + Math.floor(r() * (DURATION - 8000))))
       const zooms = horizontal(clicks, { words, kept })
       total += zooms.length
-      expect(zoomBoundaryProblems(zooms, words, kept), `semente ${seed}`).toEqual([])
+      expect(zoomBoundaryProblems(zooms, words, kept, DURATION), `semente ${seed}`).toEqual([])
       const seams = planSeams(kept)
       for (const z of zooms) {
         const straddle = seams.filter((s) => s.leftEnd > z.start && s.leftEnd < z.start + ZOOM_RAMP_MS)
@@ -171,6 +171,31 @@ describe('começo e fim do zoom em limites da fala: nunca no meio de uma palavra
       }
     }
     expect(total).toBeGreaterThan(40)
+  })
+})
+
+describe('limites com tempo de palavra fracionado e o fim do vídeo', () => {
+  it('os tempos do transcritor vêm com casas decimais: o arredondamento do zoom vai PARA FORA e nunca empurra o limite para dentro da palavra', () => {
+    for (let seed = 1; seed <= 25; seed++) {
+      const { words } = speech(seed, DURATION)
+      const frac = words.map((w, k) => ({ ...w, start: w.start + 0.37 + (k % 3) * 0.2, end: w.end + 0.61 }))
+      const r = rng(seed * 5)
+      const clicks = Array.from({ length: 14 }, () => click(2000 + Math.floor(r() * (DURATION - 8000))))
+      expect(zoomBoundaryProblems(horizontal(clicks, { words: frac }), frac, null, DURATION), `semente ${seed}`).toEqual([])
+    }
+  })
+
+  it('o zoom que vai até o último quadro termina onde o vídeo termina, mesmo que a última palavra passe do arquivo', () => {
+    const words: Word[] = [
+      { i: 0, text: 'vamos', start: 9000, end: 9400, prob: 1, kind: 'word' },
+      { i: 1, text: 'clicar', start: 9500, end: 10_000, prob: 1, kind: 'word' },
+      { i: 2, text: 'aqui', start: 14_200, end: 15_050, prob: 1, kind: 'word' } // acaba 50 ms depois do arquivo
+    ]
+    const z = generateAutoZooms({ clicks: [click(10_000)], keys: [], cursor: still(15_000), duration: 15_000, preset: 'moderate', words })
+    expect(z).toHaveLength(1)
+    expect(z[0]!.end).toBe(15_000)
+    expect(zoomBoundaryProblems(z, words, null, 15_000)).toEqual([])
+    expect(zoomBoundaryProblems(z, words)).toHaveLength(1) // sem a duração, o fim cai dentro de "aqui"
   })
 })
 
