@@ -19,7 +19,7 @@ import type { RecordRequest } from '@shared/recording'
 
 const tmp = useTmpDir('tomada-m5-settings-')
 describe('ajustes completos persistidos', () => {
-  it('dicionário ausente usa o especificação, e uma lista vazia escolhida continua vazia ao reabrir', async () => {
+  it('dicionário ausente usa o padrão, e uma lista vazia escolhida continua vazia ao reabrir', async () => {
     const file = join(tmp(), 'settings.json')
     const state = await createAppState({ file, env: {}, logger: createMemoryLogger() })
     expect(state.dictionary()).toEqual(DEFAULT_DICTIONARY)

@@ -44,7 +44,7 @@ describe('trocas contextuais reversíveis', () => {
   })
 
   it('junta o nome de produto dividido pelo motor na legenda e no texto, com duração e desfazer intactos', () => {
-    const words: Word[] = [{ ...word, i: 1, text: 'Jus', start: 100, end: 400 }, { ...word, i: 2, text: 'pronto.', start: 400, end: 900 }]
+    const words: Word[] = [{ ...word, i: 1, text: 'Agen', start: 100, end: 400 }, { ...word, i: 2, text: 'daí.', start: 400, end: 900 }]
     const doc = createProject({ title: 'Teste' })
     doc.captions.enabled = true
     const next = applyDictionaryCorrections(doc, words, [{ i: 1, last: 2, before: 'Agen daí.', term: 'Agendaí', confidence: .99, context: 'product' }], ['Agendaí'])
@@ -58,14 +58,14 @@ describe('trocas contextuais reversíveis', () => {
   })
 
   it('uma palavra editada à mão dentro de um nome composto deixa de ser ocultada pela troca automática', () => {
-    const words: Word[] = [{ ...word, i: 1, text: 'Jus', start: 100, end: 400 }, { ...word, i: 2, text: 'pronto.', start: 400, end: 900 }]
+    const words: Word[] = [{ ...word, i: 1, text: 'Agen', start: 100, end: 400 }, { ...word, i: 2, text: 'daí.', start: 400, end: 900 }]
     const next = applyDictionaryCorrections(createProject({ title: 'Teste' }), words, [{ i: 1, last: 2, before: 'Agen daí.', term: 'Agendaí', confidence: .99, context: 'product' }], ['Agendaí'])
     next.wordFixes!['2'] = 'palavra revisada'
     expect(correctedTranscriptWords(words, next.wordFixes, next.review?.dictionaryCorrections).map((w) => w.text)).toEqual(['Agendaí.', 'palavra revisada'])
   })
 
   it('uma ocorrência editada manualmente conserva o agrupamento e a legenda mesmo ao desfazer o automático', () => {
-    const words: Word[] = [{ ...word, i: 1, text: 'Jus', start: 100, end: 400 }, { ...word, i: 2, text: 'pronto.', start: 400, end: 900 }]
+    const words: Word[] = [{ ...word, i: 1, text: 'Agen', start: 100, end: 400 }, { ...word, i: 2, text: 'daí.', start: 400, end: 900 }]
     const next = applyDictionaryCorrections(createProject({ title: 'Teste' }), words, [{ i: 1, last: 2, before: 'Agen daí.', term: 'Agendaí', confidence: .99, context: 'product' }], ['Agendaí'])
     next.captions.enabled = true
     next.wordFixes!['1'] = 'Agendaí Pro.'
@@ -81,21 +81,21 @@ describe('trocas contextuais reversíveis', () => {
     const internalEdit = markManualDictionarySpan(undone, 2)
     expect(internalEdit.review?.dictionaryCorrections?.[0]?.manualSpan).toBe(false)
     expect(correctedTranscriptWords(words, internalEdit.wordFixes, internalEdit.review?.dictionaryCorrections).map((w) => w.text)).toEqual(['Agendaí Pro.', 'original revisado'])
-    expect(words.map((w) => w.text)).toEqual(['Jus', 'pronto.'])
+    expect(words.map((w) => w.text)).toEqual(['Agen', 'daí.'])
   })
 
   it('editar só a primeira palavra depois de desfazer o automático conserva a segunda palavra original', () => {
-    const words: Word[] = [{ ...word, i: 1, text: 'Jus', start: 100, end: 400 }, { ...word, i: 2, text: 'pronto.', start: 400, end: 900 }]
+    const words: Word[] = [{ ...word, i: 1, text: 'Agen', start: 100, end: 400 }, { ...word, i: 2, text: 'daí.', start: 400, end: 900 }]
     const doc = applyDictionaryCorrections(createProject({ title: 'Teste' }), words, [{ i: 1, last: 2, before: 'Agen daí.', term: 'Agendaí', confidence: .99, context: 'product' }], ['Agendaí'])
     const undone = undoDictionaryCorrection(doc, 1)
     undone.wordFixes!['1'] = 'Palavra manual'
     const next = markManualDictionarySpan(undone, 1)
-    expect(correctedTranscriptWords(words, next.wordFixes, next.review?.dictionaryCorrections).map((w) => w.text)).toEqual(['Palavra manual', 'pronto.'])
-    expect(captionWords(words, captionSourceOf(next, 1000)).map((w) => w.text)).toEqual(['Palavra manual', 'pronto.'])
+    expect(correctedTranscriptWords(words, next.wordFixes, next.review?.dictionaryCorrections).map((w) => w.text)).toEqual(['Palavra manual', 'daí.'])
+    expect(captionWords(words, captionSourceOf(next, 1000)).map((w) => w.text)).toEqual(['Palavra manual', 'daí.'])
   })
 
   it.each(['Agendaí Pro.', 'Agendaí.'])('o agrupamento manual %s por item persiste e sobrevive ao desfazer comum sem reativar a troca nos demais itens', (manualText) => {
-    const words: Word[] = [{ ...word, i: 1, text: 'Jus', start: 100, end: 400 }, { ...word, i: 2, text: 'pronto.', start: 400, end: 900 }]
+    const words: Word[] = [{ ...word, i: 1, text: 'Agen', start: 100, end: 400 }, { ...word, i: 2, text: 'daí.', start: 400, end: 900 }]
     const doc = applyDictionaryCorrections(createProject({ title: 'Teste' }), words, [{ i: 1, last: 2, before: 'Agen daí.', term: 'Agendaí', confidence: .99, context: 'product' }], ['Agendaí'])
     doc.captions.enabled = true
     const saved = parseProject(JSON.stringify({ ...doc, review: { ...doc.review, items: { youtube: { origin: 'manual', decision: 'pending', edits: { cuts: [], zooms: [], layouts: [], captions: doc.captions, style: doc.style, wordFixes: { '1': manualText }, dictionaryCorrections: doc.review?.dictionaryCorrections?.map((c) => ({ ...c, manualSpan: true })) } } } } }))
