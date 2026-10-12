@@ -53,6 +53,8 @@ export function Review({ id }: { id: string }) {
   const youtubeView = reviewDocument(doc,'youtube')
   const automatic = youtubeView.cuts.filter((c) => c.reason !== 'manual' && c.origin !== 'manual')
   const categories: CutReason[] = ['silence','filler','retake']
+  // a etapa dos layouts mediu a letra da página no 9:16; o aviso (abaixo de 22 px) sai do detalhe fechado e fica à vista
+  const legibilityWarning = doc.autopilot?.steps.find((step) => step.id === 'layouts')?.detail?.match(/Atenção: no 9:16 a letra[^]*/)?.[0]
   return <div className="review" data-testid="review-view" data-status={running ? 'running' : 'done'}>
     <header className="review-head">
       <div><button className="btn btn-ghost" onClick={() => go({name:'library'})}>{t.nav.library}</button><p className="review-eyebrow">{T.review}</p><h1>{doc.title}</h1><p className="text-muted" role="status">{running ? T.running : doc.autopilot?.steps.some((s) => s.status === 'error') ? T.hasErrors : T.ready}</p>{doc.autopilot?.notice ? <p className="text-muted" role="alert" data-testid="pilot-notice">{doc.autopilot.notice}</p> : null}{doc.cameraCapture?.warning ? <p className="text-muted" role="alert" data-testid="camera-capture-warning">{doc.cameraCapture.warning}</p> : null}</div>
@@ -60,6 +62,7 @@ export function Review({ id }: { id: string }) {
     </header>
     <AudioQualityNotice report={doc.audioQuality} pcmSyncWarning={doc.pcmSyncWarning} />
     {error ? <p role="alert">{error}</p> : null}
+    {legibilityWarning ? <p role="alert" className="text-warn text-xs" data-testid="review-legibility-warning">{legibilityWarning}</p> : null}
     <div className="review-layout">
       <aside className="review-summary" aria-label={T.summary}>
         <h2>{T.summary}</h2>
@@ -131,7 +134,7 @@ function ReviewCard({ id,itemId,doc,transcript,change,action }: { id:string; ite
     await change(itemId,{title:p.title,hook:p.vertical?.hook ?? item.hook,edits:{cuts:p.cuts,zooms:p.zooms,layouts:p.layouts,captions:p.captions,style:p.style,wordFixes:p.wordFixes ?? {},dictionaryCorrections:p.review?.dictionaryCorrections,mutes:p.mutes ?? [],meta:p.meta ?? {},zoomPreset:p.zoomPreset,autoExclusions:p.autoExclusions}})
     setPlan(null); setInstruction('')
   }
-  const layoutOptions: LayoutKind[] = clip ? ['screen-center','screen-focus','stack','screen-wide','presenter','camera'] : ['bubble','side-by-side','presenter','screen','camera']
+  const layoutOptions: LayoutKind[] = clip ? ['greenscreen','greenscreen-corner','screen-center','screen-focus','stack','screen-wide','presenter','camera'] : ['bubble','side-by-side','presenter','screen','camera']
   return <article className={['review-card',clip ? 'review-vertical' : 'review-horizontal'].join(' ')} data-testid={`review-item-${itemId}`} data-phase={item.phase ?? 'empty'} data-decision={item.decision}>
     <div className="review-card-heading"><span>{clip ? T.vertical : T.youtube}</span><span>{clip ? T.note(clip.score) : formatDuration(outputMs)}</span></div>
     <div className="review-player">{item.exportPath ? <video ref={video} controls preload="metadata" src={window.tomada.mediaUrl(id,item.exportPath)} data-testid={`review-${itemId}-player`} /> : <div className="review-player-empty">{item.phase === 'exporting' || item.phase === 'queued' ? T.exporting : T.noExport}</div>}</div>

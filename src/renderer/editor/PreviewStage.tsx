@@ -21,6 +21,7 @@ import { useApp } from '../store'
 import { CropEditor } from './CropEditor'
 import { useDoc, useEditor, usePlayback } from './context'
 import { BlurOverlay } from './BlurOverlay'
+import { LayoutQuickBar } from './LayoutQuickBar'
 
 /** `camera`: a bolha anda pela grade; `frame`: arrasta a IMAGEM dentro do quadro da câmera (o enquadramento). */
 type DragMode = { mode: 'camera' } | { mode: 'frame'; startX: number; startY: number; framing: CameraFraming | undefined; dest: { w: number; h: number }; crop: { w: number; h: number }; mirror: boolean }
@@ -66,7 +67,7 @@ function SafeGuide() {
 }
 
 export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefObject<HTMLCanvasElement | null>; hostRef: RefObject<HTMLDivElement | null>; frameRef: RefObject<HTMLDivElement | null> }) {
-  const { store, engineRef, detail, clips, rawData, durationMs } = useEditor()
+  const { store, engineRef, detail, clips, rawData, durationMs, hasCamera } = useEditor()
   const screenCrop = useDoc((s) => s.doc.screenCrop)
   const cropEditing = useDoc((s) => s.cropUi.editing)
   const revealProject = useApp((s) => s.revealProject)
@@ -176,7 +177,7 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
   }
 
   return (
-    <div className="ed-view" data-testid="preview-view" data-clip-preview={previewTitle !== undefined ? 'true' : undefined}>
+    <div className="ed-view" data-testid="preview-view" data-dock={hasCamera ? 'camera' : 'bar'} data-clip-preview={previewTitle !== undefined ? 'true' : undefined}>
       {cropEditing && screenCrop?.mode === 'manual' && screenCrop.manual ? (
         <CropEditor
           rect={screenCrop.manual}
@@ -238,6 +239,7 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
           </div>
         ) : null}
       </div>
+      <LayoutQuickBar />
     </div>
   )
 }

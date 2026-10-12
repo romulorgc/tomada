@@ -19,7 +19,9 @@ import { buildCaptionTrack, captionAt, pageAlpha, popScale, PAGE_FADE_MS, type C
 import { resolveCaptionStyle, resolveHookStyle, type CaptionRenderStyle, type HookRenderStyle } from './caption-style'
 import { cropSignature, pointToCrop, rectFromCrop, resolveScreenCrop, type CropTimeline } from './crop'
 import { projectDurationMs } from './project'
-import { BUBBLE_TARGET, PRESENTER_TARGET, buildFaceFramer, cameraCropRect, faceAimAt, lerpTarget, type FaceFramer, type FaceTrack } from './face'
+import { BUBBLE_TARGET, PRESENTER_TARGET, buildFaceFramer, cameraCropRect, faceAimAt, lerpTarget, type CropTarget, type FaceFramer, type FaceTrack } from './face'
+import { cornerAt, greenscreenTarget, greenscreenWindow, isGreenscreen, personFit, planGreenCorner, typicalAim, type CornerPlan, type GreenscreenKind, type PersonFit } from './greenscreen'
+import { LEGIBLE_PROFILES, bodyTextPx, legibilityIssues, legiblePath, legibleStateAt, legibleZoom, planLegibleWindow, textPxOnFrame, type LegibilityIssue, type LegiblePlan } from './legible'
 import {
   cameraBoxAspect,
   cameraRadius,
@@ -33,14 +35,14 @@ import {
 } from './styles'
 import { DISSOLVE_SCREEN_CHANGE_MIN, contentDifference, dissolveFlags, dissolveWeight, punchCrop, punchScales } from './punch-in'
 import { keptIndexOf, planSeams, type Seam } from './seams'
-import { keptRanges, outputDuration, sourceToOutput } from './timeline'
-import type { Background, ClickEvent, ContentRectSample, CursorSample, KeyEvent, LayoutKind, Point, Project, Range, Rect, Size, Style, Word } from './types'
+import { keptRanges, outputDuration, outputToSource, sourceToOutput } from './timeline'
+import type { Background, CaptionStyle, ClickEvent, ContentRectSample, CursorSample, KeyEvent, LayoutKind, Point, Project, Range, Rect, Size, Style, Word } from './types'
 import { GRID_HZ } from './cursor'
-import { CENTER_BOX, CENTER_ZOOM_MAX, HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, hookPlacement, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
+import { CENTER_BOX, HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, hookPlacement, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
 import { ZOOM_SCALE_SPRING } from './spring'
 import { computeCameraPath, sampleCameraPath, visibleRect, type CameraPath } from './zoom'
 import { fitRect } from './geometry'
-import { FOCUS_SPRING, actionFocusAt, buildActionFocus } from './action-focus'
+import { focusPoints } from './action-focus'
 import { createContentTrack, type ContentMap } from './content-map'
 import { activeBlurRegions } from './blur'
 import type { BlurRegion } from './types'
@@ -204,6 +206,14 @@ export type Derived = {
   screenSize: Size | null
   cameraSize: Size | null
   layoutPoints: LayoutPoint[]
+  /** O 9:16 legível (F2): por layout que usa a janela legível, o zoom escolhido pela letra, o plano de movimentos e a letra prevista (px do quadro). */
+  legible: Record<string, { zoom: number; targetPx: number; plan: LegiblePlan; destW: number; viewW: number }>
+  /** Altura da letra do corpo na tela gravada (px), medida ou estimada, e a largura da área-base (px): para a letra prevista em qualquer layout. */
+  body: { textSrcPx: number; baseW: number; measured: boolean }
+  /** Onde a pessoa fica no V-E "no canto" (R4); `null` quando nenhum trecho usa esse layout. */
+  cornerPlan: CornerPlan | null
+  /** Onde a pessoa cai na janela da câmera de cada V-E (mede o rosto típico): a altura da janela sai disso. Só no vertical, com câmera. */
+  fits: Partial<Record<GreenscreenKind, PersonFit>>
 }
 
 /** A barra da moldura de navegador, em fração da altura da página (C1). */
@@ -255,7 +265,12 @@ export function layoutAt(points: readonly LayoutPoint[], t: number): { layout: L
 export function usesPresenter(project: Pick<Project, 'layouts' | 'style' | 'sources'>, kind: FormatSpec['kind']): boolean {
   const hasScreen = sizeOf(project.sources.screen) !== null
   const hasCamera = !project.style.camera.hidden && sizeOf(project.sources.camera) !== null
-  return hasCamera && buildLayoutPoints(project).some((pt) => resolveLayout(pt.layout, hasScreen, hasCamera, kind) === 'presenter')
+  return hasCamera && buildLayoutPoints(project).some((pt) => isCutoutLayout(resolveLayout(pt.layout, hasScreen, hasCamera, kind)))
+}
+
+/** O layout desenha você recortado do fundo (precisa de `media/camera-matte.mp4`)? O apresentador do 16:9, o V-D e o V-E. */
+export function isCutoutLayout(layout: LayoutKind): boolean {
+  return layout === 'presenter' || isGreenscreen(layout)
 }
 
 const TRIVIAL_PATH: CameraPath = { hz: GRID_HZ, t: [0], scale: [1], cx: [0.5], cy: [0.5], maxScale: 1 }
@@ -287,38 +302,80 @@ export function deriveProject(project: Project, rawData: CursorData, format: For
   // Um caminho de câmera por RECORTE: no 16:9 o recorte é sempre a fonte toda (um caminho só); no vertical cada layout
   // (V-A, V-B, V-C) enxerga uma fatia diferente da tela e dá aos zooms uma força diferente.
   const paths: Derived['paths'] = {}
+  const legible: Derived['legible'] = {}
   const hasScreen = screenSize !== null
   const hasCamera = cameraSize !== null
   const mainKey = resolveLayout(project.style.defaultLayout, hasScreen, hasCamera, format.kind)
+  // A letra do corpo na tela gravada (estimada ou medida): o zoom dos layouts verticais com janela é calculado por ela (F2)
+  const textSrcPx = bodyTextPx(full, project.screenTextPx)
+  const faceFramer = cameraSize ? buildFaceFramer(face, project.sync.cameraOffsetMs, durationMs) : null
+  const fits: Derived['fits'] = {}
+  if (format.kind === 'vertical' && cameraSize) {
+    const aim = typicalAim(faceFramer)
+    for (const kind of ['greenscreen', 'greenscreen-corner'] as const) fits[kind] = personFit(kind, project.style.presenter, format, cameraSize, aim, project.style.camera.framing)
+  }
+  const layoutKeys = new Set<string>()
   if (format.kind === 'horizontal') {
     const view = { w: 1, h: 1 }
     paths.main = { view, path: computeCameraPath(project, data.grid, { durationMs, view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.horizontal }) }
   } else {
-    const keys = new Set<string>([mainKey])
-    for (const pt of layoutPoints) keys.add(resolveLayout(pt.layout, hasScreen, hasCamera, format.kind))
-    for (const key of keys) {
+    layoutKeys.add(mainKey)
+    for (const pt of layoutPoints) layoutKeys.add(resolveLayout(pt.layout, hasScreen, hasCamera, format.kind))
+    for (const key of layoutKeys) {
       const f = layoutFollow(key as LayoutKind, format, baseSize, project.style.presenter)
       if (key === 'camera' || !hasScreen || f.gain === 0) {
         paths[key] = { view: f.view, path: TRIVIAL_PATH }
         continue
       }
-      // A janela quadrada (Tela ao centro, metade de tela do V-B, faixa do V-D) enquadra a AÇÃO em vez de seguir o cursor e nunca amplia
-      // além de 1:1: a janela mostra `source` px da página num quadrado de `dest` px, e um zoom z amplia z·dest/source.
-      const square = key === 'screen-center' || key === 'stack' || key === 'presenter'
-      let max = Infinity
-      let focus: Pick<Parameters<typeof computeCameraPath>[2], 'focusAt' | 'spring'> = {}
-      if (square && baseSize) {
+      // A janela legível (Tela ao centro, V-B, V-D e V-E): o zoom vem da LETRA (28-32 px no quadro final), não da geometria, e a janela
+      // segue o foco em movimentos de ~0,9 s separados por pelo menos ~4 s de página parada (`legible.ts`).
+      const profile = LEGIBLE_PROFILES[key as LayoutKind]
+      if (profile && baseSize) {
         const dest = layoutGeometry(key as LayoutKind, project.style, format, { screen: baseSize, camera: cameraSize }).screen
-        const source = f.view.h * baseSize.h
-        const oneToOne = dest && source > 0 ? Math.max(1, source / Math.min(dest.w, dest.h)) : 1
-        max = Math.min(CENTER_ZOOM_MAX, oneToOne)
-        const steps = buildActionFocus({ clicks: data.clicks, keys: data.keys, cursor: data.grid, view: f.view, content: createContentTrack(data.contentMap, crop) })
-        // sem nenhuma ação (só passeio do cursor) a janela segue o cursor, como o V-A
-        if (steps) focus = { focusAt: (t) => actionFocusAt(steps, t), spring: FOCUS_SPRING }
+        const destW = dest ? dest.w : format.w
+        const zoom = legibleZoom({ textSrcPx, destW, baseW: baseSize.w, view: f.view, minZoom: profile.minZoom })
+        const input = {
+          durationMs,
+          endMs: kept.length > 0 ? kept[kept.length - 1]!.end : durationMs,
+          view: f.view,
+          zoom,
+          overviewZoom: 1,
+          profile,
+          clicks: data.clicks,
+          keys: data.keys,
+          cursor: data.grid,
+          content: createContentTrack(data.contentMap, crop),
+          contentMap: data.contentMap,
+          toOutput: (t: number) => sourceToOutput(t, kept),
+          fromOutput: (o: number) => outputToSource(o, kept)
+        }
+        const plan = planLegibleWindow(input)
+        paths[key] = { view: f.view, path: legiblePath(plan, input) }
+        legible[key] = { zoom, targetPx: textSrcPx * destW / (f.view.w * baseSize.w / zoom), plan, destW, viewW: f.view.w }
+        continue
       }
-      const zooms = project.zooms.map((z) => ({ ...z, scale: Math.min(max, 1 + (z.scale - 1) * f.gain) }))
-      paths[key] = { view: f.view, path: computeCameraPath({ zooms }, data.grid, { durationMs, view: f.view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.vertical, ...focus }) }
+      // V-A (segue o cursor) e os demais: o zoom dos segmentos do documento
+      const zooms = project.zooms.map((z) => ({ ...z, scale: 1 + (z.scale - 1) * f.gain }))
+      paths[key] = { view: f.view, path: computeCameraPath({ zooms }, data.grid, { durationMs, view: f.view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.vertical }) }
     }
+  }
+  // V-E no canto (R4): o lado da pessoa é o oposto ao foco da página, trocando no máximo a cada 4 s
+  let cornerPlan: CornerPlan | null = null
+  const cornerLegible = legible['greenscreen-corner']
+  if (cornerLegible && cameraSize) {
+    const strong = focusPoints({ clicks: data.clicks, keys: data.keys, cursor: data.grid })
+    cornerPlan = planGreenCorner({
+      durationMs,
+      kept,
+      seams,
+      clicks: strong,
+      cursor: data.grid,
+      windowAt: (t) => {
+        const s = legibleStateAt(cornerLegible.plan, t)
+        return { cx: s.cx, w: cornerLegible.viewW / s.zoom }
+      },
+      toOutput: (t) => sourceToOutput(t, kept)
+    })
   }
   const main = paths.main ?? paths[mainKey] ?? Object.values(paths)[0] ?? { view: { w: 1, h: 1 }, path: TRIVIAL_PATH }
   const view = main.view
@@ -344,11 +401,15 @@ export function deriveProject(project: Project, rawData: CursorData, format: For
     synthetic,
     view,
     captions: buildCaptionTrack(words, project, durationMs, format.kind === 'vertical' ? { text: project.vertical?.hook ?? '', untilMs: HOOK_MS } : undefined),
-    face: cameraSize ? buildFaceFramer(face, project.sync.cameraOffsetMs, durationMs) : null,
+    face: faceFramer,
     needsMatte: usesPresenter(project, format.kind),
     screenSize,
     cameraSize,
-    layoutPoints
+    layoutPoints,
+    legible,
+    body: { textSrcPx, baseW: baseSize?.w ?? 0, measured: project.screenTextPx !== undefined },
+    cornerPlan,
+    fits
   }
 }
 
@@ -369,13 +430,15 @@ export function resolveLayout(layout: LayoutKind, hasScreen: boolean, hasCamera:
   let l = layout
   if (kind === 'horizontal') {
     if (l === 'stack') l = 'side-by-side'
+    // o V-E é do vertical: no 16:9 o equivalente é o apresentador recortado
+    if (isGreenscreen(l)) l = 'presenter'
     if (l === 'screen-focus' || l === 'screen-center' || l === 'screen-wide') l = 'bubble'
-  } else if (l !== 'camera' && l !== 'stack' && l !== 'screen-wide' && l !== 'screen-center' && l !== 'presenter') {
+  } else if (l !== 'camera' && l !== 'stack' && l !== 'screen-wide' && l !== 'screen-center' && l !== 'presenter' && !isGreenscreen(l)) {
     l = 'screen-focus'
   }
   if (!hasCamera) {
-    // sem câmera: no vertical sobram o recorte que segue o cursor e a tela na largura; no 16:9, só a tela
-    if (kind === 'vertical') return l === 'screen-wide' || l === 'screen-center' ? l : 'screen-focus'
+    // sem câmera: no vertical sobram o recorte que segue o cursor, a tela na largura e o V-E (só a página legível); no 16:9, só a tela
+    if (kind === 'vertical') return l === 'screen-wide' || l === 'screen-center' || isGreenscreen(l) ? l : 'screen-focus'
     if (l === 'bubble' || l === 'side-by-side' || l === 'camera' || l === 'presenter') return 'screen'
   }
   return l
@@ -391,8 +454,9 @@ export function layoutGeometry(
   layout: LayoutKind,
   style: Style,
   format: FormatSpec,
-  sources: { screen: Size | null; camera: Size | null },
-  zoomProgress = 0
+  sources: { screen: Size | null; camera: Size | null; fits?: Derived['fits'] },
+  zoomProgress = 0,
+  cornerT = 1
 ): LayoutGeometry {
   const L = resolveLayout(layout, Boolean(sources.screen), Boolean(sources.camera), format.kind)
   const { w: W, h: H } = format
@@ -443,6 +507,11 @@ export function layoutGeometry(
   }
 
   if (!sources.screen) return { screen: null, camera: null }
+
+  if (isGreenscreen(L)) {
+    // V-E "Green screen": a página em tela cheia atrás e você recortado ancorado embaixo (centrado, ou num canto oposto ao foco)
+    return { screen: snap(full), camera: sources.camera ? { rect: snap(greenscreenWindow(L, style.presenter, format, cornerT, sources.fits?.[L])), radius: 0 } : null }
+  }
 
   if (L === 'screen') return { screen: snap(fitRect(sources.screen, inner)), camera: null }
 
@@ -581,6 +650,8 @@ export type SceneCutout = {
   outline: number
   /** Sombra da silhueta (blur em px do quadro) ou `null`. */
   shadow: ShadowSpec | null
+  /** Esmaecimento (px do quadro) nas bordas esquerda e direita da janela que ficam DENTRO do quadro: o recorte do canto não termina numa reta no meio do corpo. */
+  feather?: { l: number; r: number }
 }
 
 export type SceneCamera = {
@@ -680,6 +751,19 @@ function blendElement<T extends { rect: Rect; radius: number }>(
   return null
 }
 
+/** A largura do esmaecimento (fração da janela) nas bordas da janela do V-E que ficam dentro do quadro. */
+export const CUTOUT_FEATHER = 0.16
+function cutoutFeather(win: Rect, format: FormatSpec): { l: number; r: number } {
+  const w = win.w * CUTOUT_FEATHER
+  return { l: win.x > 2 ? w : 0, r: win.x + win.w < format.w - 2 ? w : 0 }
+}
+
+/** Onde o rosto cai no recorte da câmera em cada layout: a bolha, o apresentador (V-D e 16:9) ou o V-E. */
+function cropTargetOf(key: LayoutKind): CropTarget {
+  if (key === 'presenter') return PRESENTER_TARGET
+  return isGreenscreen(key) ? greenscreenTarget(key) : BUBBLE_TARGET
+}
+
 /** O raio dos cantos do cartão da tela: no 16:9, o do estilo; no vertical, só a tela na largura (V-C) é um cartão. */
 function screenRadius(layout: LayoutKind, style: Style, unit: number, kind: FormatSpec['kind'], hasScreen: boolean, hasCamera: boolean): number {
   if (kind === 'horizontal') return style.radius * unit
@@ -690,7 +774,40 @@ function screenRadius(layout: LayoutKind, style: Style, unit: number, kind: Form
 function sourceRectOf(derived: Derived, key: string, t: number): { src: Rect; scale: number } {
   const entry = derived.paths[key] ?? derived.paths.main ?? { view: derived.view, path: derived.cameraPath }
   const sample = sampleCameraPath(entry.path, t)
-  return { src: visibleRect(sample, entry.view), scale: sample.scale }
+  let src = visibleRect(sample, entry.view)
+  // Janela legível: a letra (px) não pode depender do tamanho que a área-base tem naquele instante. Com o recorte automático da tela, uma
+  // janela passageira (a lista suspensa da barra de endereço, um menu) encolhe a área-base por um segundo ou dois e, sem isto, a mesma janela
+  // (uma fração da área-base) dobrava a ampliação e a letra saltava de 30 para 60 px. Aqui a janela mantém o tamanho em px da fonte.
+  if (derived.legible[key] && derived.crop && !derived.crop.constant) {
+    const base = derived.crop.at(t)
+    const k = derived.crop.ref.w / base.w
+    if (k > BASE_SHRINK_MIN) src = growInScreen(src, k, base)
+  }
+  return { src, scale: sample.scale }
+}
+
+/** A legenda sem a posição escolhida à mão (volta à posição do layout). */
+function withoutPositionY(cs: CaptionStyle): CaptionStyle {
+  const { positionY: _drop, ...rest } = cs
+  void _drop
+  return rest
+}
+
+/** A área-base só conta como encolhida (e a janela legível se corrige) acima desta razão entre a referência e a de agora. */
+const BASE_SHRINK_MIN = 1.03
+
+/**
+ * A janela `r` (no espaço da área-base `base`) ampliada `k` vezes ao redor do centro, com a mesma proporção. Pode passar das bordas da
+ * área-base (a lista suspensa é só um pedaço da tela e a janela mostra o que há em volta), mas nunca da tela gravada: é empurrada para
+ * dentro dela e limitada ao tamanho dela.
+ */
+function growInScreen(r: Rect, k: number, base: Rect): Rect {
+  const s = Math.min(k, 1 / (r.w * base.w), 1 / (r.h * base.h))
+  const w = r.w * s
+  const h = r.h * s
+  const x = Math.min(Math.max(r.x + r.w / 2 - w / 2, -base.x / base.w), (1 - base.x - w * base.w) / base.w)
+  const y = Math.min(Math.max(r.y + r.h / 2 - h / 2, -base.y / base.h), (1 - base.y - h * base.h) / base.h)
+  return { x, y, w, h }
 }
 
 /**
@@ -702,7 +819,7 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
   const unit = styleUnit(format)
   const kind = format.kind
   const vertical = kind === 'vertical'
-  const sources = { screen: derived.screenSize, camera: derived.cameraSize }
+  const sources = { screen: derived.screenSize, camera: derived.cameraSize, fits: derived.fits }
   const hasScreen = sources.screen !== null
   const hasCamera = sources.camera !== null
 
@@ -714,13 +831,17 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
   const prevKey = resolveLayout(prev, hasScreen, hasCamera, kind)
 
   const cur = sourceRectOf(derived, curKey, sourceT)
-  // "encolher no zoom" desligado: a bolha mantém o tamanho com o zoom aberto
-  const zoomProgress = style.camera.shrinkOnZoom ? smoothstep(clamp01((cur.scale - 1) / 0.5)) : 0
+  // "encolher no zoom" desligado: a bolha mantém o tamanho com o zoom aberto. Nos layouts com janela legível o zoom de base (a letra no
+  // alvo) não conta como zoom aberto: só o que passa dele.
+  const baseZoom = derived.legible[curKey]?.zoom ?? 1
+  const zoomProgress = style.camera.shrinkOnZoom ? smoothstep(clamp01((cur.scale / baseZoom - 1) / 0.5)) : 0
   const sample = sampleCameraPath((derived.paths[curKey] ?? derived.paths.main ?? { path: derived.cameraPath }).path, sourceT)
 
-  const gCur = layoutGeometry(layout, style, format, sources, zoomProgress)
+  // o lado da pessoa no V-E "no canto" (0 = esquerda, 1 = direita; fração durante o deslize)
+  const cornerT = derived.cornerPlan ? cornerAt(derived.cornerPlan, sourceT) : 1
+  const gCur = layoutGeometry(layout, style, format, sources, zoomProgress, cornerT)
   const presenterStyle = resolvePresenter(style.presenter)
-  const gPrev = p < 1 ? layoutGeometry(prev, style, format, sources, zoomProgress) : null
+  const gPrev = p < 1 ? layoutGeometry(prev, style, format, sources, zoomProgress, cornerT) : null
 
   const rCur = screenRadius(layout, style, unit, kind, hasScreen, hasCamera)
   const rPrev = screenRadius(prev, style, unit, kind, hasScreen, hasCamera)
@@ -764,15 +885,20 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
     : null
 
   // quanto do apresentador recortado já está no ar: entra com a troca para o layout `presenter` e sai com a troca para outro
-  const cutWeight = clamp01((curKey === 'presenter' ? e : 0) + (p < 1 && prevKey === 'presenter' && prevKey !== curKey ? 1 - e : 0))
+  const cutWeight = clamp01((isCutoutLayout(curKey) ? e : 0) + (p < 1 && isCutoutLayout(prevKey) && prevKey !== curKey ? 1 - e : 0))
   const cutout: SceneCutout | null =
     cutWeight > 0.002
-      ? { weight: cutWeight, outline: presenterStyle.outline ? presenterStyle.outlineWidth * unit : 0, shadow: presenterStyle.shadow ? presenterShadow(unit) : null }
+      ? {
+          weight: cutWeight,
+          outline: presenterStyle.outline ? presenterStyle.outlineWidth * unit : 0,
+          shadow: presenterStyle.shadow ? presenterShadow(unit) : null,
+          ...(isGreenscreen(curKey) && cameraBox ? { feather: cutoutFeather(cameraBox.rect, format) } : {})
+        }
       : null
 
   // Punch-in alternado (F1): nos layouts em que a câmera/rosto aparece com destaque, os trechos ímpares aproximam o rosto (~1,28×),
   // centrado nele; a troca acontece na emenda, em corte seco. Nos layouts da bolha o rosto é pequeno e a emenda é da tela: não vale.
-  const punchOf = (key: LayoutKind): number => (key === 'side-by-side' || key === 'presenter' || key === 'stack' || key === 'camera' ? 1 : 0)
+  const punchOf = (key: LayoutKind): number => (key === 'side-by-side' || isCutoutLayout(key) || key === 'stack' || key === 'camera' ? 1 : 0)
   const punchWeight = clamp01(punchOf(curKey) * e + (p < 1 && prevKey !== curKey ? punchOf(prevKey) * (1 - e) : 0))
   const keptAt = keptIndexOf(derived.kept, sourceT)
   const punchScale = keptAt >= 0 ? (derived.punch[keptAt] ?? 1) : 1
@@ -791,7 +917,7 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
               cameraBox.rect.w / cameraBox.rect.h,
               faceAim,
               style.camera.framing,
-              cutWeight > 0 ? lerpTarget(BUBBLE_TARGET, PRESENTER_TARGET, cutWeight) : BUBBLE_TARGET
+              p < 1 && prevKey !== curKey ? lerpTarget(cropTargetOf(prevKey), cropTargetOf(curKey), e) : cropTargetOf(curKey)
             ),
             punchNow,
             faceAim
@@ -893,11 +1019,16 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
         // no vertical a posição padrão vem do layout (V-B: a emenda tela/câmera; tela na largura: 71%; senão 70%) e acompanha a
         // troca de layout, para a legenda não dar um salto no meio de uma página
         const captionOf = (key: LayoutKind, place: ReturnType<typeof hookPlacement>): number => {
-          const normal = verticalCaptionY(key, style.presenter)
+          const normal = verticalCaptionY(key, style.presenter, key === curKey ? punchNow : 1, isGreenscreen(key) ? derived.fits[key] : undefined)
           return lerp(normal, place.captionY ?? normal, hookAlpha)
         }
         const autoY = vertical ? lerp(captionOf(prevKey, hookPrev), captionOf(curKey, hookCur), e) : undefined
-        const rs = resolveCaptionStyle(project.captions, format, autoY)
+        // V-E: a posição que a pessoa escolheu na legenda vale enquanto não cobrir quem fala; se ficaria na altura do rosto ou abaixo
+        // do cabelo, a legenda segue o layout (logo acima da cabeça), porque legenda em cima do rosto é o defeito que o layout evita
+        const manualY = project.captions.positionY
+        const coversPerson = autoY !== undefined && manualY !== undefined && Number.isFinite(manualY) && manualY > autoY && (isGreenscreen(curKey) || (p < 1 && isGreenscreen(prevKey)))
+        const captionStyle = coversPerson ? withoutPositionY(project.captions) : project.captions
+        const rs = resolveCaptionStyle(captionStyle, format, autoY)
         captions = {
           key: `${derived.captions.id}:${m.page.id}`,
           style: rs,
@@ -945,4 +1076,35 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
     punchIn: camera ? punchNow : 1,
     debug: { layout, previous: prev, transition: p, zoom: sample }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Legibilidade no 9:16 (F2)
+
+/**
+ * Onde, no 9:16, a letra do corpo da página fica abaixo de `TEXT_MIN_PX` (22 px no quadro de 1080): por trecho e layout, com a menor
+ * letra estimada. Usa o mesmo caminho da câmera da prévia e da exportação (a letra na fonte × a escala daquele instante). Vazio no 16:9
+ * e quando não há página. A Revisão avisa; nada fica calado.
+ */
+export function projectLegibility(project: Project, derived: Derived, minPx?: number): LegibilityIssue[] {
+  if (derived.format.kind !== 'vertical' || !derived.screenSize || derived.body.baseW <= 0) return []
+  const base = derived.screenSize
+  const widths = new Map<string, number | null>()
+  const destWidth = (key: LayoutKind): number | null => {
+    if (!widths.has(key)) widths.set(key, layoutGeometry(key, project.style, derived.format, { screen: base, camera: derived.cameraSize }).screen?.w ?? null)
+    return widths.get(key)!
+  }
+  return legibilityIssues({
+    kept: derived.kept,
+    ...(minPx !== undefined ? { minPx } : {}),
+    textPxAt: (t) => {
+      const key = resolveLayout(layoutAt(derived.layoutPoints, t).layout, true, derived.cameraSize !== null, 'vertical')
+      if (key === 'camera') return null
+      const entry = derived.paths[key]
+      const destW = destWidth(key)
+      if (!entry || !destW) return null
+      const winPx = visibleRect(sampleCameraPath(entry.path, t), entry.view).w * derived.body.baseW
+      return { textPx: textPxOnFrame(derived.body.textSrcPx, destW, winPx), layout: key }
+    }
+  })
 }

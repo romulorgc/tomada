@@ -673,6 +673,26 @@ function drawCutout(ctx: Ctx2D, cache: RenderCache, c: SceneCamera, cut: SceneCu
   const mc = ctxOf(M)
   fillLayer(mc, lw, lh, '#000')
   drawSource(mc, matte, c.src, at, c.mirror)
+  // as bordas da janela que ficam dentro do quadro esmaecem (o corpo não termina numa reta no meio da página)
+  const feather = cut.feather
+  if (feather && (feather.l > 0.5 || feather.r > 0.5)) {
+    mc.globalCompositeOperation = 'multiply'
+    if (feather.l > 0.5) {
+      const g = mc.createLinearGradient(at.x, 0, at.x + feather.l, 0)
+      g.addColorStop(0, '#000')
+      g.addColorStop(1, '#fff')
+      mc.fillStyle = g
+      mc.fillRect(at.x, at.y, feather.l, at.h)
+    }
+    if (feather.r > 0.5) {
+      const g = mc.createLinearGradient(at.x + at.w - feather.r, 0, at.x + at.w, 0)
+      g.addColorStop(0, '#fff')
+      g.addColorStop(1, '#000')
+      mc.fillStyle = g
+      mc.fillRect(at.x + at.w - feather.r, at.y, feather.r, at.h)
+    }
+    mc.globalCompositeOperation = 'source-over'
+  }
   const soft = blurInto(cache, 'cut-soft', M, lw, lh, 2)
   mc.globalCompositeOperation = 'source-over'
   mc.drawImage(soft, 0, 0, lw, lh, 0, 0, lw, lh)

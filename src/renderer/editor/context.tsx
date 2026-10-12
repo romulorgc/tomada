@@ -50,8 +50,8 @@ export type EditorCtx = {
   reloadTranscript(): void
   /** A análise do rosto na câmera (enquadramento): lida de `media/camera-face.json`; `none` = ainda não existe. */
   face: AssetState<FaceTrack>
-  /** O recorte do fundo da câmera (M4c): a URL do vídeo da máscara (`null` = ainda não existe) e se algum trecho do formato aberto o usa. */
-  matte: { url: string | null; needed: boolean }
+  /** O recorte do fundo da câmera (M4c): a URL do vídeo da máscara (`null` = ainda não existe) e se algum trecho do formato aberto o usa; `fallback`: o usuário escolheu um layout com recorte e ele ainda não existe (a prévia mostra o layout sem recorte). */
+  matte: { url: string | null; needed: boolean; fallback: boolean }
   /** Nível do áudio por quadro (para achar silêncio); só é pedido depois que há transcrição. */
   levels: AssetState<Levels>
   /** Estado da aba Texto (seleção, busca, escolhas da limpeza). */

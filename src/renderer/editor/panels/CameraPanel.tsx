@@ -94,6 +94,7 @@ function MatteStatus() {
         <p className="ctl-note" aria-live="polite">
           {job!.state === 'queued' ? P.status.queued : P.status.running(pct)}
         </p>
+        {job!.resumedFrom && job!.resumedFrom > 0 ? <p className="ctl-note">{P.status.resumed}</p> : null}
         <div className="meter" role="progressbar" aria-label={P.status.running(pct)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
           <i style={{ width: `${pct}%` }} />
         </div>
@@ -194,7 +195,7 @@ export function CameraPanel() {
   const side = resolveSideBySide(sideBySide)
   const sideActive = layout === 'side-by-side'
   const presenter = resolvePresenter(presenterStyle)
-  const presenterActive = layout === 'presenter'
+  const presenterActive = layout === 'presenter' || layout === 'greenscreen' || layout === 'greenscreen-corner'
 
   return (
     <div className="panel" data-testid="camera-panel">
@@ -299,7 +300,7 @@ export function CameraPanel() {
               ]}
             />
           ) : null}
-          {vertical ? (
+          {vertical && layout === 'presenter' ? (
             <Slider
               label={P.height}
               value={presenter.heightV}
@@ -311,7 +312,7 @@ export function CameraPanel() {
               format={P.percent}
               onChange={(v) => editPresenter({ heightV: v }, 'presenter-height')}
             />
-          ) : (
+          ) : vertical ? null : (
             <Slider
               label={P.height}
               value={presenter.height}

@@ -19,6 +19,7 @@ import { assertMediaUrl, mediaUrl } from '@shared/media-url'
 import { HORIZONTAL_1080, VERTICAL_1080, applyScreenCrop, deriveProject, prepareEvents, usesPresenter, type CursorData } from '@shared/scene'
 import type { Transcript } from '@shared/types'
 import { projectForFormat, ensureVertical } from '@shared/vertical'
+import { withMatteFallback } from '@shared/matte-fallback'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
 import { AudioQualityNotice } from '../components/AudioQualityNotice'
@@ -346,18 +347,22 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   formatRef.current = format
   const words = transcript.data?.words ?? null
   const faceTrack = face.data
+  // O que o usuário ESCOLHEU (`project`) pode pedir o recorte do fundo; o que a prévia DESENHA só usa o recorte quando ele existe. Enquanto ele não
+  // existe, a prévia mostra o layout que não precisa dele (Câmera + tela no 9:16, lado a lado no 16:9), com o aviso "Recortando você do fundo".
+  const formatKind = format === 'vertical' ? 'vertical' : 'horizontal'
+  const needsMatte = useMemo(() => usesPresenter(project, formatKind), [project, formatKind])
+  const shownProject = useMemo(() => (matteUrl ? project : withMatteFallback(project, formatKind)), [matteUrl, project, formatKind])
   const derived = useMemo(
-    () => (cursorData ? deriveProject(project, cursorData, format === 'vertical' ? VERTICAL_1080 : HORIZONTAL_1080, words, faceTrack) : null),
-    [project, cursorData, format, words, faceTrack]
+    () => (cursorData ? deriveProject(shownProject, cursorData, format === 'vertical' ? VERTICAL_1080 : HORIZONTAL_1080, words, faceTrack) : null),
+    [shownProject, cursorData, format, words, faceTrack]
   )
-
-  const needsMatte = derived?.needsMatte ?? false
 
   // A prévia de um corte: o MESMO documento que a exportação desenha (os trechos do corte, o gancho dele, o layout e a legenda
   // dele), sempre no 9:16. A linha do tempo segue mostrando o vídeo inteiro.
   const previewId = useStore(clips, (s) => s.previewId)
   const previewClip = useMemo(() => (previewId ? doc.clips.find((c) => c.id === previewId) : undefined), [previewId, doc.clips])
-  const sceneProject = useMemo(() => (previewClip ? clipScene(doc, previewClip) : project), [previewClip, doc, project])
+  const chosenScene = useMemo(() => (previewClip ? clipScene(doc, previewClip) : project), [previewClip, doc, project])
+  const sceneProject = useMemo(() => (matteUrl ? chosenScene : withMatteFallback(chosenScene, previewClip ? 'vertical' : formatKind)), [matteUrl, chosenScene, previewClip, formatKind])
   const sceneDerived = useMemo(
     () => (!previewClip ? derived : cursorData ? deriveProject(sceneProject, cursorData, VERTICAL_1080, words, faceTrack) : null),
     [previewClip, derived, sceneProject, cursorData, words, faceTrack]
@@ -365,16 +370,19 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   // O recorte do fundo é necessário quando QUALQUER coisa que vai ser vista ou exportada usa o Apresentador: o formato aberto, a cena da prévia
   // de um corte, ou o layout de algum corte (a exportação do corte percorre a mesma cadeia: `clipScene`). Olhar só o formato aberto deixava o
   // corte com Apresentador sem máscara (prévia com o fundo e exportação falhando).
+  // `sceneNeedsMatte`: a cena que está sendo DESENHADA usa a máscara (só quando ela existe); `chosenNeedsMatte`: a que o usuário escolheu usa
   const sceneNeedsMatte = (sceneDerived ?? derived)?.needsMatte ?? false
+  const chosenNeedsMatte = usesPresenter(chosenScene, previewClip ? 'vertical' : formatKind)
   const clipsNeedMatte = useMemo(() => doc.clips.some((c) => usesPresenter(clipScene(doc, c), 'vertical')), [doc])
-  const needsMatteAny = needsMatte || sceneNeedsMatte || clipsNeedMatte
-  // Pede o recorte do fundo (se o motor está pronto e ainda não existe). Volta na hora se o guardado vale para esta câmera; se já está na
-  // fila ou rodando, devolve o trabalho que existe.
+  const needsMatteAny = needsMatte || chosenNeedsMatte || clipsNeedMatte
+  // Toda gravação com câmera tem o recorte do fundo, qualquer que seja o layout (ele nasce sozinho depois de gravar; aqui é a rede de
+  // segurança do projeto antigo, do trabalho interrompido e do motor que só ficou pronto agora). Volta na hora se o guardado vale para
+  // esta câmera; se já está na fila ou rodando (ou pela metade, em pedaços), devolve o trabalho que existe e ele continua de onde parou.
   const matteEngineReady = useCamera((s) => s.view?.matte.state === 'ready')
   useEffect(() => {
-    if (!hasCamera || !needsMatteAny || !matteEngineReady || matteUrl) return
+    if (!hasCamera || !matteEngineReady || matteUrl) return
     void useCamera.getState().analyze(detail.id, 'matte')
-  }, [detail.id, hasCamera, needsMatteAny, matteEngineReady, matteUrl])
+  }, [detail.id, hasCamera, matteEngineReady, matteUrl])
   // a prévia só existe no 9:16 e enquanto o corte existe
   useEffect(() => {
     if (previewId && (format !== 'vertical' || !previewClip)) clips.getState().preview(null)
@@ -384,10 +392,12 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
 
   // Entrar no 9:16 pela primeira vez: zooms do preset Intenso e layouts escolhidos pela atividade (uma vez; não entra no "desfazer").
   // Espera a transcrição chegar (a escolha de layout usa onde há fala).
+  // O 9:16 com câmera nasce no Green screen (V-E): sabe-se se o recorte existe ou vai existir (motor pronto) depois da primeira leitura do motor.
+  const cameraKnown = useCamera((s) => s.view !== null || s.error !== null)
   useEffect(() => {
-    if (format !== 'vertical' || !cursorData || transcript.status === 'loading') return
-    store.getState().changeDoc((doc) => ensureVertical(doc, cursorData, { durationMs, words, hasCursorEvents: Boolean(detail.events.cursor), hasMatte: Boolean(matteUrl) }), { history: false })
-  }, [format, cursorData, transcript.status, words, durationMs, store, detail.events.cursor, matteUrl])
+    if (format !== 'vertical' || !cursorData || transcript.status === 'loading' || (hasCamera && !cameraKnown)) return
+    store.getState().changeDoc((doc) => ensureVertical(doc, cursorData, { durationMs, words, hasCursorEvents: Boolean(detail.events.cursor), hasMatte: Boolean(matteUrl), matteExpected: matteEngineReady }), { history: false })
+  }, [format, cursorData, transcript.status, words, durationMs, store, detail.events.cursor, matteUrl, matteEngineReady, hasCamera, cameraKnown])
 
   // Ao abrir um projeto que nunca teve zoom automático, gera os do preset padrão (uma vez; não entra no "desfazer").
   const generated = useRef(false)
@@ -660,7 +670,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       transcript,
       reloadTranscript: loadTranscript,
       face,
-      matte: { url: matteUrl, needed: needsMatteAny },
+      matte: { url: matteUrl, needed: needsMatteAny, fallback: needsMatteAny && !matteUrl },
       levels,
       text,
       exporter,

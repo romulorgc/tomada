@@ -147,12 +147,15 @@ describe('na cena: Tela ao centro, V-B e o fundo do V-D', () => {
     return { left: (src.x - PAGE_RECT.x) / PAGE_RECT.w, right: (src.x + src.w - PAGE_RECT.x) / PAGE_RECT.w }
   }
 
-  it.each(['screen-center', 'stack', 'presenter'] as const)('%s: com o mapa a coluna inteira fica dentro em todos os instantes; sem ele ela é cortada', (layout) => {
+  // F2: a janela legível é bem mais estreita que a coluna (a letra pede ~30 px), então ela não a cobre inteira; o que o mapa garante é que
+  // a janela fica SOBRE a coluna de conteúdo (e não nas margens em branco) em todos os instantes.
+  it.each(['screen-center', 'stack', 'presenter'] as const)('%s: com o mapa a janela fica sobre a coluna de conteúdo em todos os instantes', (layout) => {
     for (const t of [500, 2500, 5000, 9000]) {
       const withMap = shown(layout, true, t)
-      expect(withMap.left, `${layout} t=${t}`).toBeLessThanOrEqual(COLUMN.start - MARGIN + 1e-3)
-      expect(withMap.right, `${layout} t=${t}`).toBeGreaterThanOrEqual(COLUMN.end + MARGIN - 1e-3)
+      const center = (withMap.left + withMap.right) / 2
+      expect(center, `${layout} t=${t}`).toBeGreaterThanOrEqual(COLUMN.start)
+      expect(center, `${layout} t=${t}`).toBeLessThanOrEqual(COLUMN.end)
+      expect(withMap.right - withMap.left, `${layout} t=${t}: a janela é mais estreita que a coluna (letra legível)`).toBeLessThan(COLUMN.end - COLUMN.start)
     }
-    expect(shown(layout, false, 5000).right, `${layout} sem o mapa`).toBeLessThan(COLUMN.end)
   })
 })

@@ -434,6 +434,26 @@ export const LayoutPresenterVerticalIcon = (p: IconProps) => (
   </Svg>
 )
 
+/** V-E Green screen (9:16): a página em tela cheia atrás e a pessoa sem fundo, grande, embaixo ao centro. */
+export const LayoutGreenscreenIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="7" y="2.8" width="10" height="18.4" rx="2" />
+    <path d="M9 6h6M9 8.4h6M9 10.8h4" />
+    <circle cx="12" cy="13.6" r="1.7" fill="currentColor" stroke="none" />
+    <path d="M8.2 21.2c0-2.8 1.7-4.4 3.8-4.4s3.8 1.6 3.8 4.4z" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+/** V-E no canto (9:16): a página em tela cheia e a pessoa menor num canto de baixo (o oposto ao que está sendo mostrado). */
+export const LayoutGreenscreenCornerIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="7" y="2.8" width="10" height="18.4" rx="2" />
+    <path d="M9 6h6M9 8.4h6M9 10.8h4" />
+    <circle cx="10.9" cy="15.6" r="1.2" fill="currentColor" stroke="none" />
+    <path d="M8 21.2c0-2.2 1.2-3.4 2.9-3.4s2.9 1.2 2.9 3.4z" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
 export const CaptionsIcon = (p: IconProps) => (
   <Svg {...p}>
     <rect x="3" y="5.5" width="18" height="13" rx="2.4" />

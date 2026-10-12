@@ -11,6 +11,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { PNG } from 'pngjs'
+import { createFfmpeg, locateFfmpeg } from '../../src/main/ffmpeg'
+import { measureContentMap } from '../../src/main/content-map'
+import { contentMapToJsonLines } from '../../src/shared/content-map'
 import { createProject, serializeProject } from '../../src/shared/project'
 import { VERTICAL_1080, deriveProject, evaluateScene, prepareEvents } from '../../src/shared/scene'
 import { projectForFormat } from '../../src/shared/vertical'
@@ -23,6 +26,8 @@ const FOLDER = '2026-10-06 1300 Webmail sintético'
 const W = 1920, H = 1000, DURATION = 8000
 /** A coluna de texto do "e-mail": é ela que não pode ser cortada onde a ação está. */
 const COLUMN = { x0: 560, x1: 1360 }
+/** A coluna nominal tem ~60 px de respiro à direita do texto mais largo (a linha mais comprida termina em ~1300): a janela pode terminar até 40 px antes dela. */
+const COLUMN_PAD = 40
 const TIMES = [1300, 3100, 4900, 6700]
 let s: Session | undefined
 test.afterEach(async () => { if (s) { await s.close(); s = undefined } })
@@ -59,7 +64,7 @@ function eventData(): { cursor: { t: number; x: number; y: number }[]; clicks: C
   return { cursor, clicks }
 }
 
-test('webmail sintético: a janela quadrada foca a ação, sem ampliar além de 1:1 e sem cortar a coluna de texto', async () => {
+test('webmail sintético: a janela quadrada foca a ação, com a letra do corpo em 30 px (aqui 1:1) e sem cortar a coluna de texto', async () => {
   test.setTimeout(240_000)
   mkdirSync(OUT, { recursive: true })
   s = await launchTomada({ seed: false })
@@ -93,6 +98,12 @@ test('webmail sintético: a janela quadrada foca a ação, sem ampliar além de 
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `color=c=0x303030:s=640x360:r=30:d=${DURATION / 1000}`, '-an', '-c:v', 'libx264', '-preset', 'ultrafast', join(dir, 'media', 'camera.mp4')], { windowsHide: true })
   const p = createProject({ title: 'Webmail sintético', sources: { screen: { path: 'media/screen.mp4', w: W, h: H, fps: 30, durationMs: DURATION }, camera: { path: 'media/camera.mp4', w: 640, h: 360, fps: 30, durationMs: DURATION } } })
   p.zoomPreset = 'off'; p.style.cursor.ripple = false; p.style.camera.borderWidth = 0
+  // F2 (R3): o zoom vem da LETRA (30 px no quadro). O corpo desta página sintética tem 30 px de verdade (a estimativa do app, 13 px por 1080,
+  // é para páginas reais de navegador), então a letra de 30 px é exatamente 1:1 e o teto de ampliação continua valendo.
+  p.screenTextPx = 30
+  // o mapa de conteúdo, medido como o processamento mede (toda gravação nova o tem): é ele que diz onde está a coluna de texto
+  const map = await measureContentMap(createFfmpeg(locateFfmpeg()!), join(dir, 'media', 'screen.mp4'))
+  writeFileSync(join(dir, 'events', 'content-map.jsonl'), contentMapToJsonLines(map))
   const { cursor, clicks } = eventData()
   writeFileSync(join(dir, 'events', 'cursor.jsonl'), cursor.map((c) => JSON.stringify(c)).join('\n'))
   writeFileSync(join(dir, 'events', 'clicks.jsonl'), clicks.map((c) => JSON.stringify(c)).join('\n'))
@@ -108,7 +119,7 @@ test('webmail sintético: a janela quadrada foca a ação, sem ampliar além de 
     return cp
   }
   const capture = async (layout: LayoutKind, camera: boolean, prefix: string): Promise<string[]> => {
-    const frames = await renderStills(lab, { project: project(layout, camera), folder: FOLDER, format: VERTICAL_1080, times: TIMES, words: [{ i: 0, text: 'Responda', start: 0, end: DURATION, prob: 1, kind: 'word' }] })
+    const frames = await renderStills(lab, { project: project(layout, camera), folder: FOLDER, format: VERTICAL_1080, times: TIMES, contentMap: true, words: [{ i: 0, text: 'Responda', start: 0, end: DURATION, prob: 1, kind: 'word' }] })
     return frames.map((f, i) => { const path = join(OUT, `${prefix}-${i}.png`); writeFileSync(path, f); return path })
   }
   // A primeira rodada registra a implementação anterior (cursor seguido, zoom até 1,35×); as seguintes preservam a evidência.
@@ -120,7 +131,7 @@ test('webmail sintético: a janela quadrada foca a ação, sem ampliar além de 
   sheet([...TIMES.map((_, i) => join(OUT, `foco-centro-antes-${i}.png`)), ...centroDepois], join(OUT, 'folha-foco-centro-antes-depois.png'))
 
   // Medidas da cena (não de pixels): onde a janela cai e quanto o texto é ampliado.
-  const data = prepareEvents({ cursor, clicks, keys: KEYS }, DURATION)
+  const data = prepareEvents({ cursor, clicks, keys: KEYS, contentMap: map }, DURATION)
   for (const [layout, camera] of [['stack', true], ['screen-center', false]] as const) {
     const view = projectForFormat(project(layout, camera), 'vertical')
     const derived = deriveProject(view, data, VERTICAL_1080)
@@ -132,7 +143,7 @@ test('webmail sintético: a janela quadrada foca a ação, sem ampliar além de 
       peakMagnification = Math.max(peakMagnification, screen.dest.w / sourcePxW)
       // nos instantes de clique no corpo do e-mail, a janela inteira da coluna tem de estar visível
       const click = CLICKS.find((c) => t >= c.t + 500 && t <= c.t + 1000 && c.x >= COLUMN.x0 && c.x <= COLUMN.x1 && c.y < 840)
-      if (click && (screen.src.x * W > COLUMN.x0 + 1 || (screen.src.x + screen.src.w) * W < COLUMN.x1 - 1)) missing.push(`${layout} t=${t}: janela ${(screen.src.x * W).toFixed(0)}–${((screen.src.x + screen.src.w) * W).toFixed(0)} não cobre a coluna ${COLUMN.x0}–${COLUMN.x1}`)
+      if (click && (screen.src.x * W > COLUMN.x0 + 1 || (screen.src.x + screen.src.w) * W < COLUMN.x1 - COLUMN_PAD)) missing.push(`${layout} t=${t}: janela ${(screen.src.x * W).toFixed(0)}–${((screen.src.x + screen.src.w) * W).toFixed(0)} não cobre a coluna ${COLUMN.x0}–${COLUMN.x1}`)
     }
     expect(peakMagnification, `${layout}: ampliação máxima do texto (1,0 = 1:1)`).toBeLessThanOrEqual(1.001)
     expect(missing, `${layout}: coluna de conteúdo cortada onde há ação`).toEqual([])

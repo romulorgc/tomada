@@ -329,9 +329,9 @@ export const ptBR = {
         needsPrepare: 'Para centralizar a câmera no seu rosto, o app precisa de um detector pequeno (OpenCV e um modelo de 230 KB). Roda neste computador e nada sai dele.'
       },
       presenter: {
-        title: 'Apresentador recortado',
-        help: 'Vale para o layout "Apresentador": você, sem o fundo da webcam, do peito para cima e com as mãos, na frente da tela. O recorte do fundo é feito neste computador, na placa de vídeo, uma vez por gravação.',
-        notActive: 'O layout atual não é o "Apresentador".',
+        title: 'Você sem fundo (green screen)',
+        help: 'Vale para os layouts em que você aparece sem o fundo da webcam, na frente da tela: "Você sem fundo" no 16:9 e "Green screen" no 9:16. O recorte é feito neste computador, na placa de vídeo, sozinho depois de gravar, uma vez por gravação.',
+        notActive: 'O layout atual não usa você sem fundo.',
         side: 'Canto',
         sides: { left: 'Esquerda', right: 'Direita' },
         height: 'Altura da pessoa',
@@ -342,13 +342,14 @@ export const ptBR = {
         shadow: 'Sombra',
         mirrorHint: 'Para as suas mãos apontarem para a tela, use "Espelhar a imagem" em Comportamento. Mostre o tronco e as mãos, com a luz de frente.',
         status: {
-          queued: 'Na fila para recortar o fundo…',
-          running: (pct: number): string => `Recortando o fundo… ${pct}%`,
-          ready: 'O fundo da câmera já está recortado.',
-          missing: 'O fundo ainda não foi recortado. Isso acontece sozinho quando você escolhe o layout Apresentador.',
-          start: 'Recortar o fundo agora',
+          queued: 'Na fila para recortar você do fundo…',
+          running: (pct: number): string => `Recortando você do fundo: ${pct}%`,
+          resumed: 'Retomado de onde parou: o que já estava feito não é refeito.',
+          ready: 'Você já está recortado do fundo.',
+          missing: 'Você ainda não foi recortado do fundo. Isso acontece sozinho depois de gravar; se não começou, use o botão abaixo.',
+          start: 'Recortar você do fundo agora',
           redo: 'Recortar de novo',
-          failed: 'Não consegui recortar o fundo',
+          failed: 'Não consegui recortar você do fundo',
           retry: 'Tentar de novo',
           cancel: 'Cancelar'
         },
@@ -422,24 +423,50 @@ export const ptBR = {
         'screen-center': 'Tela ao centro',
         stack: 'Câmera + tela',
         'screen-wide': 'Tela na largura',
-        presenter: 'Apresentador'
+        presenter: 'Você sem fundo',
+        greenscreen: 'Green screen',
+        'greenscreen-corner': 'Green screen no canto'
       },
       optionHints: {
         'side-by-side': 'A câmera num quadro ao lado da tela, com a imagem normal da webcam. Lado, formato e largura ficam na aba Câmera.',
         'screen-focus': 'A tela recortada em tela cheia, seguindo o cursor, com a câmera numa bolha.',
-        'screen-center': 'Um quadrado da tela segue o cursor, entre o gancho e a legenda. Zoom suave de até 1,35×.',
-        stack: 'A tela em cima e a câmera embaixo, metade e metade, de ponta a ponta. A tela segue o cursor.',
+        'screen-center': 'Uma janela da tela segue o cursor, entre o gancho e a legenda, com o zoom que deixa a letra legível (cerca de 30 px no vídeo).',
+        stack: 'A tela em cima e a câmera embaixo, metade e metade, de ponta a ponta. A tela segue o cursor, com a letra legível.',
         'screen-wide': 'A tela inteira na largura, com o mesmo vídeo desfocado ao fundo. Para telas de letra grande.',
         camera: 'Só a câmera, em tela cheia.',
         presenter:
-          'Você recortado, sem o fundo da webcam, na frente da tela: do peito para cima e com as mãos, na borda de baixo. No 16:9 fica num canto; no vertical a tela vai em cima (seguindo o cursor) e você embaixo. O recorte do fundo é feito sozinho na placa de vídeo (aba Câmera). Mostre o tronco e as mãos, com a luz de frente.'
+          'Você, sem o fundo da webcam, na frente da tela: do peito para cima e com as mãos, na borda de baixo. No 16:9 fica num canto; no vertical a tela vai em cima (seguindo o cursor) e você embaixo. O recorte do fundo é feito sozinho depois de gravar (aba Câmera). Mostre o tronco e as mãos, com a luz de frente.',
+        greenscreen:
+          'Só no vertical. A página em tela cheia atrás, com a janela seguindo o que você mostra e a letra legível, e você sem o fundo embaixo, com cerca de metade da altura. É você explicando aquela página, como no TikTok. A legenda fica logo acima da sua cabeça.',
+        'greenscreen-corner':
+          'Só no vertical. Como o Green screen, mas você aparece menor, num canto de baixo, sempre no lado oposto ao que está sendo mostrado. Troca de lado de tempos em tempos, só numa emenda ou num deslize curto.'
+      },
+      legibility: {
+        warn: (px: number, where: string): string => `A letra da página fica com cerca de ${px} px no vídeo vertical (${where}), abaixo de 22 px: difícil de ler no celular. Troque o layout destes trechos.`,
+        ok: (px: number): string => `Letra da página: cerca de ${px} px no vídeo vertical.`
+      },
+      matte: {
+        queued: 'Na fila para recortar você do fundo…',
+        running: (pct: number): string => `Recortando você do fundo: ${pct}%`,
+        runningFallback: (pct: number): string => `Recortando você do fundo: ${pct}%. Até terminar, a prévia mostra o layout sem recorte.`,
+        resumed: 'Retomado de onde parou.',
+        failed: 'Não consegui recortar você do fundo',
+        retry: 'Tentar de novo',
+        needsEngine: 'O green screen precisa do recorte do fundo, e o app ainda não está preparado para isso. Prepare na aba Câmera. Até lá a prévia mostra o layout sem recorte.',
+        cancelled: 'O recorte do fundo foi interrompido. Ele continua de onde parou.',
+        start: 'Recortar agora'
+      },
+      quick: {
+        title: 'Trocar o layout do vídeo',
+        titleSegment: 'Trocar o layout do trecho selecionado',
+        titleClip: 'Trocar o layout deste corte'
       },
       vertical: {
         video: 'Layout do vídeo vertical',
         videoHelp: 'Vale para todo o vídeo, menos nos trechos da trilha Layout.',
         auto: 'Escolher pelo que acontece',
         autoHelp:
-          'Fala sem nada acontecendo na tela por 3 s ou mais vira "Câmera + tela" (ou "Apresentador", quando o recorte do fundo da câmera já existe). O resto fica no recorte do cursor. Nenhum layout fica menos de 6 s na tela antes de trocar.',
+          'Fala sem nada acontecendo na tela por 3 s ou mais vira "Câmera + tela" (ou "Você sem fundo", quando o recorte do fundo da câmera já existe). O resto fica no recorte do cursor. Nenhum layout fica menos de 6 s na tela antes de trocar.',
         cameraTop: 'Câmera em cima',
         cameraTopHint: 'No "Câmera + tela", põe a câmera em cima e a tela embaixo. O padrão é a tela em cima.',
         autoWarn: (n: number): string => (n === 1 ? 'Isto substitui o trecho de layout do vertical.' : `Isto substitui os ${n} trechos de layout do vertical.`),
@@ -547,7 +574,7 @@ export const ptBR = {
         hookCount: (n: number, max: number): string => `${n} de ${max} palavras`,
         hookTooLong: 'O gancho passa de 8 palavras: o vídeo mostra todas, mas fica mais fraco.',
         layout: 'Layout',
-        layouts: { auto: 'Automático', 'screen-center': 'Tela ao centro', 'screen-focus': 'Cursor', stack: 'Câmera + tela', presenter: 'Apresentador', 'screen-wide': 'Tela larga', camera: 'Só câmera' },
+        layouts: { auto: 'Automático', greenscreen: 'Green screen', 'greenscreen-corner': 'Green screen no canto', 'screen-center': 'Tela ao centro', 'screen-focus': 'Cursor', stack: 'Câmera + tela', presenter: 'Você sem fundo', 'screen-wide': 'Tela larga', camera: 'Só câmera' },
         layoutHint: 'Automático escolhe pela atividade da tela; os outros valem o corte todo.',
         captions: 'Legenda',
         captionsInherit: 'Como no vertical',
@@ -841,8 +868,8 @@ export const ptBR = {
       formats: { horizontal: 'YouTube 16:9', vertical: 'Vertical 9:16' },
       verticalCard: { name: 'Vertical 1080×1920', detail: '16 Mbps · áudio 192 kbps' },
       captionsNoText: 'A legenda está ligada, mas este projeto não tem transcrição: o vídeo sai sem legenda.',
-      matteMissing: 'O layout Apresentador precisa do recorte do fundo da câmera, e ele ainda não foi feito. Faça na aba Câmera e exporte em seguida.',
-      matteRunning: (pct: number): string => `Recortando o fundo da câmera… ${pct}%. A exportação libera quando terminar.`,
+      matteMissing: 'Este layout usa você sem fundo, e o recorte ainda não existe. Espere ele terminar (aba Câmera) ou escolha "Câmera + tela" na aba Layout para exportar já.',
+      matteRunning: (pct: number): string => `Recortando você do fundo: ${pct}%. A exportação libera quando terminar.`,
       presets: 'Qualidade',
       preset: { '1080p': 'YouTube 1080p', '1440p': 'YouTube 1440p', '2160p': 'YouTube 4K' },
       presetSize: (w: number, h: number): string => `${w}×${h}`,
@@ -927,10 +954,10 @@ export const ptBR = {
     cameraStyle: {
       title: 'Estilo da câmera',
       'side-by-side': 'Quadro ao lado',
-      presenter: 'Apresentador recortado',
+      presenter: 'Você sem fundo (green screen)',
       help: {
         'side-by-side': 'Sua câmera em um quadro ao lado da tela, com o fundo original.',
-        presenter: 'Você na frente da tela, sem o fundo. Mostre o tronco e as mãos com luz de frente.'
+        presenter: 'Você na frente da tela, sem o fundo (no 16:9). O vertical usa o green screen em qualquer escolha. Mostre o tronco e as mãos com luz de frente.'
       }
     },
     mic: {

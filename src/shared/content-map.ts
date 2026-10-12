@@ -214,6 +214,31 @@ export type ContentTrack = {
   profileAt(t: number, axis: 'x' | 'y'): number[]
   /** Quando a imagem muda (início de cada amostra), em ms. */
   readonly times: readonly number[]
+  /** A densidade média (0-1) de conteúdo dentro de `rect` (normalizado na ÁREA-BASE) na amostra que vale em `t`: o quanto há para ver ali. */
+  densityIn(t: number, rect: Rect): number
+}
+
+/** A densidade média (0-1) das células da amostra dentro de `rect` (normalizado na tela gravada inteira), ponderada pela fração de cada célula coberta. */
+export function densityInRect(sample: ContentSample, rect: Rect): number {
+  const { cols, rows, cells } = sample
+  const x0 = Math.max(0, rect.x)
+  const x1 = Math.min(1, rect.x + rect.w)
+  const y0 = Math.max(0, rect.y)
+  const y1 = Math.min(1, rect.y + rect.h)
+  if (!(x1 > x0) || !(y1 > y0)) return 0
+  let sum = 0
+  let weight = 0
+  for (let r = Math.floor(y0 * rows); r < Math.min(rows, Math.ceil(y1 * rows)); r++) {
+    const wy = Math.min(y1, (r + 1) / rows) - Math.max(y0, r / rows)
+    if (wy <= 1e-9) continue
+    for (let c = Math.floor(x0 * cols); c < Math.min(cols, Math.ceil(x1 * cols)); c++) {
+      const wx = Math.min(x1, (c + 1) / cols) - Math.max(x0, c / cols)
+      if (wx <= 1e-9) continue
+      sum += (cells[r * cols + c]! / 255) * wx * wy
+      weight += wx * wy
+    }
+  }
+  return weight > 0 ? sum / weight : 0
 }
 
 /**
@@ -247,6 +272,10 @@ export function createContentTrack(map: readonly ContentSample[] | undefined, cr
         memo.set(key, hit)
       }
       return hit
+    },
+    densityIn(t, r) {
+      const base = crop ? crop.at(t) : FULL_RECT
+      return densityInRect(sorted[indexAt(t)]!, { x: base.x + r.x * base.w, y: base.y + r.y * base.h, w: r.w * base.w, h: r.h * base.h })
     }
   }
 }
