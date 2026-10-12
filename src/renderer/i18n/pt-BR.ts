@@ -188,6 +188,7 @@ export const ptBR = {
       resumed: (pct: number): string => `Continuando o recorte do fundo de onde parou: ${pct}%`,
       waiting: (pct: number): string => `Recorte do fundo em espera enquanto o app usa a placa de vídeo: ${pct}%`,
       queued: 'Recorte do fundo na fila…',
+      resumedToast: (pct: number): string => `O recorte do fundo ficou pela metade quando o app fechou. Vou continuar de onde parou (${pct}% já pronto).`,
       tip: 'O recorte do fundo roda neste computador, em segundo plano. Se o app fechar no meio, ele continua de onde parou.',
       failed: 'Não consegui recortar você do fundo.',
       retry: 'Tentar de novo'

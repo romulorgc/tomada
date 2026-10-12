@@ -10,9 +10,10 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { MATTE_FILE } from '../../src/shared/matte'
+import { parseProject } from '../../src/shared/project'
 import { MATTE_PARTS_DIR, MATTE_PROGRESS_FILE, parseMatteProgress } from '../../src/shared/matte-parts'
 import { openEditor } from './editor-helpers'
-import { EXAMPLE_FOLDER, launchTomada, type Session } from './helpers'
+import { EXAMPLE_FOLDER, launchTomada, waitForAux, type Session } from './helpers'
 
 let s: Session | undefined
 test.afterEach(async () => {
@@ -68,6 +69,8 @@ test('fechar o app no meio: o log avisa; ao reabrir o recorte continua do últim
   // REABRE o app: continua sozinho, sem ninguém pedir
   s = await launchTomada({ base, env: MOCK })
   await expect.poll(() => logOf(s!).includes(`vou continuar do pedaço ${done + 1}`), { timeout: 30_000 }).toBe(true)
+  // o aviso de que vai continuar aparece onde a pessoa estiver (aqui, a biblioteca), sem ela abrir o projeto
+  await expect(s.page.getByTestId('toast')).toContainText('ficou pela metade quando o app fechou', { timeout: 20_000 })
   await openEditor(s)
   await expect(s.page.getByTestId('matte-chip-text')).toContainText('Continuando o recorte do fundo de onde parou', { timeout: 20_000 })
   await expect.poll(() => existsSync(join(dirOf(s!), MATTE_FILE)), { timeout: 60_000 }).toBe(true)
@@ -97,4 +100,30 @@ test('falhou no meio: aviso claro com "Tentar de novo", motivo no log, e ele CON
   await expect(s.page.getByTestId('matte-chip')).toHaveCount(0)
   expect(logOf(s)).toContain(`retomando do pedaço ${kept.chunks.length + 1}`)
   expect(progressOf(s)).toBeNull()
+})
+
+test('toda gravação com câmera gera o recorte sozinha, em segundo plano, mesmo com o estilo "Quadro ao lado" (o padrão)', async () => {
+  test.setTimeout(240_000)
+  s = await launchTomada({ seed: false, env: { TOMADA_TEST_AUTOSOURCE: 'screen', TOMADA_CAMERA: 'mock', TOMADA_TEST_MATTE_CHUNK_S: '1', TOMADA_TEST_MATTE_DELAY_MS: '1500' } })
+  const { page } = s
+  await page.getByTestId('nav-record').click()
+  await expect(page.getByTestId('camera-preview')).toHaveAttribute('data-live', 'true', { timeout: 20_000 })
+  await expect(page.getByTestId('camera-style-side-by-side')).toHaveAttribute('aria-pressed', 'true') // ninguém escolheu o Apresentador
+  await expect(page.getByTestId('record-start')).toBeEnabled({ timeout: 20_000 })
+  await page.getByTestId('record-start').click()
+  const bar = await waitForAux(s.app, 'bar', 40_000)
+  await expect(bar.getByTestId('bar')).toHaveAttribute('data-status', 'recording', { timeout: 30_000 })
+  await page.waitForTimeout(2500)
+  await bar.getByTestId('bar-stop').click()
+  await expect(page.getByTestId('project-view')).toBeVisible({ timeout: 120_000 })
+  const dir = join(s.projects, readdirSync(s.projects)[0]!)
+  expect(parseProject(readFileSync(join(dir, 'project.json'), 'utf8')).cameraStyle).not.toBe('presenter')
+
+  // o recorte começa logo depois de gravar, sem ninguém pedir, e termina em pedaços
+  await expect.poll(() => existsSync(join(dir, MATTE_FILE)), { timeout: 90_000 }).toBe(true)
+  const log = logOf(s)
+  expect(log).toContain('começando, em pedaços de 1 s')
+  expect(log).toMatch(/pedaço 1 pronto/)
+  expect(existsSync(join(dir, MATTE_PROGRESS_FILE))).toBe(false)
+  expect(existsSync(join(dir, MATTE_PARTS_DIR))).toBe(false)
 })

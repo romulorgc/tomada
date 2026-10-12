@@ -235,17 +235,17 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
   }
 
   /** Anota no projeto que o recorte foi PEDIDO (a fila pode demorar, e o app pode fechar antes de ele começar): ao reabrir, `recoverMatte` o encontra. */
-  async function markMatteRequested(projectId: string, cam: CameraFile): Promise<void> {
+  async function markMatteRequested(projectId: string, cam: CameraFile): Promise<MatteProgress> {
     const progressFile = await resolveProjectFile(cam.dir, MATTE_PROGRESS_FILE)
     const existing = await readProgress(progressFile)
-    if (existing && progressMatchesCamera(existing, cam.relPath, cam.mtimeMs, chunkSeconds)) return
+    if (existing && progressMatchesCamera(existing, cam.relPath, cam.mtimeMs, chunkSeconds)) return existing
     if (existing) {
       // o andamento é de OUTRA câmera (o arquivo foi trocado): os pedaços não servem
       logger.warn(`Recorte do fundo do projeto ${projectId}: a câmera do projeto mudou desde o último recorte; os pedaços guardados foram descartados.`)
       await removePartsDir(await resolveProjectFile(cam.dir, MATTE_PARTS_DIR))
     }
     const stamp = new Date(now()).toISOString()
-    await writeProgress(progressFile, {
+    const marker: MatteProgress = {
       version: MATTE_PROGRESS_VERSION,
       source: cam.relPath,
       sourceMtimeMs: cam.mtimeMs,
@@ -256,7 +256,9 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
       attempts: 0,
       startedAt: stamp,
       updatedAt: stamp
-    })
+    }
+    await writeProgress(progressFile, marker)
+    return marker
   }
 
   async function runMatteJob(projectId: string, cam: CameraFile, ctl: AbortController, force: boolean): Promise<void> {
@@ -547,8 +549,11 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
     }
     if (entry.cancelled) return cancelledJob()
     // anota no projeto que o recorte foi pedido: se o app fechar antes de ele começar (ou no meio), ao reabrir ele continua
-    if (kind === 'matte') await markMatteRequested(projectId, cam).catch((err) => logger.warn(`Recorte do fundo do projeto ${projectId}: não consegui anotar o pedido no projeto: ${messageOf(err)}`))
-    const job: CameraJob = { projectId, kind, state: 'queued', fraction: 0 }
+    let prior: MatteProgress | null = null
+    if (kind === 'matte') prior = await markMatteRequested(projectId, cam).catch((err) => { logger.warn(`Recorte do fundo do projeto ${projectId}: não consegui anotar o pedido no projeto: ${messageOf(err)}`); return null })
+    // com pedaços prontos de uma rodada anterior (e sem "recortar de novo"), o aviso já nasce "continuando" com a porcentagem de onde parou
+    const keeps = kind === 'matte' && !opts.force && (prior?.chunks.length ?? 0) > 0
+    const job: CameraJob = { projectId, kind, state: 'queued', fraction: keeps ? chunksFraction(prior!.chunks.length, chunkSeconds, cam.project.sources.camera?.durationMs ?? 0) : 0, ...(keeps ? { resumed: true } : {}) }
     setJob(job)
     queue.push({ projectId, kind, force: opts.force === true })
     pump()

@@ -217,7 +217,12 @@ describe('fechar o app no meio nunca é silencioso', () => {
 
     // reabre o app: outro serviço, outro motor, o mesmo disco
     const second = t.open({ delayMs: 600 })
+    const seen = t.jobs.length
     expect(await second.recoverMatte('p1')).toBe('resumed')
+    // o PRIMEIRO anúncio do trabalho depois de reabrir já vem "continuando", com a porcentagem de onde parou (é o que o aviso do app usa)
+    const firstAnnounced = t.jobs.slice(seen).find((j) => j.projectId === 'p1' && j.kind === 'matte')!
+    expect(firstAnnounced).toMatchObject({ state: 'queued', resumed: true })
+    expect(firstAnnounced.fraction).toBeGreaterThan(0.1)
     const heard = t.messages('warn').find((m) => m.includes('estava em andamento'))
     expect(heard).toContain(`${doneBefore} pedaço(s) prontos`)
     expect(heard).toContain(`vou continuar do pedaço ${doneBefore + 1}`)
