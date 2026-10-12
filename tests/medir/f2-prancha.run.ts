@@ -29,7 +29,7 @@ for (const g of ['g1004', 'g1437']) {
         return undefined
       }
     }
-    const project = parseProject(rd('project.parsed.json') ?? rd('project.json')!)
+    const project = parseProject(rd('project.json')!)
     const words = JSON.parse(rd('transcript.json')!).words as { start: number; end: number }[]
     const events = eventsFromText({ cursor: rd('events/cursor.jsonl'), clicks: rd('events/clicks.jsonl'), keys: rd('events/keys.jsonl'), contentRect: rd('events/content-rect.jsonl'), contentMap: rd('events/content-map.jsonl') })
     const durationMs = Math.max(project.sources.screen?.durationMs ?? 0, project.sources.camera?.durationMs ?? 0)
