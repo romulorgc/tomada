@@ -194,8 +194,8 @@ class SlotWriter:
     """Escreve a mascara numa grade fixa de 1/rate s, no MESMO instante em que cada quadro da camera aparece.
 
     A camera pode ter taxa variavel (quadros que faltam). Cada quadro vale do instante dele ate o do proximo (o render segura o quadro
-    anterior), entao um quadro que falta repete o ultimo; dois quadros no mesmo instante da grade: vale o ultimo. `sink(bytes, slot)` recebe
-    um quadro por instante da grade (`slot` e o indice ABSOLUTO do instante), em ordem.
+    anterior), entao um quadro que falta repete o ultimo; dois quadros no mesmo instante da grade: vale o ultimo. `sink(bytes)` recebe um
+    quadro por instante da grade, em ordem; enquanto o sink roda, `self.slot` e o indice ABSOLUTO do instante que ele esta recebendo.
 
     Em cada instante k/rate da grade vale o ULTIMO quadro cuja apresentacao JA COMECOU (pts <= k/rate): um quadro que chega entre dois
     instantes (aos 40 ms numa grade de 30 qps) so entra no instante seguinte (66,7 ms), porque a camera segue mostrando o anterior ate
@@ -214,6 +214,7 @@ class SlotWriter:
         self.anchor = bool(anchor)
         self.pending = None
         self.pending_slot = 0
+        self.slot = 0
         self.written = 0
 
     def slot_of(self, seconds):
@@ -230,14 +231,16 @@ class SlotWriter:
             self.pending = payload
             return
         for k in range(self.pending_slot, slot):
-            self.sink(self.pending, k)
+            self.slot = k
+            self.sink(self.pending)
             self.written += 1
         self.pending = payload
         self.pending_slot = slot
 
     def finish(self):
         if self.pending is not None:
-            self.sink(self.pending, self.pending_slot)
+            self.slot = self.pending_slot
+            self.sink(self.pending)
             self.written += 1
             self.pending = None
 
@@ -480,7 +483,10 @@ def _matte(request):
             return Encoder(ffmpeg, path, (out_w, out_h), rate, crf, gop, fmt="mp4", bframes=0, faststart=False)
 
         parts_sink = PartsSink(make_encoder, parts_dir, chunk_slots, start_chunk, on_chunk)
-        sink = parts_sink
+
+        def sink(payload):
+            parts_sink(payload, writer.slot)  # `writer` nasce logo abaixo; o instante absoluto vem dele
+
         if start_chunk > 0:
             anchor = True
             first_slot_time = max(0.0, (start_chunk * chunk_slots) / fps - warmup_seconds)
@@ -489,7 +495,7 @@ def _matte(request):
     else:
         encoder = Encoder(ffmpeg, out_path, (out_w, out_h), rate, crf, gop)
 
-        def sink(payload, slot):  # noqa: ARG001 - um arquivo so
+        def sink(payload):  # um arquivo so
             encoder.write(payload)
 
     # o estado recorrente (memoria entre quadros) fica na placa: o que torna a mascara estavel de um quadro para o outro

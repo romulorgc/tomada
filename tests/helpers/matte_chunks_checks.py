@@ -35,7 +35,7 @@ def camera_times(seconds, drop_every=0, jitter=0.0):
 def run_full(times):
     """Rodada inteira: devolve [(slot, quadro)] na ordem em que o sink recebe."""
     got = []
-    w = tools.SlotWriter(lambda payload, slot: got.append((slot, payload)), RATE, 0.0)
+    w = tools.SlotWriter(lambda payload: got.append((w.slot, payload)), RATE, 0.0)
     for i, t in enumerate(times):
         w.push(t, i)
     w.finish()
@@ -45,7 +45,7 @@ def run_full(times):
 def run_resumed(times, first_slot_time):
     """Retomada: so entrega os quadros a partir do instante do aquecimento, com a ancora ligada."""
     got = []
-    w = tools.SlotWriter(lambda payload, slot: got.append((slot, payload)), RATE, 0.0, anchor=True)
+    w = tools.SlotWriter(lambda payload: got.append((w.slot, payload)), RATE, 0.0, anchor=True)
     for i, t in enumerate(times):
         if t < first_slot_time - 0.0005:
             continue
