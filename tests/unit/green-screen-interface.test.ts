@@ -1,5 +1,5 @@
 /**
- * F2, a parte que o usuário vê: o 9:16 com câmera nasce no Green screen (V-E), a prévia mostra o layout anterior enquanto o recorte do fundo
+ * F2, a parte que o usuário vê: o 9:16 com câmera nasce no Green screen no canto (V-E), a prévia mostra o layout anterior enquanto o recorte do fundo
  * não existe (sem desenhar a câmera inteira por cima da página), o aviso de letra pequena tem resumo, e o nome "Apresentador recortado"
  * sumiu de tudo que se vê (agora é "Você sem fundo (green screen)").
  */
@@ -36,19 +36,26 @@ const grid = (): CursorGrid => {
 const click = (t: number): ClickEvent => ({ t, x: 0.5, y: 0.5, button: 'left' })
 const data = { clicks: [click(5000), click(6500), click(20_000)], keys: [], grid: grid() }
 
-describe('o 9:16 com câmera nasce no Green screen (V-E)', () => {
-  it('com o recorte pronto: V-E no vídeo inteiro, sem trechos por atividade, com os zooms do vertical', () => {
+describe('o 9:16 com câmera nasce no Green screen no canto (V-E, o pedido do usuário: "eu falando no canto")', () => {
+  it('com o recorte pronto: V-E no canto no vídeo inteiro, sem trechos por atividade, com os zooms do vertical', () => {
     const next = ensureVertical(doc(), data, { durationMs: D, hasMatte: true })
-    expect(next.vertical!.layout).toBe('greenscreen')
+    expect(next.vertical!.layout).toBe('greenscreen-corner')
     expect(next.vertical!.layouts).toEqual([])
     expect(next.vertical!.zoomPreset).toBe('moderate')
     expect(next.vertical!.zooms.length).toBeGreaterThan(0)
-    expect(projectForFormat(next, 'vertical').style.defaultLayout).toBe('greenscreen')
+    expect(projectForFormat(next, 'vertical').style.defaultLayout).toBe('greenscreen-corner')
+  })
+
+  it('o Green screen centrado continua à escolha (o padrão é só o ponto de partida)', () => {
+    const next = ensureVertical(doc(), data, { durationMs: D, hasMatte: true })
+    const chosen = { ...next, vertical: { ...next.vertical!, layout: 'greenscreen' as const } }
+    expect(projectForFormat(chosen, 'vertical').style.defaultLayout).toBe('greenscreen')
+    expect(ensureVertical(chosen, data, { durationMs: D, hasMatte: true }).vertical!.layout).toBe('greenscreen') // não volta para o padrão
   })
 
   it('com o recorte esperado (motor pronto, ainda recortando): o mesmo, a prévia mostra o layout anterior até ele terminar', () => {
     const next = ensureVertical(doc(), data, { durationMs: D, matteExpected: true })
-    expect(next.vertical!.layout).toBe('greenscreen')
+    expect(next.vertical!.layout).toBe('greenscreen-corner')
     expect(next.vertical!.layouts).toEqual([])
   })
 
@@ -64,10 +71,10 @@ describe('o 9:16 com câmera nasce no Green screen (V-E)', () => {
     const hidden = ensureVertical({ ...base, style: { ...base.style, camera: { ...base.style.camera, hidden: true } } }, data, { durationMs: D, hasMatte: true })
     expect(hidden.vertical!.layout).toBe('screen-center')
     const noScreen = ensureVertical({ ...base, sources: { ...base.sources, screen: undefined } }, data, { durationMs: D, hasMatte: true })
-    expect(noScreen.vertical!.layout).not.toBe('greenscreen')
+    expect(noScreen.vertical!.layout).not.toMatch(/^greenscreen/)
   })
 
-  it('só gera uma vez: o vertical que o usuário já mexeu não volta para o Green screen', () => {
+  it('só gera uma vez: o vertical que o usuário já mexeu não volta para o Green screen no canto', () => {
     const manual = doc({ vertical: { layout: 'stack', layouts: [], zooms: [], zoomPreset: 'off' } })
     expect(ensureVertical(manual, data, { durationMs: D, hasMatte: true })).toBe(manual)
   })

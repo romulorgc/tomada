@@ -475,7 +475,7 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
   const layoutsOf = (p: Project) => ({ horizontal: p.style.defaultLayout, vertical: p.vertical!.layout, autoSegments: [...p.layouts, ...p.vertical!.layouts].filter((l) => l.origin === 'auto') })
   const detailOf = (p: Project) => p.autopilot!.steps.find((step) => step.id === 'layouts')!.detail ?? ''
 
-  it('Você sem fundo escolhido ao gravar: pede o recorte ao começar, espera, e o vídeo inteiro é Você sem fundo (16:9) e Green screen (9:16)', async () => {
+  it('Você sem fundo escolhido ao gravar: pede o recorte ao começar, espera, e o vídeo inteiro é Você sem fundo (16:9) e Green screen no canto (9:16)', async () => {
     const doc = withCamera(baseProject(), 'presenter')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await w.service.start(id)
@@ -484,10 +484,10 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
     expect(autoSegments).toEqual([])
     expect(horizontal).toBe('presenter')
-    expect(vertical).toBe('greenscreen')
+    expect(vertical).toBe('greenscreen-corner')
     expect(detailOf(w.project())).not.toMatch(/recorte do fundo falhou/)
   })
-  it('Quadro ao lado: o recorte nasce do mesmo jeito (toda gravação com câmera), o 16:9 é lado a lado e o 9:16 é o Green screen', async () => {
+  it('Quadro ao lado: o recorte nasce do mesmo jeito (toda gravação com câmera), o 16:9 é lado a lado e o 9:16 é o Green screen no canto', async () => {
     const doc = withCamera(baseProject(), 'side-by-side')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await w.service.start(id)
@@ -495,9 +495,9 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
     expect(autoSegments).toEqual([])
     expect(horizontal).toBe('side-by-side')
-    expect(vertical).toBe('greenscreen')
+    expect(vertical).toBe('greenscreen-corner')
   })
-  it('projeto antigo, sem o campo do estilo: 16:9 lado a lado e 9:16 Green screen com o recorte pronto', async () => {
+  it('projeto antigo, sem o campo do estilo: 16:9 lado a lado e 9:16 Green screen no canto com o recorte pronto', async () => {
     const doc = withCamera(baseProject())
     expect(doc.cameraStyle).toBeUndefined()
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
@@ -506,7 +506,7 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
     expect(autoSegments).toEqual([])
     expect(horizontal).toBe('side-by-side')
-    expect(vertical).toBe('greenscreen')
+    expect(vertical).toBe('greenscreen-corner')
   })
   it('sem o recorte (motor sem preparo), qualquer estilo cai no quadro ao lado e no Câmera + tela, com o aviso na Revisão', async () => {
     const doc = withCamera(baseProject(), 'side-by-side')
@@ -548,28 +548,28 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     await writeFile(join(dir, 'events', 'clicks.jsonl'), lines(clicks))
     await writeFile(join(dir, 'events', 'keys.jsonl'), lines(keys))
   }
-  it('Quadro ao lado com o mouse sempre em movimento: lado a lado (16:9) e Green screen (9:16) do começo ao fim, sem bolinha nem V-A', async () => {
+  it('Quadro ao lado com o mouse sempre em movimento: lado a lado (16:9) e Green screen no canto (9:16) do começo ao fim, sem bolinha nem V-A', async () => {
     const doc = withCamera(baseProject(), 'side-by-side')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await busyScreen(w.dir)
     await w.service.start(id)
     const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
     expect(horizontal).toBe('side-by-side')
-    expect(vertical).toBe('greenscreen')
+    expect(vertical).toBe('greenscreen-corner')
     expect(autoSegments).toEqual([])
     const kinds = new Set([...w.project().layouts, ...w.project().vertical!.layouts].map((l) => l.layout))
     expect(kinds.has('bubble')).toBe(false)
     expect(kinds.has('screen-focus')).toBe(false)
-    expect(detailOf(w.project())).toMatch(/lado a lado no 16:9 e Green screen .* no 9:16, no vídeo inteiro/)
+    expect(detailOf(w.project())).toMatch(/lado a lado no 16:9 e Green screen no canto .* no 9:16, no vídeo inteiro/)
   })
-  it('Você sem fundo com o mouse sempre em movimento: Você sem fundo (16:9) e Green screen (9:16) do começo ao fim', async () => {
+  it('Você sem fundo com o mouse sempre em movimento: Você sem fundo (16:9) e Green screen no canto (9:16) do começo ao fim', async () => {
     const doc = withCamera(baseProject(), 'presenter')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await busyScreen(w.dir)
     await w.service.start(id)
     const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
     expect(horizontal).toBe('presenter')
-    expect(vertical).toBe('greenscreen')
+    expect(vertical).toBe('greenscreen-corner')
     expect(autoSegments).toEqual([])
   })
   it('a Revisão avisa quando a letra da página fica abaixo de 22 px no 9:16 (e não avisa quando fica legível)', async () => {
@@ -577,7 +577,7 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     small.screenTextPx = 3 // letra minúscula na fonte: nem o zoom máximo deixa a letra legível no quadro vertical
     const w = await world(small, { transcript: talk, camera: makeCamera({ matte: true }) })
     await w.service.start(id)
-    expect(detailOf(w.project())).toMatch(/Atenção: no 9:16 a letra da página fica com cerca de \d+ px \(Green screen\)/)
+    expect(detailOf(w.project())).toMatch(/Atenção: no 9:16 a letra da página fica com cerca de \d+ px \(Green screen no canto\)/)
     expect(detailOf(w.project())).toContain('abaixo de 22 px')
     const normal = withCamera(baseProject(), 'side-by-side')
     const w2 = await world(normal, { transcript: talk, camera: makeCamera({ matte: true }) })

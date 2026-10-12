@@ -472,14 +472,15 @@ export function ensureVertical(
   if (v && (v.zoomPreset !== undefined || v.zooms.length > 0 || v.layouts.length > 0)) return project
   const hasEvents = opts.hasCursorEvents ?? true
   const hasCamera = Boolean(project.sources.camera) && !project.style.camera.hidden
-  // Com câmera e tela, o 9:16 nasce no V-E "Green screen" no vídeo inteiro (a página em tela cheia atrás, você recortado embaixo). O recorte
+  // Com câmera e tela, o 9:16 nasce no V-E "Green screen no canto" no vídeo inteiro (a página em tela cheia atrás, você recortado num canto de baixo,
+  // no lado oposto ao foco: o pedido do usuário, "eu falando no canto"; o centrado fica à escolha no seletor). O recorte
   // já existe (`hasMatte`) ou vai existir (`matteExpected`: o motor está pronto e o editor o pede sozinho; até lá a prévia mostra o layout
   // anterior com o aviso). Sem recorte e sem motor, o comportamento de antes: Câmera + tela nos trechos sem atividade.
   if (hasCamera && project.sources.screen && (opts.hasMatte || opts.matteExpected)) {
     const zooms = hasEvents
       ? generateAutoZooms({ clicks: data.clicks, keys: data.keys, cursor: data.grid, duration: opts.durationMs, preset: zoomPresetFor('vertical', DEFAULT_VERTICAL_ZOOM_PRESET) })
       : []
-    return { ...project, vertical: { ...v, layout: 'greenscreen', layouts: [], zooms, ...(hasEvents ? { zoomPreset: DEFAULT_VERTICAL_ZOOM_PRESET } : {}) } }
+    return { ...project, vertical: { ...v, layout: 'greenscreen-corner', layouts: [], zooms, ...(hasEvents ? { zoomPreset: DEFAULT_VERTICAL_ZOOM_PRESET } : {}) } }
   }
   const zooms = hasEvents
     ? generateAutoZooms({ clicks: data.clicks, keys: data.keys, cursor: data.grid, duration: opts.durationMs, preset: zoomPresetFor('vertical', DEFAULT_VERTICAL_ZOOM_PRESET) })

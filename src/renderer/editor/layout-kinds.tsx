@@ -23,8 +23,8 @@ const T = t.editor.layout
 
 /** No 16:9. */
 export const KINDS: LayoutKind[] = ['bubble', 'side-by-side', 'presenter', 'screen', 'camera']
-/** No vertical: V-E Green screen (e no canto), V-A Cursor, V-B Câmera + tela, V-D Você sem fundo (tela em cima), V-C Tela na largura e só a câmera. */
-export const VERTICAL_KINDS: LayoutKind[] = ['greenscreen', 'greenscreen-corner', 'screen-center', 'screen-focus', 'stack', 'presenter', 'screen-wide', 'camera']
+/** No vertical: V-E Green screen no canto (o padrão, "eu falando no canto") e Green screen centrado, V-A Cursor, V-B Câmera + tela, V-D Você sem fundo (tela em cima), V-C Tela na largura e só a câmera. */
+export const VERTICAL_KINDS: LayoutKind[] = ['greenscreen-corner', 'greenscreen', 'screen-center', 'screen-focus', 'stack', 'presenter', 'screen-wide', 'camera']
 
 export const kindsOf = (vertical: boolean): LayoutKind[] => (vertical ? VERTICAL_KINDS : KINDS)
 

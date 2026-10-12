@@ -438,7 +438,7 @@ export const ptBR = {
         greenscreen:
           'Só no vertical. A página em tela cheia atrás, com a janela seguindo o que você mostra e a letra legível, e você sem o fundo embaixo, com cerca de metade da altura. É você explicando aquela página, como no TikTok. A legenda fica logo acima da sua cabeça.',
         'greenscreen-corner':
-          'Só no vertical. Como o Green screen, mas você aparece menor, num canto de baixo, sempre no lado oposto ao que está sendo mostrado. Troca de lado de tempos em tempos, só numa emenda ou num deslize curto.'
+          'Só no vertical, e é o padrão quando você tem câmera: a página em tela cheia atrás e você aparece menor, num canto de baixo, sempre no lado oposto ao que está sendo mostrado. Troca de lado de tempos em tempos, só numa emenda ou num deslize curto.'
       },
       legibility: {
         warn: (px: number, where: string): string => `A letra da página fica com cerca de ${px} px no vídeo vertical (${where}), abaixo de 22 px: difícil de ler no celular. Troque o layout destes trechos.`,
@@ -955,7 +955,7 @@ export const ptBR = {
       presenter: 'Você sem fundo (green screen)',
       help: {
         'side-by-side': 'Sua câmera em um quadro ao lado da tela, com o fundo original.',
-        presenter: 'Você na frente da tela, sem o fundo (no 16:9). O vertical usa o green screen em qualquer escolha. Mostre o tronco e as mãos com luz de frente.'
+        presenter: 'Você na frente da tela, sem o fundo (no 16:9). O vertical usa o green screen no canto em qualquer escolha. Mostre o tronco e as mãos com luz de frente.'
       }
     },
     mic: {

@@ -4,8 +4,9 @@
  * do título no 9:16, contra a escolha do usuário.
  *
  * Desde o F2 (green screen) o recorte do fundo nasce sozinho para TODA gravação com câmera, e os dois formatos se decidem à parte:
- *  - 9:16: com o recorte pronto, V-E "Green screen" (a página em tela cheia atrás, você recortado embaixo); sem ele, V-B (tela em cima,
- *    rosto embaixo, nada sobre o conteúdo). O estilo escolhido ao gravar não pesa aqui: o 9:16 é o formato do green screen;
+ *  - 9:16: com o recorte pronto, V-E "Green screen no canto" (a página em tela cheia atrás e você recortado num canto de baixo, no lado oposto ao
+ *    que está sendo mostrado: "eu falando no canto", como no TikTok); o "Green screen" centrado fica à escolha no seletor. Sem o recorte, V-B (tela
+ *    em cima, rosto embaixo, nada sobre o conteúdo). O estilo escolhido ao gravar não pesa aqui: o 9:16 é o formato do green screen;
  *  - 16:9: "Apresentador recortado" (hoje "Você sem fundo") com o recorte pronto SE foi a escolha ao gravar; senão (e no projeto antigo,
  *    sem o campo) "Quadro ao lado".
  *
@@ -21,5 +22,5 @@ export function cameraStyleLayouts(project: Pick<Project, 'cameraStyle' | 'sourc
   const hasCamera = !!project.sources.camera && !project.style.camera.hidden
   if (!hasScreen || !hasCamera) return null
   const presenter = project.cameraStyle === 'presenter' && matteReady
-  return { style: presenter ? 'presenter' : 'side-by-side', horizontal: presenter ? 'presenter' : 'side-by-side', vertical: matteReady ? 'greenscreen' : 'stack' }
+  return { style: presenter ? 'presenter' : 'side-by-side', horizontal: presenter ? 'presenter' : 'side-by-side', vertical: matteReady ? 'greenscreen-corner' : 'stack' }
 }

@@ -19,7 +19,7 @@ test.afterEach(async () => {
   }
 })
 
-const VERTICAL = ['greenscreen', 'greenscreen-corner', 'screen-center', 'screen-focus', 'stack', 'presenter', 'screen-wide', 'camera']
+const VERTICAL = ['greenscreen-corner', 'greenscreen', 'screen-center', 'screen-focus', 'stack', 'presenter', 'screen-wide', 'camera']
 const HORIZONTAL = ['bubble', 'side-by-side', 'presenter', 'screen', 'camera']
 
 test('a barra de troca de layout: miniatura de cada layout, valendo pelo vídeo e pelo corte, e o aviso do recorte que ainda não existe', async () => {
@@ -36,7 +36,7 @@ test('a barra de troca de layout: miniatura de cada layout, valendo pelo vídeo 
   await expect(page.getByTestId('layout-quick-greenscreen')).toHaveCount(0)
   await expect(page.getByTestId('layout-quick-presenter')).toContainText('Você sem fundo')
 
-  // 9:16: os layouts do vertical, com o Green screen à frente e uma miniatura (SVG) em cada botão
+  // 9:16: os layouts do vertical, com o Green screen no canto (o padrão) à frente e uma miniatura (SVG) em cada botão
   await page.getByTestId('ratio-9-16').click()
   await expect(page.getByTestId('preview-frame')).toHaveAttribute('data-format', 'vertical')
   await expect(page.getByTestId('preview-canvas')).toHaveAttribute('data-ready', 'true', { timeout: 20_000 })

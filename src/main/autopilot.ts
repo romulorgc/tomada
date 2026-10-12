@@ -302,7 +302,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
             const v = p.vertical ?? defaultVerticalEdit()
             return { ...p, style: { ...p.style, defaultLayout: styled.horizontal }, layouts: p.layouts.filter((s) => s.origin !== 'auto'), vertical: { ...v, layout: styled.vertical, layouts: v.layouts.filter((s) => s.origin !== 'auto') } }
           })
-          const vertical = styled.vertical === 'greenscreen' ? 'Green screen (você sem fundo, página atrás) no 9:16' : 'câmera embaixo da tela no 9:16'
+          const vertical = styled.vertical === 'greenscreen-corner' ? 'Green screen no canto (você sem fundo no canto, página atrás) no 9:16' : styled.vertical === 'greenscreen' ? 'Green screen (você sem fundo, página atrás) no 9:16' : 'câmera embaixo da tela no 9:16'
           const horizontal = styled.horizontal === 'presenter' ? 'Você sem fundo no 16:9' : 'lado a lado no 16:9'
           return `${notice}${horizontal} e ${vertical}, no vídeo inteiro. A bolinha só por escolha sua.${await legibilityNotice(id, e, t?.words)}`
         }
