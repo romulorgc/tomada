@@ -81,10 +81,10 @@ describe('juntar pedaços do recorte sem recodificar', () => {
 })
 
 describe('gabaritos em Python do recorte em pedaços (no venv do app)', () => {
-  it('a retomada produz os mesmos instantes que a rodada inteira; os pedaços só ganham o nome final inteiros; nada passa de 1080p', async () => {
+  it('a retomada produz os mesmos instantes que a rodada inteira; os pedaços só ganham o nome final inteiros; nada passa de 1080p; roda com prioridade baixa e morre com o app', async () => {
     const base = ensureToolsDir()
     const result = await runProcess(join(base, 'python', 'Scripts', 'python.exe'), [join(ROOT, 'tests', 'helpers', 'matte_chunks_checks.py')], { env: { PYTHONUTF8: '1' }, timeoutMs: 60_000 })
-    expect(result.stderr).toContain('Ran 6 tests')
+    expect(result.stderr).toContain('Ran 8 tests')
     expect(result.stderr).toContain('OK')
   })
 })

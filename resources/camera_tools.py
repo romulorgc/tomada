@@ -354,7 +354,11 @@ def _lower_priority():
             import ctypes
 
             below_normal = 0x00004000
-            ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), below_normal)
+            kernel32 = ctypes.windll.kernel32
+            # os tipos dos argumentos importam em 64 bits: o pseudo-handle do processo atual (-1) não pode virar um inteiro de 32 bits
+            kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+            kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), below_normal)
         else:
             os.nice(10)
     except Exception:  # noqa: BLE001 - prioridade e so cortesia
@@ -374,13 +378,18 @@ def _watch_parent(pid):
 
             synchronize = 0x00100000
             wait_timeout = 0x102
-            handle = ctypes.windll.kernel32.OpenProcess(synchronize, False, int(pid))
+            kernel32 = ctypes.windll.kernel32
+            kernel32.OpenProcess.restype = ctypes.c_void_p
+            kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+            kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            handle = kernel32.OpenProcess(synchronize, False, int(pid))
             if not handle:
                 return False
             try:
-                return ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+                return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
             finally:
-                ctypes.windll.kernel32.CloseHandle(handle)
+                kernel32.CloseHandle(handle)
         try:
             os.kill(int(pid), 0)
             return True

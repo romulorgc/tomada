@@ -7,7 +7,10 @@ bibliotecas padrao no topo) e prova as regras que a retomada precisa:
 """
 import importlib.util
 import os
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -152,6 +155,51 @@ class MatteChunkChecks(unittest.TestCase):
                 sink(b"q", slot)
             sink.abort()
             self.assertEqual(sorted(os.listdir(tmp)), ["p0000.mp4", "p0001.mp4.tmp"])
+
+
+class BackgroundBehaviour(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "prioridade do Windows")
+    def test_lower_priority_puts_the_process_below_normal(self):
+        code = """
+import ctypes, importlib.util, sys
+spec = importlib.util.spec_from_file_location('camera_tools', sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+k = ctypes.windll.kernel32
+k.GetCurrentProcess.restype = ctypes.c_void_p
+k.GetPriorityClass.argtypes = [ctypes.c_void_p]
+before = k.GetPriorityClass(k.GetCurrentProcess())
+m._lower_priority()
+print(before, k.GetPriorityClass(k.GetCurrentProcess()))
+"""
+        script = str(Path(__file__).parents[2] / "resources/camera_tools.py")
+        out = subprocess.run([sys.executable, "-c", code, script], capture_output=True, text=True, timeout=30).stdout.split()
+        self.assertEqual(out[1], str(0x4000), out)  # BELOW_NORMAL_PRIORITY_CLASS
+
+    def test_worker_dies_when_its_parent_app_dies(self):
+        # o "app" (pai) morre sem avisar: o Python do recorte (neto) se encerra sozinho, sem ficar escrevendo na pasta do projeto
+        parent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        script = str(Path(__file__).parents[2] / "resources/camera_tools.py")
+        code = """
+import importlib.util, sys, time
+spec = importlib.util.spec_from_file_location('camera_tools', sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m._watch_parent(int(sys.argv[2]))
+time.sleep(120)
+"""
+        child = subprocess.Popen([sys.executable, "-c", code, script, str(parent.pid)])
+        try:
+            time.sleep(2.0)
+            self.assertIsNone(child.poll(), "o trabalhador não pode sair enquanto o app vive")
+            parent.kill()
+            parent.wait(timeout=10)
+            deadline = time.time() + 6.0
+            while child.poll() is None and time.time() < deadline:
+                time.sleep(0.1)
+            self.assertEqual(child.poll(), 4, "o trabalhador deveria ter saído sozinho com código 4")
+        finally:
+            for p in (child, parent):
+                if p.poll() is None:
+                    p.kill()
 
 
 if __name__ == "__main__":

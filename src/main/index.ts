@@ -207,7 +207,9 @@ async function main(): Promise<void> {
     read: (id) => store.read(id),
     emit,
     // o recorte do fundo é trabalho de fundo: dá lugar à exportação, à transcrição e à prévia (a placa de vídeo é uma só)
-    gpu: gpu.gate
+    gpu: gpu.gate,
+    // só teste: pedaços curtos (segundos) para provar a retomada com um projeto pequeno
+    ...(Number(process.env.TOMADA_TEST_MATTE_CHUNK_S) > 0 ? { chunkSeconds: Number(process.env.TOMADA_TEST_MATTE_CHUNK_S) } : {})
   })
   const vault: KeyVault = {
     available: () => safeStorage.isEncryptionAvailable(),

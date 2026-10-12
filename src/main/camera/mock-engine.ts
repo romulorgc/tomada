@@ -16,6 +16,8 @@ export type MockCameraOptions = {
   ready: boolean
   /** Quanto a análise demora (ms): deixa ver o andamento. */
   delayMs?: number
+  /** Só o recorte do fundo (ms, no total): padrão `delayMs`. Deixa o rosto rápido e o recorte lento o bastante para fechar o app no meio. */
+  matteDelayMs?: number
   stepMs?: number
   failStep?: string
   /** Centro do rosto sintético no início e no fim da gravação (fração da imagem). Padrão: 0,32 → 0,68, para o recorte andar. */
@@ -123,7 +125,7 @@ export function createMockCamera(opts: MockCameraOptions): CameraEngine {
         await mkdir(parts.dir, { recursive: true })
         const done = contiguousChunks(parts.done)
         const total = Math.max(1, Math.ceil(o.durationMs / (parts.chunkSeconds * 1000)))
-        const perChunkMs = opts.delayMs ? opts.delayMs / total : 0
+        const perChunkMs = (opts.matteDelayMs ?? opts.delayMs ?? 0) / total
         chunks = [...done]
         for (let i = done.length; i < total; i++) {
           const ticks = 5
@@ -150,11 +152,11 @@ export function createMockCamera(opts: MockCameraOptions): CameraEngine {
           }
         }
       } else {
-        if (opts.delayMs) {
+        if (opts.matteDelayMs ?? opts.delayMs) {
           const steps = 5
           for (let i = 1; i <= steps; i++) {
             if (o.signal?.aborted) throw new Error('Cancelado.')
-            await new Promise((r) => setTimeout(r, opts.delayMs! / steps))
+            await new Promise((r) => setTimeout(r, (opts.matteDelayMs ?? opts.delayMs!) / steps))
             o.onProgress?.(i / (steps + 1))
           }
         }
