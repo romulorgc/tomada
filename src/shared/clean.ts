@@ -486,8 +486,9 @@ function shapeItems(items: CleanItem[], words: readonly Word[], input: CleanInpu
   report.dropped = shaped.dropped
   report.filled = shaped.fill.length
 
-  const kept: CleanItem[] = items.filter((it, id) => it.kind !== 'cut' || shaped.keep.has(id))
-  for (const f of shaped.fill) kept.push({ kind: 'cut', reason: 'silence', category: 'silence', start: Math.round(f.start), end: Math.round(f.end), label: 'resto entre dois cortes' })
+  const survivors: CleanItem[] = items.filter((it, id) => it.kind !== 'cut' || shaped.keep.has(id))
+  for (const f of shaped.fill) survivors.push({ kind: 'cut', reason: 'silence', category: 'silence', start: Math.round(f.start), end: Math.round(f.end), label: 'resto entre dois cortes' })
+  const kept = joinSilencePieces(survivors)
 
   // contagens: refeitas a partir do que sobrou
   for (const key of Object.keys(counts) as CleanCategory[]) counts[key] = 0
@@ -503,6 +504,23 @@ function shapeItems(items: CleanItem[], words: readonly Word[], input: CleanInpu
   if (report.keptGapSpeech > 0) report.notices.push(`${report.keptGapSpeech} trecho(s) de fala sem palavra transcrita foram mantidos (o volume é de fala, não de hesitação). Confira na Revisão.`)
   if (report.unsafeEdges > 0) report.notices.push(`${report.unsafeEdges} corte(s) não foram feitos porque a borda cairia no meio da fala.`)
   return kept
+}
+
+/**
+ * As lascas preenchidas e os silêncios que se tocam viram UM item só ("pausa de 1,4 s"): a lista da Revisão mostra uma pausa por
+ * emenda, não os cinco pedaços de que ela foi feita.
+ */
+function joinSilencePieces(items: CleanItem[]): CleanItem[] {
+  const silences = items.filter((it) => it.kind === 'cut' && it.category === 'silence').sort((a, b) => a.start - b.start || a.end - b.end)
+  const joined: CleanItem[] = []
+  for (const it of silences) {
+    const last = joined[joined.length - 1]
+    if (last && it.start <= last.end) {
+      last.end = Math.max(last.end, it.end)
+      last.label = `pausa de ${fmtSeconds(last.end - last.start)}`
+    } else joined.push({ ...it })
+  }
+  return [...items.filter((it) => !(it.kind === 'cut' && it.category === 'silence')), ...joined]
 }
 
 /** Une os intervalos que se tocam ou se sobrepõem. */

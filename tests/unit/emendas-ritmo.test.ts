@@ -372,6 +372,19 @@ describe('limpeza com ritmo (computeClean)', () => {
     expect(noisy.pacing!.notices.join(' ')).toContain('Voz baixa demais')
   })
 
+  it('a lasca de ruído entre duas pausas é preenchida e os pedaços viram UM item de pausa na lista', () => {
+    // pausa de 2000 a 4700 interrompida por 100 ms de estalo (sem palavra): os dois cortes deixariam 380 ms no meio
+    const ws = w([['a', 0, 2000], ['b', 4700, 8000], ['c', 8300, 12_000]])
+    const lv = levelsFor(ws, 12_500, -25, -60, [{ range: [3000, 3100], db: -30 }])
+    const r = computeClean({ words: ws, durationMs: 12_500, levels: lv }, { ...base, silence: 'tutorial' })
+    const pausas = r.items.filter((i) => i.category === 'silence' && i.start < 5000)
+    expect(pausas).toHaveLength(1)
+    expect(pausas[0]).toMatchObject({ start: 2187, end: 4607 })
+    expect(pausas[0]!.label).toBe('pausa de 2,4 s')
+    expect(r.pacing!.filled).toBe(1)
+    expect(r.counts.silence).toBe(r.items.filter((i) => i.category === 'silence').length)
+  })
+
   it('cortes fixos (marcas de "errei") entram na conta de emendas', () => {
     const fixed = Array.from({ length: 3 }, (_, i) => ({ start: 5000 + i * 9000, end: 5400 + i * 9000 }))
     const r = computeClean({ words, durationMs: D, levels, fixedCuts: fixed }, base)
