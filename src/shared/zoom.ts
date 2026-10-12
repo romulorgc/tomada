@@ -397,8 +397,9 @@ export function computeCameraPath(
   const follows = view.w < 0.999 || view.h < 0.999
 
   let sScale = { x: 1, v: 0 }
-  // a rampa de escala (ease-out): a escala de onde saiu, para onde vai, quando começou e quanto dura
-  const rampSpan = Math.max(0.1, maxScale - 1)
+  // a rampa de escala (ease-out): a escala de onde saiu, para onde vai, quando começou e quanto dura. `rampRef` é o quanto o zoom
+  // vigente sobe (escala − 1): uma rampa interrompida no meio, que percorre menos que isso, leva proporcionalmente menos tempo.
+  let rampRef = Math.max(0.1, maxScale - 1)
   let tween = { from: 1, to: 1, t0: 0, dur: 1 }
   let sCx = { x: 0.5, v: 0 }
   let sCy = { x: 0.5, v: 0 }
@@ -422,6 +423,7 @@ export function computeCameraPath(
     // Sem segmento, o recorte base que segue o cursor faz de conta que há um (escala 1, foco no cursor).
     const base = active === null && follows
     const eff = base ? BASE_FOLLOW : active
+    if (eff && eff.scale > 1) rampRef = Math.max(0.1, eff.scale - 1)
 
     let targetScale = 1
     let sweeping = false
@@ -478,7 +480,7 @@ export function computeCameraPath(
       if (ramp) {
         if (Math.abs(targetScale - tween.to) > 1e-9) {
           // alvo novo: a rampa parte de onde a escala está agora; um trecho curto do caminho (zoom interrompido) leva proporcionalmente menos
-          tween = { from: sScale.x, to: targetScale, t0: tMs, dur: ramp.ms * clamp(Math.abs(targetScale - sScale.x) / rampSpan, 0.4, 1) }
+          tween = { from: sScale.x, to: targetScale, t0: tMs, dur: ramp.ms * clamp(Math.abs(targetScale - sScale.x) / rampRef, 0.4, 1) }
         }
         sScale = { x: tween.from + (tween.to - tween.from) * easeOutCubic((tMs - tween.t0) / tween.dur), v: 0 }
       } else sScale = springStep(sScale.x, sScale.v, targetScale, scaleSpring, dt)

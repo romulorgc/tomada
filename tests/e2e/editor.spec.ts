@@ -391,10 +391,13 @@ test('título editável, salvamento visível (salvo → salvando → salvo), e e
 
   // indicador: uma edição passa por "salvando" e volta a "salvo", com o arquivo no disco
   await page.getByTestId('tab-camera').click()
+  // o padrão do projeto é a câmera ESPELHADA (33b7e5f, 09/10): o clique em "Espelhar" a desliga
+  const mirrorBefore = readSaved(s).style.camera.mirror
+  expect(mirrorBefore).toBe(true)
   await page.getByTestId('camera-mirror').click()
   await expect(page.getByTestId('save-status')).toHaveAttribute('data-status', /saving|saved/)
   await waitSaved(s)
-  expect(readSaved(s).style.camera.mirror).toBe(true)
+  expect(readSaved(s).style.camera.mirror).toBe(!mirrorBefore)
 
   // erro: o project.json vira uma PASTA (a gravação atômica não consegue renomear por cima)
   const file = join(s.projects, EXAMPLE_FOLDER, 'project.json')
@@ -411,7 +414,7 @@ test('título editável, salvamento visível (salvo → salvando → salvo), e e
   await page.getByTestId('save-retry').click()
   await waitSaved(s)
   const recovered = readSaved(s)
-  expect(recovered.style.camera.mirror).toBe(false)
+  expect(recovered.style.camera.mirror).toBe(mirrorBefore) // dois cliques: voltou ao padrão
   expect(original.length).toBeGreaterThan(100)
   s.problems.length = 0 // a falha do disco é registrada de propósito
 })
@@ -425,6 +428,8 @@ test('câmera: forma, tamanho, borda, espelhar e esconder; posição pela grade 
   })
   await openEditor(s)
   await page.getByTestId('tab-camera').click()
+  const mirrorDefault = readSaved(s).style.camera.mirror
+  expect(mirrorDefault).toBe(true) // padrão: espelhada (33b7e5f)
 
   await page.getByTestId('camera-shape-square').click()
   await page.getByTestId('camera-size').fill('0.4')
@@ -436,7 +441,7 @@ test('câmera: forma, tamanho, borda, espelhar e esconder; posição pela grade 
   expect(cam.shape).toBe('square')
   expect(cam.size).toBeCloseTo(0.4, 3)
   expect(cam.borderWidth).toBe(8)
-  expect(cam.mirror).toBe(true)
+  expect(cam.mirror).toBe(!mirrorDefault) // o clique em "Espelhar" DESLIGA de verdade
   expect(cam.shrinkOnZoom).toBe(false) // o padrão é encolher: o clique desligou
 
   // posição: arrastar a bolha na prévia até o canto superior esquerdo

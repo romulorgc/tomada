@@ -300,6 +300,21 @@ describe('rampa do zoom do 16:9: 0,9 s em ease-out cúbica (a curva do Screen St
     }
   })
 
+  it('um zoom manual grande em outro ponto do vídeo NÃO encurta a rampa dos outros (a duração parte da escala de cada zoom)', () => {
+    const mixed: Zoom[] = [
+      { id: 'a', start: 3000, end: 9000, scale: 1.6, focus: 'auto', origin: 'auto' },
+      { id: 'm', start: 20_000, end: 26_000, scale: 4, focus: 'auto', origin: 'manual' }
+    ]
+    const p = computeCameraPath({ zooms: mixed }, grid, { durationMs: 30_000, scaleRamp: { ms: ZOOM_RAMP_MS } })
+    const s = (t: number): number => sampleCameraPath(p, t).scale
+    expect((s(3300) - 1) / 0.6).toBeCloseTo(0.704, 2) // 1,6× em 0,3 s: a mesma curva de antes
+    expect(s(3900)).toBeCloseTo(1.6, 3)
+    expect((s(20_300) - 1) / 3).toBeCloseTo(0.704, 2) // o de 4× também leva 0,9 s
+    expect(s(20_900)).toBeCloseTo(4, 3)
+    expect(s(9900)).toBeCloseTo(1, 3) // e a saída do de 1,6× leva 0,9 s, não 0,36
+    expect((1.6 - s(9300)) / 0.6).toBeCloseTo(0.704, 2)
+  })
+
   it('um zoom interrompido (outro alvo no meio da rampa) parte de onde a escala estava, sem pulo', () => {
     const two: Zoom[] = [{ id: 'z', start: 3000, end: 3500, scale: 1.6, focus: 'auto', origin: 'manual' }]
     const p = computeCameraPath({ zooms: two }, grid, { durationMs: 8000, scaleRamp: { ms: ZOOM_RAMP_MS } })
