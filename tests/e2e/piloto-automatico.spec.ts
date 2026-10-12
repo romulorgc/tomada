@@ -107,7 +107,9 @@ test('grava com motor real, marca errei e chega sem clique à Revisão com YouTu
   let compared=0, discriminating=0
   const mismatches:string[]=[], trace:string[]=[]
   for(const [name,file,at] of [['gravacao',cameraFile,3000],['youtube',youtubeFile,3000]] as const) execFileSync('ffmpeg',['-v','error','-y','-ss',String(at/1000),'-i',file,'-frames:v','1',join(SCREENS_DIR,`m4d-marcador-${name}.png`)])
-  for(let out=800;out<expectedMs-1200;out+=420) {
+  // passo de 210 ms (era 420): a limpeza nova corta menos (pausas só a partir de 0,6 s, no máximo 6 emendas por minuto), e com menos
+  // cortes há menos pontos em que um exportador que ignorasse o "errei" mostraria outra cor; mais pontos mantêm o teste capaz de ver a diferença
+  for(let out=800;out<expectedMs-1200;out+=210) {
     const exported=[-60,0,60].map((d) => markerAt(youtubeFile,out+d))
     const source=[-60,0,60].map((d) => markerAt(cameraFile,sourceAt(out+d)))
     trace.push(`${out}: exportado ${exported.join(',')} | gravação ${source.join(',')}`)

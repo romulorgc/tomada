@@ -114,9 +114,11 @@ test('limpeza automática: aplica UMA vez ao projeto recém-transcrito, avisa, d
   await openEditor(s)
   const { page } = s
   await expect(page.getByTestId('toast').first()).toContainText('Limpeza automática aplicada')
-  await waitCuts(s, 6) // as 3 pausas, as duas pontas e o "hã"
+  // F1: o padrão é o ritmo "Aula" (só pausa a partir de 0,6 s, bordas no vale de energia): a pausa longa, o silêncio colado no
+  // "hã" e a cauda do vídeo saem; as pausas curtas e a cabeça (menos de 0,6 s) ficam, e o "hã" sai.
+  await waitCuts(s, 4)
   expect(readSaved(s).autoCleaned).toBe(true)
-  expect(readSaved(s).cuts.filter((c) => c.reason === 'silence')).toHaveLength(5)
+  expect(readSaved(s).cuts.filter((c) => c.reason === 'silence')).toHaveLength(3)
   expect(readSaved(s).cuts.filter((c) => c.reason === 'filler')).toHaveLength(1)
 
   // UM passo desfaz tudo; a marca de "já aplicada" fica

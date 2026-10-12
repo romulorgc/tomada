@@ -213,27 +213,28 @@ test('Limpeza: prévia do ganho, aplicar vira UM passo desfazível, revisar por 
   await openText(s)
   await page.getByTestId('text-pane-clean').click()
   await expect(page.getByTestId('clean-section')).toBeVisible()
-  // padrão: silêncio Rápido + hesitações cortando
+  // padrão (F1): silêncio no ritmo "Aula" (pausa a partir de 0,6 s, 6 emendas por minuto) + hesitações cortando
   await expect(page.getByTestId('clean-silence-tutorial')).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByTestId('clean-preview-text')).toHaveText(/^Sai \d+,\d s · de 0:2\d para 0:1\d$/)
-  await expect(page.getByTestId('clean-counts')).toContainText('silêncios: 5')
+  await expect(page.getByTestId('clean-preview-text')).toHaveText(/^Sai [23],\d s · de 0:2\d para 0:2\d$/)
+  await expect(page.getByTestId('clean-counts')).toContainText('silêncios: 3')
   await expect(page.getByTestId('clean-counts')).toContainText('hesitações: 1')
   const total = await outputTotalMs(page)
 
   await page.getByTestId('clean-apply').click()
   await waitSaved(s)
   const cuts = savedCuts(s)
-  // as 3 pausas do meio e as duas pontas (antes da 1ª palavra e depois da última: o corte vai até a ponta do vídeo)
-  expect(cuts.filter((c) => c.reason === 'silence')).toHaveLength(5)
+  // a pausa longa, o silêncio colado no "hã" e a cauda (depois da última palavra: o corte vai até a ponta do vídeo); as pausas
+  // curtas e a cabeça, com menos de 0,6 s, ficam como respiro
+  expect(cuts.filter((c) => c.reason === 'silence')).toHaveLength(3)
   expect(cuts.filter((c) => c.reason === 'filler')).toHaveLength(1)
-  expect(await outputTotalMs(page)).toBeLessThan(total - 3000)
+  expect(await outputTotalMs(page)).toBeLessThan(total - 2000)
   await expect(page.getByTestId('toast').first()).toContainText('Limpeza aplicada')
   // depois de aplicar não há mais o que fazer com as mesmas escolhas
   await expect(page.getByTestId('clean-apply')).toBeDisabled()
 
   // revisão por motivo
   await expect(page.getByTestId('review-silence')).toBeVisible()
-  await expect(page.getByTestId('review-silence').getByTestId('review-row')).toHaveCount(5)
+  await expect(page.getByTestId('review-silence').getByTestId('review-row')).toHaveCount(3)
   await expect(page.getByTestId('review-filler').getByTestId('review-row')).toHaveCount(1)
   await expect(page.getByTestId('review-filler').getByTestId('review-row').first()).toContainText('hã')
   const row = page.getByTestId('review-silence').getByTestId('review-row').first()
@@ -300,8 +301,10 @@ test('Limpeza: recomeços da IA entram na conta e no corte', async () => {
 })
 
 test('Limpeza: recomeços que cortam mais de 30% do vídeo pedem confirmação antes de aplicar', async () => {
+  // F1: o corte só acontece onde há pausa para a borda (nunca com 0 ms entre palavras coladas): o recomeço termina na palavra 27, que
+  // tem 1,5 s de pausa depois (de 0 a 27 são ~73% do vídeo). Antes terminava na 30, colada na 31, e agora a limpeza recusa esse corte.
   const file = join(tmpdir(), `tomada-e2e-muitos-${process.pid}.json`)
-  writeFileSync(file, JSON.stringify([{ match: '', response: { retakes: [{ from: 0, to: 30, reason: 'tudo errado' }] } }]))
+  writeFileSync(file, JSON.stringify([{ match: '', response: { retakes: [{ from: 0, to: 27, reason: 'tudo errado' }] } }]))
   s = await launchTomada({ env: { TOMADA_LLM_RESPONSES: file } })
   const { page } = s
   await openText(s)

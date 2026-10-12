@@ -8,6 +8,7 @@ import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { exportFileName, outputFrameCount } from '../../src/shared/export'
+import { measureSeams, SEAM_LIMITS } from '../../src/shared/seam-proof'
 import { keptRanges, outputDuration, sourceToOutput } from '../../src/shared/timeline'
 import type { Project } from '../../src/shared/types'
 import { copyTree, FIXTURES_DIR } from '../helpers/fs'
@@ -151,7 +152,7 @@ test('SINCRONIA com flash-bipe: o clarão e o início do bipe caem juntos (< 1 q
   console.log(`desvios de sincronia (ms):\n  ${deviations.join('\n  ')}`)
 })
 
-test('SEM ESTALO nas emendas: o salto de amostra na borda do corte não destoa da vizinhança', async () => {
+test('SEM ESTALO e SEM BURACO nas emendas: o salto de amostra não destoa da vizinhança e o nível não cai mais de 6 dB', async () => {
   test.setTimeout(240_000)
   s = await launchTomada()
   await expect(s.page.getByTestId('project-card')).toHaveCount(1)
@@ -180,15 +181,18 @@ test('SEM ESTALO nas emendas: o salto de amostra na borda do corte não destoa d
     return m
   }
   const peak = peakOf(0, 48_000 * 4)
+  const proof = measureSeams(Float32Array.from(pcm, (v) => v / 32768), 48_000, [cutA, cutB].map((c) => sourceToOutput(c.start, kept)), pcm.length / 48)
   for (const [i, cut] of [cutA, cutB].entries()) {
     const seam = sourceToOutput(cut.start, kept) // instante de SAÍDA da emenda (ms)
     const atSeam = maxJump(seam - 1, seam + 1)
     const around = Math.max(maxJump(seam - 80, seam - 40), maxJump(seam + 40, seam + 80))
-    const level = peakOf(Math.round((seam - 1) * sr), Math.round((seam + 1) * sr))
-    console.log(`emenda ${i + 1} em ${seam} ms: salto ${atSeam}, vizinhança ${around}, nível no ponto ${level}, pico ${peak}`)
+    // F1: a emenda é um cruzamento de potência igual, não um fade a zero: a queda de nível medida no arquivo (o mesmo medidor da
+    // prova de emenda) fica dentro de 6 dB; o fade antigo deixava ~45 dB de buraco
+    const drop = proof.measures[i]!.dropDb
+    console.log(`emenda ${i + 1} em ${seam} ms: salto ${atSeam}, vizinhança ${around}, queda de nível ${drop.toFixed(1)} dB, pico ${peak}`)
     expect(around, 'a vizinhança precisa ter som (a emenda cai no meio da fala)').toBeGreaterThan(100)
     expect(atSeam).toBeLessThanOrEqual(around) // não destoa da vizinhança
-    expect(level).toBeLessThan(peak * 0.05) // o fade leva a onda quase a zero na emenda
+    expect(drop, 'sem buraco no som').toBeLessThanOrEqual(SEAM_LIMITS.maxDropDb)
   }
 })
 
