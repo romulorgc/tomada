@@ -128,15 +128,15 @@ const CASES: Case[] = [
   }
 ]
 
-test('goldens: os 4 estilos de legenda e os 3 layouts verticais (V-A com título de gancho, V-B, V-C)', async () => {
-  test.setTimeout(180_000)
+/** Os goldens de um formato: o 16:9 é da F3 e o 9:16 da F2 (os dois eram um teste só; um golden de 9:16 vermelho escondia o resto). */
+async function checkGoldens(kind: 'horizontal' | 'vertical'): Promise<void> {
   s = await launchTomada()
   await expect(s.page.getByTestId('project-card')).toHaveCount(1)
   const lab = await openLab(s.app)
   const w = words(s)
 
   const results: string[] = []
-  for (const c of CASES) {
+  for (const c of CASES.filter((c) => c.format.kind === kind)) {
     const project = readProject(s)
     c.edit(project)
     const [png] = await renderStills(lab, { project, times: [c.t], format: c.format, words: w })
@@ -147,6 +147,16 @@ test('goldens: os 4 estilos de legenda e os 3 layouts verticais (V-A com título
     expect(r.ratio, `${c.name} difere do golden em ${(r.ratio * 100).toFixed(3)}% (ver test-results/goldens-diff)`).toBeLessThanOrEqual(0.004)
   }
   console.log(results.join('\n'))
+}
+
+test('goldens 16:9: legenda Natural na bolha', async () => {
+  test.setTimeout(180_000)
+  await checkGoldens('horizontal')
+})
+
+test('goldens 9:16 (F2): os estilos de legenda e os layouts verticais (V-A com título de gancho, V-B, V-C)', async () => {
+  test.setTimeout(180_000)
+  await checkGoldens('vertical')
 })
 
 // ---------------------------------------------------------------------------------------------------------------------

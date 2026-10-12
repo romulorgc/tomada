@@ -112,14 +112,14 @@ const SCENES: Scene[] = [
   }
 ]
 
-test('goldens: cada layout, zoom em movimento e assentado, transição, ripple, cursor sintético, halo, estilos e recorte vertical', async () => {
-  test.setTimeout(180_000)
+/** Os goldens de um formato: o 16:9 é da F3 e o 9:16 da F2 (os dois eram um teste só; um golden de 9:16 vermelho escondia o resto). */
+async function checkGoldens(kind: 'horizontal' | 'vertical'): Promise<void> {
   s = await launchTomada()
   await expect(s.page.getByTestId('project-card')).toHaveCount(1)
   const lab = await openLab(s.app)
 
   const results: string[] = []
-  for (const scene of SCENES) {
+  for (const scene of SCENES.filter((scene) => (scene.format?.kind ?? 'horizontal') === kind)) {
     const project = readProject(s)
     scene.edit?.(project)
     const [png] = await renderStills(lab, { project, times: [scene.t], ...(scene.format ? { format: scene.format } : {}) })
@@ -130,6 +130,16 @@ test('goldens: cada layout, zoom em movimento e assentado, transição, ripple, 
     expect(r.ratio, `${scene.name} difere do golden em ${(r.ratio * 100).toFixed(3)}% (ver test-results/goldens-diff)`).toBeLessThanOrEqual(0.004)
   }
   console.log(results.join('\n'))
+}
+
+test('goldens 16:9: cada layout, zoom em movimento e assentado, transição, ripple, cursor sintético, halo e estilos', async () => {
+  test.setTimeout(180_000)
+  await checkGoldens('horizontal')
+})
+
+test('goldens 9:16 (F2): recorte vertical que segue o cursor', async () => {
+  test.setTimeout(180_000)
+  await checkGoldens('vertical')
 })
 
 test('o render é estável: o mesmo quadro, em ordens e execuções diferentes, sai igual (no máximo ruído de 1 nível em poucos pixels)', async () => {
