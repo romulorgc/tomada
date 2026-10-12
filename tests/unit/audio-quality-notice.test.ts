@@ -24,7 +24,7 @@ describe('aviso de áudio salvo e visível', () => {
     expect(audioQualityWarningMessages(analyzeAudioQuality(new Float32Array(48_000), 48_000))).toEqual([])
   })
 
-  it('voz bruta abaixo de -40 LUFS (caso real: -58,3 LUFS, pico -38 dBFS) vira UM aviso com o número, o motivo e o que fazer, e sobrevive ao arquivo', () => {
+  it('voz bruta abaixo de -35 LUFS (caso real: -58,3 LUFS, pico -38 dBFS) vira UM aviso com o número, o motivo e o que fazer, e sobrevive ao arquivo', () => {
     const project = createProject({ title: 'Gravação sintética' })
     const signal = new Float32Array(48_000).fill(0.01)
     project.audioQuality = analyzeAudioQuality(signal, 48_000, { activeRanges: [{ start: 0, end: 1000 }], integratedLufs: -58.3 })
@@ -37,8 +37,10 @@ describe('aviso de áudio salvo e visível', () => {
     expect(messages[0]).toMatch(/44 dB/)
     expect(messages[0]).toContain('volume de ENTRADA do microfone no Windows')
     expect(messages[0]).toContain('Ajustar sozinho')
-    // -40 LUFS ainda é aceitável: sem o aviso forte.
-    expect(analyzeAudioQuality(signal, 48_000, { integratedLufs: -40 }).warnings).not.toContain('very-low-level')
+    // −35 LUFS é o limite (F1): −34 ainda é aceitável, sem o aviso forte; −36 e G1 (−47,4) avisam.
+    expect(analyzeAudioQuality(signal, 48_000, { integratedLufs: -34 }).warnings).not.toContain('very-low-level')
+    expect(analyzeAudioQuality(signal, 48_000, { integratedLufs: -36 }).warnings).toContain('very-low-level')
+    expect(analyzeAudioQuality(signal, 48_000, { integratedLufs: -47.4 }).warnings).toContain('very-low-level')
   })
 
   it('rejeita métricas não finitas ou aviso desconhecido ao ler um projeto', () => {

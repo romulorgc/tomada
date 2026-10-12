@@ -6,15 +6,20 @@ import { computeClean, type CleanInput, type CleanOptions, type Levels } from '@
 import { planClean, type CleanPlan } from '@shared/clean-plan'
 import type { EditorStore } from '@shared/editor-store'
 import type { RetakeSpan } from '@shared/transcription'
-import type { Project, Transcript } from '@shared/types'
+import type { Project, Range, Transcript } from '@shared/types'
 
-export function buildCleanInput(transcript: Transcript, levels: Levels | null, durationMs: number, retakes?: readonly RetakeSpan[]): CleanInput {
+/** O que a limpeza lê além do texto e do nível: a tela ativa e os cortes que ela não decide (F1). */
+export type CleanExtras = { screenActive?: readonly Range[]; fixedCuts?: readonly Range[] }
+
+export function buildCleanInput(transcript: Transcript, levels: Levels | null, durationMs: number, retakes?: readonly RetakeSpan[], extras: CleanExtras = {}): CleanInput {
   return {
     words: transcript.words,
     durationMs,
     vad: transcript.vad,
     levels,
-    ...(retakes ? { retakes } : {})
+    ...(retakes ? { retakes } : {}),
+    ...(extras.screenActive && extras.screenActive.length > 0 ? { screenActive: extras.screenActive } : {}),
+    ...(extras.fixedCuts && extras.fixedCuts.length > 0 ? { fixedCuts: extras.fixedCuts } : {})
   }
 }
 

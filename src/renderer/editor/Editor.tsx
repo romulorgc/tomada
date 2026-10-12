@@ -7,7 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent a
 import { useStore } from 'zustand'
 import { createClipQueue, queueSummary } from '@shared/clip-queue'
 import { clipScene } from '@shared/clips'
-import { DEFAULT_CLEAN, type Levels } from '@shared/clean'
+import { DEFAULT_CLEAN, keptCutRanges, type Levels } from '@shared/clean'
+import { screenActivityOfData } from '@shared/screen-activity'
 import { createEditorStore } from '@shared/editor-store'
 import { eventsFromText } from '@shared/events'
 import { parseFaceTrack, type FaceTrack } from '@shared/face'
@@ -230,6 +231,10 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   // (cursor e cliques no espaço do recorte), então os zooms nascem do que o recorte mostra.
   const [rawData, setRawData] = useState<CursorData | null>(null)
   const [eventsError, setEventsError] = useState<string | null>(null)
+  // A tela ativa (clique, tecla, página mudando): a limpeza não corta silêncio por cima dela. Lida pela ref no momento de limpar.
+  const screenActive = useMemo(() => (rawData ? screenActivityOfData(rawData, durationMs) : []), [rawData, durationMs])
+  const screenActiveRef = useRef(screenActive)
+  screenActiveRef.current = screenActive
   useEffect(() => {
     let alive = true
     void (async () => {
@@ -598,7 +603,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
         if (!prefs.autoClean || !mounted.current) return
         // a marca fica FORA do desfazer: quem desfaz a limpeza não a vê voltar na próxima vez que abrir o projeto
         store.getState().change((d) => ({ ...d, autoCleaned: true }), { history: false })
-        const out = applyClean(store, buildCleanInput(tr, lv, durationMs), DEFAULT_CLEAN, durationMs)
+        const out = applyClean(store, buildCleanInput(tr, lv, durationMs, undefined, { screenActive: screenActiveRef.current, fixedCuts: keptCutRanges(store.getState().project, DEFAULT_CLEAN) }), DEFAULT_CLEAN, durationMs)
         if (out.applied && out.plan.deltaMs > 0) notify({ kind: 'info', text: t.editor.clean.autoDone(formatSpan(out.plan.deltaMs)) })
       } catch (err) {
         window.tomada.log({ level: 'error', message: 'Falha na limpeza automática', detail: messageOf(err) })
@@ -642,6 +647,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       engineRef,
       cursorData,
       rawData,
+      screenActive,
       eventsError,
       derived,
       sceneDerived,
@@ -663,7 +669,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, itemId, store, playback, cursorData, rawData, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
+    [detail, itemId, store, playback, cursorData, rawData, screenActive, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (

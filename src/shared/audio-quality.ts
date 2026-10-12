@@ -5,8 +5,11 @@ import type { Range } from './types'
 const BLOCK_MS = 20
 const CLIPPING_AMPLITUDE = 10 ** (-0.5 / 20)
 const MIN_ACTIVE_DBFS = -60
-/** Voz bruta abaixo disto (LUFS integrado) é baixa demais: o `loudnorm` do pós subiria ~26 dB ou mais e o chiado junto. */
-export const VERY_LOW_LUFS = -40
+/**
+ * Voz bruta abaixo disto (LUFS integrado) é baixa demais: o `loudnorm` do pós subiria 21 dB ou mais e o chiado junto, e o nível
+ * já não separa a voz do ruído para decidir os cortes (F1). O normal é perto de −26 LUFS; G2 (boa) mediu −19,9 e G1 (ruim) −47,4.
+ */
+export const VERY_LOW_LUFS = -35
 
 export const audioQualitySchema = z.object({
   version: z.literal(1),

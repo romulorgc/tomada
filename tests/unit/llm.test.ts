@@ -264,7 +264,7 @@ describe('dicionário', () => {
 })
 
 describe('níveis do áudio', () => {
-  it('RMS em dBFS por quadro de 20 ms; silêncio digital = -120', () => {
+  it('RMS em dBFS por quadro de 10 ms; silêncio digital = -120', () => {
     const sr = 8000
     const per = (sr * LEVEL_FRAME_MS) / 1000 // 160 amostras
     const pcm = new Int16Array(per * 3)

@@ -3,7 +3,9 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, copyFile, rm, open, stat } from 'node:fs/promises'
 import { relative, join } from 'node:path'
 import { newPipeline, runPipeline, type AutopilotPrefs, type PipelineState, type PipelineStepId } from '@shared/autopilot'
-import { computeClean, DEFAULT_CLEAN } from '@shared/clean'
+import { computeClean, DEFAULT_CLEAN, keptCutRanges } from '@shared/clean'
+import { PACING } from '@shared/pacing'
+import { screenActivityOfData } from '@shared/screen-activity'
 import { protectionFingerprint, PROTECTION_CHANGED_MESSAGE } from '@shared/blur'
 import { planClean } from '@shared/clean-plan'
 import { heuristicClips, heuristicClipLabels, mergeSuggestedClips, titleFromText, type ClipDraft } from '@shared/clips'
@@ -223,7 +225,13 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           catch (err) { notice = `Recomeços pela IA indisponíveis: ${err instanceof Error ? err.message : String(err)}. ` }
         } else notice = 'Sem IA: recomeços automáticos ficaram de fora; apliquei a heurística e as marcas de errei. '
         const options = { ...DEFAULT_CLEAN, retakes: true }
-        const result = computeClean({ words: t.words, durationMs: duration, vad: t.vad, levels, retakes }, options)
+        // Tela ativa (clique, tecla, página mudando): nenhum silêncio é cortado por cima dela. Os cortes que ela não decide (manuais e
+        // as marcas de "errei") contam como emenda no ritmo. Sem eventos legíveis, segue sem tela ativa e diz isso no resumo.
+        let screenActive: ReturnType<typeof screenActivityOfData> = []
+        try { screenActive = screenActivityOfData(await events(dir, duration, project), duration) }
+        catch (err) { notice += `Não consegui ler os eventos da tela (${err instanceof Error ? err.message : String(err)}): os cortes não levaram a tela em conta. ` }
+        const fixedCuts = [...keptCutRanges(project, options), ...marker.cuts.filter((c) => c.enabled).map((c) => ({ start: c.start, end: c.end }))]
+        const result = computeClean({ words: t.words, durationMs: duration, vad: t.vad, levels, retakes, screenActive, fixedCuts }, options)
         await regenerate(id, (p) => {
           const manual = p.cuts.filter((c) => c.origin === 'manual')
           // planClean recebe TODOS os cortes: ele já preserva os manuais e conta os identificadores deles ao numerar os novos.
@@ -232,7 +240,9 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           return { ...p, cuts: [...plan.cuts.filter((c) => c.origin === 'manual' || !manual.some((m) => m.reason === c.reason && m.start < c.end && m.end > c.start)).map((c) => ({ ...c, origin: c.origin ?? 'auto' as const })), ...markerCuts], mutes: plan.mutes, autoCleaned: true }
         })
         const fallback = marker.decisions.filter((d) => d.fallback).length
-        return `${notice}${result.items.length} decisões de limpeza; ${marker.cuts.length} marca(s) de errei.${fallback ? ` ${fallback} marca(s) sem fronteira: últimos 6 s, confira na Revisão.` : ''}`
+        const pace = result.pacing
+        const rhythm = pace ? ` Ritmo: ${pace.seams} emenda(s), ${pace.seamsPerMin.toFixed(1).replace('.', ',')} por minuto (teto ${PACING[pace.id].maxSeamsPerMin}).${pace.notices.length ? ` ${pace.notices.join(' ')}` : ''}` : ''
+        return `${notice}${result.items.length} decisões de limpeza; ${marker.cuts.length} marca(s) de errei.${fallback ? ` ${fallback} marca(s) sem fronteira: últimos 6 s, confira na Revisão.` : ''}${rhythm}`
       }
       case 'zooms': {
         const e = await events(dir, duration, project)

@@ -65,7 +65,7 @@ export type ShapeResult = {
   dropped: { sliver: number; speech: number; budget: number }
 }
 
-type Span = { start: number; end: number; gain: number; fixed: boolean; ids: number[] }
+type Span = { start: number; end: number; gain: number; fixed: boolean; ids: number[]; fills: Range[] }
 
 function mergeSpans(cuts: readonly ShapeCut[]): Span[] {
   const sorted = [...cuts].filter((c) => c.end > c.start).sort((a, b) => a.start - b.start || a.end - b.end)
@@ -77,7 +77,7 @@ function mergeSpans(cuts: readonly ShapeCut[]): Span[] {
       last.gain += c.gain
       last.fixed = last.fixed || c.fixed
       last.ids.push(c.id)
-    } else out.push({ start: c.start, end: c.end, gain: c.gain, fixed: c.fixed, ids: [c.id] })
+    } else out.push({ start: c.start, end: c.end, gain: c.gain, fixed: c.fixed, ids: [c.id], fills: [] })
   }
   return out
 }
@@ -93,8 +93,7 @@ export function countSeams(spans: readonly Pick<Range, 'start' | 'end'>[], durat
 
 export function shapeCuts(input: ShapeInput): ShapeResult {
   const { durationMs, speech, pacing } = input
-  let spans = mergeSpans(input.cuts)
-  const fill: Range[] = []
+  const spans = mergeSpans(input.cuts)
   const dropped = { sliver: 0, speech: 0, budget: 0 }
   const drop = (idx: number, why: keyof typeof dropped): void => {
     spans.splice(idx, 1)
@@ -117,22 +116,22 @@ export function shapeCuts(input: ShapeInput): ShapeResult {
           // lasca sem palavra: vira parte do corte. Entre dois cortes junta os dois; na ponta estica o corte até a ponta.
           if (prev && next) {
             if (prev.fixed && next.fixed) continue
-            fill.push({ start: a, end: b })
             prev.end = next.end
             prev.gain += next.gain + len
             prev.fixed = prev.fixed || next.fixed
             prev.ids.push(...next.ids)
+            prev.fills.push({ start: a, end: b }, ...next.fills)
             spans.splice(i, 1)
             changed = true
           } else if (prev && !prev.fixed) {
-            fill.push({ start: a, end: b })
             prev.end = b
             prev.gain += len
+            prev.fills.push({ start: a, end: b })
             changed = true
           } else if (next && !next.fixed) {
-            fill.push({ start: a, end: b })
             next.start = a
             next.gain += len
+            next.fills.push({ start: a, end: b })
             changed = true
           }
         } else {
@@ -170,8 +169,13 @@ export function shapeCuts(input: ShapeInput): ShapeResult {
     drop(worst, 'budget')
   }
 
+  // as lascas preenchidas só valem enquanto o corte a que foram coladas sobrevive
   const keep = new Set<number>()
-  for (const s of spans) for (const id of s.ids) keep.add(id)
+  const fill: Range[] = []
+  for (const s of spans) {
+    for (const id of s.ids) keep.add(id)
+    fill.push(...s.fills)
+  }
   return { keep, fill, dropped }
 }
 

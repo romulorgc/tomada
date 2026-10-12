@@ -5,7 +5,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from 'zustand'
-import { computeClean, retakeCutMs, retakesNeedConfirmation, type CleanCategory, type FillerMode, type SilenceMode } from '@shared/clean'
+import { computeClean, keptCutRanges, retakeCutMs, retakesNeedConfirmation, type CleanCategory, type FillerMode, type SilenceMode } from '@shared/clean'
 import { planClean } from '@shared/clean-plan'
 import { reenableCut, restoreCut } from '@shared/cuts'
 import { formatDuration, formatSpan, formatTimecode } from '@shared/format'
@@ -105,7 +105,7 @@ function ReviewGroup({
 }
 
 export function CleanSection() {
-  const { store, text, transcript, levels, durationMs, detail, engineRef } = useEditor()
+  const { store, text, transcript, levels, durationMs, detail, engineRef, screenActive } = useEditor()
   const notify = useApp((s) => s.notify)
   const project = useDoc((s) => s.project)
   const options = useStore(text, (s) => s.options)
@@ -127,7 +127,10 @@ export function CleanSection() {
   }, [])
 
   const words = transcript.data?.words ?? null
-  const input = useMemo(() => (transcript.data ? buildCleanInput(transcript.data, levels.data, durationMs, retakes?.retakes) : null), [transcript.data, levels.data, durationMs, retakes])
+  const input = useMemo(
+    () => (transcript.data ? buildCleanInput(transcript.data, levels.data, durationMs, retakes?.retakes, { screenActive, fixedCuts: keptCutRanges({ cuts: project.cuts }, options) }) : null),
+    [transcript.data, levels.data, durationMs, retakes, screenActive, project.cuts, options]
+  )
   const result = useMemo(() => (input ? computeClean(input, options) : null), [input, options])
   const plan = useMemo(() => (result ? planClean({ cuts: project.cuts, ...(project.mutes ? { mutes: project.mutes } : {}) }, result, options, durationMs) : null), [result, project.cuts, project.mutes, options, durationMs])
 
@@ -224,6 +227,7 @@ export function CleanSection() {
             onChange={(v) => text.getState().setOptions({ silence: v === 'off' ? null : v })}
             options={[
               { value: 'off', label: T.silence.off, testId: 'clean-silence-off' },
+              { value: 'tutorial', label: T.silence.tutorial, testId: 'clean-silence-tutorial' },
               { value: 'natural', label: T.silence.natural, testId: 'clean-silence-natural' },
               { value: 'fast', label: T.silence.fast, testId: 'clean-silence-fast' },
               { value: 'faster', label: T.silence.faster, testId: 'clean-silence-faster' }

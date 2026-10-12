@@ -214,7 +214,7 @@ test('Limpeza: prévia do ganho, aplicar vira UM passo desfazível, revisar por 
   await page.getByTestId('text-pane-clean').click()
   await expect(page.getByTestId('clean-section')).toBeVisible()
   // padrão: silêncio Rápido + hesitações cortando
-  await expect(page.getByTestId('clean-silence-fast')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('clean-silence-tutorial')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('clean-preview-text')).toHaveText(/^Sai \d+,\d s · de 0:2\d para 0:1\d$/)
   await expect(page.getByTestId('clean-counts')).toContainText('silêncios: 5')
   await expect(page.getByTestId('clean-counts')).toContainText('hesitações: 1')

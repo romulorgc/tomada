@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_CLEAN, computeClean, pacingOf, silenceItems, type CleanInput, type CleanOptions, type Levels } from '@shared/clean'
 import { EDGE_AFTER_MS, EDGE_BEFORE_MS, EDGE_MIN_PAUSE_MS, cutRangeAround, snapToValley } from '@shared/edges'
 import { MIN_SPEECH_KEEP_MS, PACING, SLIVER_MS, countSeams, shapeCuts, type ShapeCut } from '@shared/pacing'
-import { mergeRanges, screenActivity } from '@shared/screen-activity'
+import { contentChangesOf, mergeRanges, screenActivity } from '@shared/screen-activity'
 import { GAP_SPEECH_BELOW_VOICE_DB, MIN_SNR_DB, buildVoiceProfile, isLoudGapSpeech, levelAt, meanLevel } from '@shared/voice-profile'
 import type { Word } from '@shared/types'
 
@@ -233,7 +233,8 @@ describe('tela ativa (item 5)', () => {
       {
         clicks: [{ t: 10_000, upT: 10_080 }],
         keys: [{ t: 20_000 }, { t: 20_200 }],
-        contentTimes: [0, 30_000, 31_000, 50_000],
+        contentChanges: [{ t: 30_000, magnitude: 0.2 }, { t: 31_000, magnitude: 0.08 }, { t: 33_000, magnitude: 0.01 }, { t: 50_000, magnitude: 0.05 }],
+        useCursor: true,
         cursor: [
           { t: 40_000, x: 0.1, y: 0.1 },
           { t: 40_100, x: 0.3, y: 0.3 },
@@ -246,13 +247,29 @@ describe('tela ativa (item 5)', () => {
     )
     expect(act).toContainEqual({ start: 9_600, end: 10_880 })
     expect(act).toContainEqual({ start: 19_700, end: 20_800 })
-    // 30 000 e 31 000 = mudou nos segundos 29-30 e 30-31
+    // 30 000 e 31 000 = mudou nos segundos 29-30 e 30-31; a de 0,01 (cursor piscando) não conta
     expect(act).toContainEqual({ start: 29_000, end: 31_000 })
+    expect(act.some((r) => r.start <= 32_500 && r.end >= 33_000)).toBe(false)
     expect(act).toContainEqual({ start: 49_000, end: 50_000 })
     expect(act.some((r) => r.start <= 40_100 && r.end >= 40_200)).toBe(true)
     expect(act.some((r) => r.start < 1000)).toBe(false)
     // o cursor parado em 0,5, 0,5 não gera atividade
     expect(act.some((r) => r.start >= 41_000 && r.end <= 41_500)).toBe(false)
+  })
+
+  it('o cursor só entra se pedido: por padrão o ponteiro andando não segura o corte', () => {
+    const cursor = [{ t: 1000, x: 0.1, y: 0.1 }, { t: 1100, x: 0.5, y: 0.5 }, { t: 1200, x: 0.9, y: 0.9 }]
+    expect(screenActivity({ cursor }, 5000)).toEqual([])
+    expect(screenActivity({ cursor, useCursor: true }, 5000)).toHaveLength(1)
+  })
+
+  it('contentChangesOf mede a variação média da grade; a primeira amostra é só a referência', () => {
+    const c = contentChangesOf([
+      { t: 0, cells: new Uint8Array([0, 0, 0, 0]) },
+      { t: 1000, cells: new Uint8Array([255, 0, 0, 0]) },
+      { t: 2000, cells: new Uint8Array([255, 51, 0, 0]) }
+    ])
+    expect(c).toEqual([{ t: 1000, magnitude: 0.25 }, { t: 2000, magnitude: 0.05 }])
   })
 
   it('o silêncio com tela ativa não é cortado; só o miolo parado sai', () => {

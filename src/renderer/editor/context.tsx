@@ -11,7 +11,7 @@ import type { ClipQueue } from '@shared/clip-queue'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import type { CursorData, Derived } from '@shared/scene'
 import type { FaceTrack } from '@shared/face'
-import type { Transcript } from '@shared/types'
+import type { Range, Transcript } from '@shared/types'
 import type { AiUiStore } from './ai-store'
 import type { ClipsUiStore } from './clips-store'
 import type { PreviewEngine } from './engine'
@@ -32,6 +32,8 @@ export type EditorCtx = {
   cursorData: CursorData | null
   /** Os mesmos eventos na tela inteira, sem recorte (de onde o recorte parte; C1). */
   rawData: CursorData | null
+  /** Onde a tela está ativa (clique, tecla, página mudando; ms de origem): a limpeza não corta silêncio por cima disto. */
+  screenActive: readonly Range[]
   eventsError: string | null
   /** A cena do vídeo (do formato aberto): a linha do tempo e o diálogo de exportar usam esta. */
   derived: Derived | null

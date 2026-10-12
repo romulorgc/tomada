@@ -3,9 +3,10 @@
  * do computador). O ffmpeg decodifica a faixa uma vez; o resultado fica em `media/levels.json`. Código puro.
  */
 
-export const LEVELS_VERSION = 1
+/** v2 (F1): quadros de 10 ms, para a borda do corte achar o vale de energia; o `levels.json` de v1 é refeito. */
+export const LEVELS_VERSION = 2
 /** Duração de cada quadro de nível (ms). */
-export const LEVEL_FRAME_MS = 20
+export const LEVEL_FRAME_MS = 10
 /** Silêncio digital. */
 export const SILENT_DB = -120
 

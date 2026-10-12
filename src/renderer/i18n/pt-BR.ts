@@ -712,10 +712,16 @@ export const ptBR = {
       silence: {
         label: 'Silêncios',
         off: 'Manter',
+        tutorial: 'Aula',
         natural: 'Natural',
         fast: 'Rápido',
         faster: 'Mais rápido',
-        hint: { natural: 'Corta pausas acima de 0,7 s e deixa 0,25 s.', fast: 'Corta pausas acima de 0,4 s e deixa 0,15 s.', faster: 'Corta pausas acima de 0,25 s e deixa 0,1 s.' }
+        hint: {
+          tutorial: 'O padrão: corta pausas acima de 0,6 s e deixa 0,28 s, nunca em cima de clique ou de página mudando, e no máximo 6 emendas por minuto.',
+          natural: 'Corta pausas acima de 0,7 s e deixa 0,25 s.',
+          fast: 'Corta pausas acima de 0,4 s e deixa 0,15 s (teto de 12 emendas por minuto).',
+          faster: 'Corta pausas acima de 0,25 s e deixa 0,1 s (teto de 12 emendas por minuto).'
+        }
       },
       hesitations: { label: 'Hesitações', hint: 'hã, hum, ahn e fala sem palavra' },
       crutches: { label: 'Muletas', hint: 'né, tipo, então… só as que o contexto mostra que sobram', count: (n: number): string => (n === 0 ? 'nenhuma por aqui' : n === 1 ? '1 sugestão' : `${n} sugestões`) },
@@ -749,7 +755,7 @@ export const ptBR = {
       appliedSaved: (removed: string): string => `Limpeza aplicada: sai ${removed}. Ctrl+Z desfaz.`,
       appliedMuteOnly: 'Limpeza aplicada: só silenciei trechos da voz. Ctrl+Z desfaz.',
       nothingToApply: 'Nada mudou: o documento já está assim.',
-      auto: { label: 'Aplicar sozinho depois de transcrever', hint: 'Silêncio Rápido e hesitações, uma vez por gravação. Dá para desfazer.' },
+      auto: { label: 'Aplicar sozinho depois de transcrever', hint: 'Silêncio no ritmo de aula e hesitações, uma vez por gravação. Dá para desfazer.' },
       autoDone: (removed: string): string => `Limpeza automática aplicada: sai ${removed}. Ctrl+Z desfaz.`,
       review: {
         title: 'Cortes automáticos',
@@ -1137,7 +1143,7 @@ export const ptBR = {
       device: 'Placa',
       cpu: 'Processador',
       auto: { label: 'Transcrever sozinho depois de cada gravação', hint: 'Se estiver pronta, começa assim que a gravação termina.' },
-      autoClean: { label: 'Aplicar a limpeza sozinho', hint: 'Silêncio Rápido e hesitações, uma vez por gravação, desfazível.' },
+      autoClean: { label: 'Aplicar a limpeza sozinho', hint: 'Silêncio no ritmo de aula e hesitações, uma vez por gravação, desfazível.' },
       prefsFailed: 'Não consegui salvar esta escolha',
       dictionary: {
         label: 'Dicionário',

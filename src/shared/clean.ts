@@ -552,6 +552,19 @@ export function scopeOf(options: CleanOptions): CleanScope {
 const overlapMs = (a: Range, b: Range): number => Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start))
 
 /**
+ * Os cortes LIGADOS que `applyCleanup` mantém como estão (manuais e os de categorias fora do escopo): a limpeza não decide por eles,
+ * mas eles são emendas e entram na conta do ritmo (`CleanInput.fixedCuts`).
+ */
+export function keptCutRanges(doc: { cuts: readonly Cut[] }, options: CleanOptions): Range[] {
+  const scope = scopeOf(options)
+  const replaced = new Set<Cut['reason']>()
+  if (scope.silence) replaced.add('silence')
+  if (scope.filler) replaced.add('filler')
+  if (scope.retake) replaced.add('retake')
+  return doc.cuts.filter((c) => c.enabled && (!replaced.has(c.reason) || c.origin === 'manual')).map((c) => ({ start: c.start, end: c.end }))
+}
+
+/**
  * Aplica os itens ao documento: substitui os cortes automáticos (e os silenciamentos) das categorias do escopo e
  * mantém tudo o mais (cortes manuais, categorias fora do escopo). Um corte que a pessoa tinha restaurado (desligado)
  * e que a limpeza propõe de novo continua DESLIGADO: ela já disse que não quer.

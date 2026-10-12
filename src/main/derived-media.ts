@@ -269,7 +269,7 @@ export function createDerivedMedia(deps: DerivedDeps): DerivedMedia {
   }
 
   // --- nível do áudio (limpeza de silêncio) ----------------------------------------------------------------
-  /** Taxa de análise do nível (basta para RMS de 20 ms). */
+  /** Taxa de análise do nível (basta para RMS de 10 ms). */
   const LEVEL_SAMPLE_RATE = 8000
 
   async function pcmOf(ff: Ffmpeg, input: string, tmp: ExclusiveDir, name: string): Promise<Int16Array> {

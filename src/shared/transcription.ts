@@ -91,7 +91,7 @@ export type RetakesResult = {
 export type TranscriptionPrefs = {
   /** Transcrever sozinho depois de cada gravação (padrão: sim). */
   auto: boolean
-  /** Ao abrir um projeto recém-transcrito, aplicar a limpeza padrão (silêncio Rápido + hesitações puras) UMA vez, desfazível. */
+  /** Ao abrir um projeto recém-transcrito, aplicar a limpeza padrão (silêncio no ritmo de aula + hesitações puras) UMA vez, desfazível. */
   autoClean: boolean
 }
 
