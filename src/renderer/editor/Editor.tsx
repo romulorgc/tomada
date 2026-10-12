@@ -422,6 +422,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
         playback.setState({ audioError: message })
         if (message) window.tomada.log({ level: 'warn', message: 'Áudio da prévia', detail: message })
       },
+      onAudioNote: (message) => window.tomada.log({ level: 'info', message: 'Áudio da prévia', detail: message }),
       onFontsError: (message) => {
         window.tomada.log({ level: 'error', message: 'Falha ao carregar as fontes das legendas', detail: message })
         notify({ kind: 'error', text: t.editor.captions.fontsFailed, detail: message })

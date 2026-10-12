@@ -27,6 +27,7 @@ import {
   shuttleRate,
   stepOutputMs
 } from '@shared/playback'
+import { AudioWatchdog, classifyPlayError, playFailureText } from '@shared/audio-play'
 import { equalPowerGains, keptIndexOf } from '@shared/seams'
 import { outputToSource, rangesLength, sourceToOutput } from '@shared/timeline'
 import type { Project } from '@shared/types'
@@ -130,6 +131,8 @@ export type EngineOptions = {
   /** Falha de mídia (arquivo que não abre, play recusado): o motivo vai para a tela. */
   onError(message: string): void
   onAudioError(message: string | null): void
+  /** Uma nota de diagnóstico do áudio que NÃO é falha (um `play()` interrompido pelo `pause()` do próprio motor): vai só para o log. */
+  onAudioNote?(message: string): void
   /** As fontes das legendas não carregaram: a legenda não aparece, e a pessoa precisa saber por quê. */
   onFontsError?(message: string): void
 }
@@ -153,6 +156,12 @@ export class PreviewEngine {
   private audioPrepared = -1
   private xfade: { from: HTMLAudioElement; to: HTMLAudioElement; startedAt: number; durationMs: number } | null = null
   private xfadeTimer = 0
+  /** O vigia do áudio (`audio-play.ts`): se o motor quer som e ele não anda, tenta de novo e, esgotadas as tentativas, avisa com o motivo. */
+  private readonly audioWatch = new AudioWatchdog()
+  /** Quantos `play()` do áudio foram interrompidos por um `pause()` do próprio motor (esperado; só o primeiro vai para o log). */
+  private audioAborts = 0
+  /** O último aviso de falha real do `play()` (o mesmo texto não se repete a cada quadro). Zera ao trocar o áudio. */
+  private lastAudioFailure = ''
   /** O último quadro desenhado antes de uma emenda que dissolve (F1): a prévia o desfaz sobre o novo, como a exportação. */
   private dissolveSnap: HTMLCanvasElement | null = null
   /** Trechos em que a voz fica muda (muletas silenciadas): ordenados, só os ligados. */
@@ -306,6 +315,8 @@ export class PreviewEngine {
     this.audioOffsetMs = offsetMs
     this.audioNudging = false
     this.o.onAudioError(null)
+    this.audioWatch.quiet()
+    this.lastAudioFailure = ''
     this.audio.src = url
     this.audio.dataset.treated = String(treated)
     this.audio.load()
@@ -319,7 +330,47 @@ export class PreviewEngine {
     if (wasPlaying) {
       this.audio.muted = this.rate !== 1
       this.audio.playbackRate = this.rate
-      void this.audio.play().catch((err: unknown) => this.o.onAudioError(`O áudio da prévia não tocou (${err instanceof Error ? err.message : String(err)}).`))
+      this.playAudio(this.audio, 'ao trocar o áudio')
+    }
+  }
+
+  /**
+   * `play()` do áudio da prévia. Um `play()` que o `pause()` do próprio motor interrompeu (`AbortError`) NÃO é falha: o motor pausou de
+   * propósito (segurou o relógio, cancelou o cruzamento, o usuário pausou) e, se ainda quer som, o laço chama `play()` de novo. Só o que
+   * de fato impede o som (`NotAllowedError`, `NotSupportedError`…) vira aviso, com o motivo; o vigia (`watchAudio`) cobre o resto.
+   */
+  private playAudio(el: HTMLAudioElement, why: string): void {
+    el.play().catch((err: unknown) => {
+      const failure = classifyPlayError(err)
+      if (failure.kind === 'interrupted') {
+        this.audioAborts++
+        if (this.audioAborts === 1) this.o.onAudioNote?.(`play() do áudio ${why} foi interrompido por um pause() do próprio motor (esperado, não é falha); o laço chama play() de novo se ainda quer som.`)
+        return
+      }
+      // o laço de relógio chama play() a cada quadro enquanto o áudio estiver parado: a mesma falha não vira 60 avisos por segundo
+      const text = playFailureText(failure)
+      if (text === this.lastAudioFailure) return
+      this.lastAudioFailure = text
+      this.o.onAudioError(text)
+    })
+  }
+
+  /** Uma vez por quadro, com o relógio andando: o áudio devia estar tocando? Se não está, tenta de novo e, esgotadas as tentativas, avisa. */
+  private watchAudio(now: number): void {
+    const a = this.audio
+    if (!a) {
+      this.audioWatch.quiet()
+      return
+    }
+    const act = this.audioWatch.check({ now, wantSound: this.rate === 1 && !this.xfade, paused: a.paused, ended: a.ended, seeking: a.seeking, hasError: a.error !== null, currentTimeS: a.currentTime })
+    if (act.kind === 'retry') {
+      this.o.onAudioNote?.(`o áudio da prévia estava ${act.reason === 'paused' ? 'parado' : 'travado'} com o relógio andando: tentativa ${act.attempt} de tocar de novo.`)
+      this.playAudio(a, `na tentativa ${act.attempt} do vigia`)
+    } else if (act.kind === 'warn') {
+      if (!this.lastAudioFailure) this.o.onAudioError(act.text) // já há um motivo mais exato na pílula
+    } else if (act.kind === 'clear') {
+      this.lastAudioFailure = ''
+      this.o.onAudioError(null)
     }
   }
 
@@ -386,6 +437,7 @@ export class PreviewEngine {
     this.setError(null)
     if (rate > 0 && this.outputMs >= rangesLength(d.kept) - 40) this.seekSource(outputToSource(0, d.kept))
     this.cancelCrossfade()
+    this.audioWatch.quiet()
     this.dissolveSnap = null
     this.rate = rate
     this.playing = true
@@ -404,7 +456,7 @@ export class PreviewEngine {
         a.muted = rate !== 1
         a.playbackRate = rate
         marks.set(a, a.currentTime)
-        void a.play().catch((err: unknown) => this.o.onAudioError(`O áudio da prévia não tocou (${err instanceof Error ? err.message : String(err)}).`))
+        this.playAudio(a, 'ao tocar')
       }
       this.waiting = { since: performance.now(), marks }
     } else {
@@ -423,6 +475,7 @@ export class PreviewEngine {
     this.waiting = null
     this.prefetched = null
     this.cancelCrossfade()
+    this.audioWatch.quiet()
     this.audioB?.pause()
     for (const t of this.tracks) {
       t.active.pause()
@@ -669,7 +722,7 @@ export class PreviewEngine {
     b.playbackRate = 1
     b.muted = false
     b.volume = 0
-    void b.play().catch((err: unknown) => this.o.onAudioError(`O áudio da prévia não tocou (${err instanceof Error ? err.message : String(err)}).`))
+    this.playAudio(b, 'na emenda')
     this.xfade = { from: this.audio, to: b, startedAt: performance.now(), durationMs: seam.halfMs * 2 }
     window.clearInterval(this.xfadeTimer)
     this.xfadeTimer = window.setInterval(() => this.stepCrossfade(performance.now()), 6)
@@ -779,14 +832,16 @@ export class PreviewEngine {
       if (this.mediaBusy()) {
         if (!this.waiting) this.hold()
         this.audio?.pause()
+        this.audioWatch.quiet()
         return
       }
       const a = this.audio
-      if (a && a.paused && !a.ended && !a.error) void a.play().catch(() => undefined)
+      if (a && a.paused && !a.ended && !a.error) this.playAudio(a, 'depois de segurar o relógio')
       if (this.waiting) {
         if (this.started() || now - this.waiting.since > START_HOLD_MAX_MS) this.waiting = null
         else return
       }
+      this.watchAudio(now)
     } else if (now - this.lastReverseSeek >= REVERSE_SEEK_MS) {
       this.lastReverseSeek = now
       this.seekMedia(this.sourceMs)
