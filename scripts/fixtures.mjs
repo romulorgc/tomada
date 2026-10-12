@@ -21,7 +21,7 @@
  * linha do tempo é montada por contagem de amostras: o gabarito é exato por
  * construção, e vai para `voz.json` (inclusive como `marks`, nome → ms).
  *
- * O caminho desta máquina tem "ô" (José): tudo que o ffmpeg e o PowerShell tocam
+ * Um nome de usuário com acento ("José") quebra ferramentas nativas no Windows: tudo que o ffmpeg e o PowerShell tocam
  * fica numa pasta temporária SEM acento; só o resultado final é copiado para cá.
  */
 import { execFile, spawn } from 'node:child_process'
