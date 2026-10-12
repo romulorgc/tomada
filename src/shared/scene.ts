@@ -19,7 +19,7 @@ import { buildCaptionTrack, captionAt, pageAlpha, popScale, PAGE_FADE_MS, type C
 import { resolveCaptionStyle, resolveHookStyle, type CaptionRenderStyle, type HookRenderStyle } from './caption-style'
 import { cropSignature, pointToCrop, rectFromCrop, resolveScreenCrop, type CropTimeline } from './crop'
 import { projectDurationMs } from './project'
-import { BUBBLE_TARGET, PRESENTER_TARGET, buildFaceFramer, cameraCropRect, faceAimAt, lerpTarget, type FaceFramer, type FaceTrack } from './face'
+import { BUBBLE_TARGET, PRESENTER_TARGET, buildFaceFramer, cameraCropRect, faceAimAt, lerpTarget, sideBySideTarget, type FaceFramer, type FaceTrack } from './face'
 import {
   cameraBoxAspect,
   cameraRadius,
@@ -781,6 +781,12 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
   const punchNow = 1 + (punchScale - 1) * punchWeight
 
   const faceAim = derived.cameraSize && derived.face ? faceAimAt(derived.face, sourceT) : null
+  // O alvo do enquadramento: o do lado a lado fecha mais no rosto quando o cartão é estreito (o rosto não encolhe com ele); o do
+  // apresentador põe a cabeça perto do topo da janela. Cada um entra com o peso do layout (a troca de layout é gradual).
+  const sideWeight = clamp01((curKey === 'side-by-side' ? e : 0) + (p < 1 && prevKey === 'side-by-side' && prevKey !== curKey ? 1 - e : 0))
+  const sideCard = sideWeight > 0 ? layoutGeometry('side-by-side', style, format, sources, 0).camera?.rect.h : undefined
+  const baseTarget = sideCard ? lerpTarget(BUBBLE_TARGET, sideBySideTarget(format.h, sideCard), sideWeight) : BUBBLE_TARGET
+  const cropTarget = cutWeight > 0 ? lerpTarget(baseTarget, PRESENTER_TARGET, cutWeight) : baseTarget
   const camera: SceneCamera | null =
     cameraBox && derived.cameraSize
       ? {
@@ -793,7 +799,7 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
               cameraBox.rect.w / cameraBox.rect.h,
               faceAim,
               style.camera.framing,
-              cutWeight > 0 ? lerpTarget(BUBBLE_TARGET, PRESENTER_TARGET, cutWeight) : BUBBLE_TARGET
+              cropTarget
             ),
             punchNow,
             faceAim
