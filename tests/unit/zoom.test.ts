@@ -49,7 +49,7 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
   it('um clique abre [t − lead, t + hold] com a escala do preset (cada preset)', () => {
     for (const id of ['subtle', 'moderate', 'intense'] as const) {
       const p = ZOOM_PRESETS[id]
-      const z = generateAutoZooms({ clicks: [click(10_000)], keys: [], cursor: grid, duration: 60_000, preset: id })
+      const z = generateAutoZooms({ clicks: [click(10_000)], keys: [], cursor: grid, duration: 60_000, preset: ZOOM_PRESETS[id] })
       expect(z).toHaveLength(1)
       expect(z[0]).toMatchObject({ start: 10_000 - p.lead, end: 10_000 + p.hold, scale: p.scale, focus: 'auto', origin: 'auto' })
     }
@@ -69,17 +69,17 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
 
   it('fusão: janelas separadas por menos que o intervalo viram um zoom só (moderado: 6 s)', () => {
     // janelas [4400,6500] e [N-600, N+1500]: intervalo = N − 600 − 6500
-    const merged = generateAutoZooms({ clicks: [click(5000), click(12_000)], keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
+    const merged = generateAutoZooms({ clicks: [click(5000), click(12_000)], keys: [], cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.moderate })
     expect(merged).toHaveLength(1)
     expect(merged[0]).toMatchObject({ start: 4400, end: 13_500 })
-    const apart = generateAutoZooms({ clicks: [click(5000), click(13_100)], keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
+    const apart = generateAutoZooms({ clicks: [click(5000), click(13_100)], keys: [], cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.moderate })
     expect(apart).toHaveLength(2) // intervalo exatamente 6000: não funde
     expect(apart[1]).toMatchObject({ start: 12_500, end: 14_600 })
   })
 
   it('cadeia de cliques vira um único segmento que segue o cursor', () => {
     const clicks = [5000, 6500, 8000, 9500].map((t) => click(t))
-    const z = generateAutoZooms({ clicks, keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
+    const z = generateAutoZooms({ clicks, keys: [], cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.moderate })
     expect(z).toHaveLength(1)
     expect(z[0]).toMatchObject({ start: 4400, end: 11_000, focus: 'auto' })
   })
@@ -93,22 +93,22 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
   })
 
   it('cliques fora da área e antes do início não abrem zoom; as bordas são limitadas à gravação', () => {
-    const z = generateAutoZooms({ clicks: [click(30_000, 0.5, 0.5, true)], keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
+    const z = generateAutoZooms({ clicks: [click(30_000, 0.5, 0.5, true)], keys: [], cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.moderate })
     expect(z).toEqual([])
-    const edge = generateAutoZooms({ clicks: [click(100), click(59_900)], keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
+    const edge = generateAutoZooms({ clicks: [click(100), click(59_900)], keys: [], cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.moderate })
     expect(edge[0]!.start).toBe(0)
     expect(edge[edge.length - 1]!.end).toBe(60_000)
   })
 
   it('rajada de digitação (≥ 3 teclas com intervalos < 0,8 s) abre janela no ponto do último clique', () => {
     const keys = keysAt(30_000, 8, 140)
-    const z = generateAutoZooms({ clicks: [click(10_000, 0.25, 0.7)], keys, cursor: grid, duration: 60_000, preset: 'moderate' })
+    const z = generateAutoZooms({ clicks: [click(10_000, 0.25, 0.7)], keys, cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.moderate })
     expect(z).toHaveLength(2)
     expect(z[1]).toMatchObject({ start: 29_400, end: 30_980 + 1500, focus: { x: 0.25, y: 0.7 } })
   })
 
   it('digitação logo depois de um clique funde com ele (o foco passa a seguir o cursor)', () => {
-    const z = generateAutoZooms({ clicks: [click(29_000, 0.4, 0.4)], keys: keysAt(30_000, 6, 200), cursor: grid, duration: 60_000, preset: 'moderate' })
+    const z = generateAutoZooms({ clicks: [click(29_000, 0.4, 0.4)], keys: keysAt(30_000, 6, 200), cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.moderate })
     expect(z).toHaveLength(1)
     expect(z[0]!.focus).toBe('auto')
     expect(z[0]!.start).toBe(28_400)
@@ -123,7 +123,7 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
       { first: 1000, last: 1300 },
       { first: 9000, last: 9200 }
     ])
-    const z = generateAutoZooms({ clicks: [], keys: keysAt(20_000, 2, 100), cursor: grid, duration: 60_000, preset: 'moderate' })
+    const z = generateAutoZooms({ clicks: [], keys: keysAt(20_000, 2, 100), cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.moderate })
     expect(z).toEqual([])
   })
 
@@ -139,14 +139,14 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
       ],
       10_000
     )
-    const dwellOnly = generateAutoZooms({ clicks: [], keys: [], cursor: grid2, duration: 10_000, preset: 'moderate' })
+    const dwellOnly = generateAutoZooms({ clicks: [], keys: [], cursor: grid2, duration: 10_000, preset: ZOOM_PRESETS.moderate })
     expect(dwellOnly.length).toBeGreaterThanOrEqual(1)
     const first = dwellOnly[0]!
     expect(first.focus).toMatchObject({ x: expect.closeTo(0.3, 1), y: expect.closeTo(0.4, 1) })
     expect(first.start).toBeLessThan(3200)
     expect(first.end).toBeGreaterThan(3000)
 
-    const withClick = generateAutoZooms({ clicks: [click(8000, 0.8, 0.2)], keys: [], cursor: grid2, duration: 10_000, preset: 'moderate' })
+    const withClick = generateAutoZooms({ clicks: [click(8000, 0.8, 0.2)], keys: [], cursor: grid2, duration: 10_000, preset: ZOOM_PRESETS.moderate })
     expect(withClick).toHaveLength(1)
     expect(withClick[0]!.start).toBe(7400) // só o zoom do clique; o dwell não entra
   })
@@ -172,11 +172,11 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
 
   it('ids únicos, ordem por início e mergeAutoZooms preserva os manuais', () => {
     const clicks = [3000, 12_000, 25_000].map((t) => click(t))
-    const z = generateAutoZooms({ clicks, keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })
+    const z = generateAutoZooms({ clicks, keys: [], cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.moderate })
     expect(new Set(z.map((x) => x.id)).size).toBe(z.length)
     expect([...z].sort((a, b) => a.start - b.start)).toEqual(z)
     const manual: Zoom = { id: 'm1', start: 40_000, end: 42_000, scale: 2, focus: { x: 0.1, y: 0.1 }, origin: 'manual' }
-    const merged = mergeAutoZooms([manual, ...z], generateAutoZooms({ clicks: [click(50_000)], keys: [], cursor: grid, duration: 60_000, preset: 'subtle' }))
+    const merged = mergeAutoZooms([manual, ...z], generateAutoZooms({ clicks: [click(50_000)], keys: [], cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.subtle }))
     expect(merged.map((m) => m.origin)).toEqual(['manual', 'auto'])
     expect(merged[0]).toEqual(manual)
   })
@@ -187,11 +187,11 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
     const long = still(0.5, 0.5, 250_000)
     for (const id of ['subtle', 'moderate', 'intense'] as const) {
       const cap = ZOOM_PRESETS[id].maxPerMin
-      const z = generateAutoZooms({ clicks, keys: [], cursor: long, duration: 250_000, preset: id })
+      const z = generateAutoZooms({ clicks, keys: [], cursor: long, duration: 250_000, preset: ZOOM_PRESETS[id] })
       expect(z.length, id).toBeGreaterThan(0)
       for (let i = 0; i + cap < z.length; i++) expect(z[i + cap]!.start - z[i]!.start, `${id}: janela a partir do zoom ${i}`).toBeGreaterThanOrEqual(ZOOM_CAP_WINDOW_MS)
     }
-    const moderate = generateAutoZooms({ clicks, keys: [], cursor: long, duration: 250_000, preset: 'moderate' })
+    const moderate = generateAutoZooms({ clicks, keys: [], cursor: long, duration: 250_000, preset: ZOOM_PRESETS.moderate })
     expect(moderate.length).toBeLessThan(24) // o teto tirou alguns dos 24 cliques
     expect(moderate.length).toBeGreaterThanOrEqual(15) // mas não esvaziou: ~5 por minuto
   })
@@ -220,8 +220,8 @@ describe('generateAutoZooms: presets e cliques de gabarito', () => {
   })
 
   it('duração zero ou sem eventos não gera zoom', () => {
-    expect(generateAutoZooms({ clicks: [click(0)], keys: [], cursor: grid, duration: 0, preset: 'moderate' })).toEqual([])
-    expect(generateAutoZooms({ clicks: [], keys: [], cursor: grid, duration: 60_000, preset: 'moderate' })).toEqual([])
+    expect(generateAutoZooms({ clicks: [click(0)], keys: [], cursor: grid, duration: 0, preset: ZOOM_PRESETS.moderate })).toEqual([])
+    expect(generateAutoZooms({ clicks: [], keys: [], cursor: grid, duration: 60_000, preset: ZOOM_PRESETS.moderate })).toEqual([])
   })
 })
 

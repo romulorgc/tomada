@@ -4,9 +4,10 @@
  * Código puro: sem DOM, sem Node.
  */
 import { isValidCropRect } from './crop'
+import { keptRanges } from './timeline'
 import { regenerateZooms } from './edits'
 import { applyScreenCrop, type CursorData } from './scene'
-import type { Project, ScreenCrop } from './types'
+import type { Project, ScreenCrop, Word } from './types'
 import { mergeFormatView, projectForFormat } from './vertical'
 import { generateAutoZooms, zoomPresetFor } from './zoom'
 
@@ -18,8 +19,9 @@ export function sameScreenCrop(a: ScreenCrop | undefined, b: ScreenCrop | undefi
 /**
  * O documento com o recorte novo. `raw` são os eventos da tela inteira (sem recorte aplicado): com eles os zooms automáticos dos
  * dois formatos (os que têm preset escolhido; "Desligado" fica desligado) são refeitos sobre o recorte novo. Sem `raw` só troca o recorte.
+ * `words` (a transcrição) deixa o zoom do 16:9 começar e terminar em limites da fala; os cortes do documento valem sempre.
  */
-export function setScreenCrop(doc: Project, crop: ScreenCrop | undefined, raw: CursorData | null, durationMs: number): Project {
+export function setScreenCrop(doc: Project, crop: ScreenCrop | undefined, raw: CursorData | null, durationMs: number, words: readonly Word[] | null = null): Project {
   if (sameScreenCrop(doc.screenCrop, crop)) return doc
   // um retângulo manual que o documento não aceitaria (pequeno demais, fora da tela) NÃO troca o recorte: o anterior fica (e quem
   // chama avisa, com `isValidCropRect`). Antes isto virava "tela inteira" em silêncio.
@@ -34,7 +36,7 @@ export function setScreenCrop(doc: Project, crop: ScreenCrop | undefined, raw: C
     const view = projectForFormat(out, kind)
     const preset = view.zoomPreset
     if (preset === undefined || preset === 'off') continue
-    const auto = generateAutoZooms({ clicks: data.clicks, keys: data.keys, cursor: data.grid, duration: durationMs, preset: zoomPresetFor(kind, preset) })
+    const auto = generateAutoZooms({ clicks: data.clicks, keys: data.keys, cursor: data.grid, duration: durationMs, preset: zoomPresetFor(kind, preset), words, kept: keptRanges(durationMs, out.cuts) })
     out = mergeFormatView(out, regenerateZooms(view, preset, auto), kind)
   }
   return out

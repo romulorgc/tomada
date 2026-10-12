@@ -246,9 +246,12 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       }
       case 'zooms': {
         const e = await events(dir, duration, project)
+        // O zoom do 16:9 começa e termina em limites da fala e conta o tempo de SAÍDA (depois dos cortes que o passo `clean` acabou de fazer).
+        const spoken = await deps.transcription.getTranscript(id)
         await regenerate(id, (p) => {
           const v = p.vertical ?? defaultVerticalEdit()
-          const make = (kind: 'horizontal' | 'vertical', current: Project['zooms'], preset: Project['zoomPreset'], excluded?:string[]) => [...current.filter((z) => z.origin === 'manual'), ...(preset === 'off' ? [] : generateAutoZooms({ clicks: e.clicks, keys: e.keys, cursor: e.grid, duration, preset: zoomPresetFor(kind, preset ?? 'moderate') }).filter((z) => !excluded?.includes(z.id) && !current.some((m) => m.origin === 'manual' && m.start < z.end && m.end > z.start)))]
+          const kept = keptRanges(duration, p.cuts)
+          const make = (kind: 'horizontal' | 'vertical', current: Project['zooms'], preset: Project['zoomPreset'], excluded?:string[]) => [...current.filter((z) => z.origin === 'manual'), ...(preset === 'off' ? [] : generateAutoZooms({ clicks: e.clicks, keys: e.keys, cursor: e.grid, duration, preset: zoomPresetFor(kind, preset ?? 'moderate'), words: spoken?.words ?? null, kept }).filter((z) => !excluded?.includes(z.id) && !current.some((m) => m.origin === 'manual' && m.start < z.end && m.end > z.start)))]
           return { ...p, zooms: make('horizontal', p.zooms, p.zoomPreset,p.autoExclusions?.zooms), vertical: { ...v, zooms: make('vertical', v.zooms, v.zoomPreset,v.autoExclusions?.zooms) } }
         })
         return 'Zooms conforme os padrões de cada formato; ajustes manuais preservados.'

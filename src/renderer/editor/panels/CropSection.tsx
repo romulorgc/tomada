@@ -18,7 +18,7 @@ type Mode = ScreenCrop['mode']
 const LOCKS: (CropLockId | 'free')[] = ['free', '16:9', '16:10', '4:3']
 
 export function CropSection() {
-  const { store, rawData, derived, durationMs, detail, hasScreen, playback } = useEditor()
+  const { store, rawData, derived, durationMs, detail, hasScreen, playback, transcript } = useEditor()
   const crop = useDoc((s) => s.doc.screenCrop)
   const capture = useDoc((s) => s.doc.capture)
   const source = useDoc((s) => s.doc.sources.screen)
@@ -41,7 +41,7 @@ export function CropSection() {
       notify({ kind: 'error', text: T.tooSmall(min.w, min.h) })
       return
     }
-    store.getState().changeDoc((doc) => setScreenCrop(doc, next, rawData, durationMs))
+    store.getState().changeDoc((doc) => setScreenCrop(doc, next, rawData, durationMs, transcript.data?.words ?? null))
   }
   /** O retângulo de partida de um recorte manual: o que o automático mostra agora; senão, uma margem na tela. */
   const startRect = (): Rect => {

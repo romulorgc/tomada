@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { processCursor, type CursorGrid } from '@shared/cursor'
 import { createEditorStore } from '@shared/editor-store'
 import { createProject, parseProject, serializeProject } from '@shared/project'
-import { DEFAULT_VERTICAL_ZOOM_PRESET, VERTICAL_ZOOM_MAX_PER_MIN, VERTICAL_ZOOM_SCALE, ZOOM_PRESETS, zoomPresetFor } from '@shared/zoom'
+import { DEFAULT_VERTICAL_ZOOM_PRESET, HORIZONTAL_ZOOM_PRESETS, VERTICAL_ZOOM_MAX_PER_MIN, VERTICAL_ZOOM_SCALE, ZOOM_PRESETS, zoomPresetFor } from '@shared/zoom'
 import { keptRanges } from '@shared/timeline'
 import { reviewDocument, updateReviewItem } from '@shared/review'
 import {
@@ -226,13 +226,15 @@ describe('zoom do vertical: presets de 1,2 a 1,5× (E1: mediana 1,2× [1,1–1,4
     expect(VERTICAL_ZOOM_MAX_PER_MIN[DEFAULT_VERTICAL_ZOOM_PRESET]).toBe(3)
     const h = zoomPresetFor('horizontal', 'moderate')
     const v = zoomPresetFor('vertical', 'moderate')
-    expect(h).toEqual(ZOOM_PRESETS.moderate)
+    expect(h).toEqual(HORIZONTAL_ZOOM_PRESETS.moderate) // o 16:9 lê a tabela calibrada no F3 (zoom-speech.test.ts)
     expect(v.scale).toBe(1.35)
     expect(v.maxPerMin).toBe(3)
     expect(v.scale).toBeLessThan(h.scale)
     expect(v.maxPerMin).toBeLessThan(h.maxPerMin)
-    expect(v.lead).toBe(h.lead) // só a escala e o teto mudam
-    expect(v.hold).toBe(h.hold)
+    // o vertical NÃO mudou com o F3: parte dos tempos de sempre (ZOOM_PRESETS) e não tem a forma do 16:9
+    expect(v.lead).toBe(ZOOM_PRESETS.moderate.lead)
+    expect(v.hold).toBe(ZOOM_PRESETS.moderate.hold)
+    expect(v.shaping).toBeUndefined()
   })
 })
 

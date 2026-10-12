@@ -39,6 +39,7 @@ import { GRID_HZ } from './cursor'
 import { CENTER_BOX, CENTER_ZOOM_MAX, HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, hookPlacement, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
 import { ZOOM_SCALE_SPRING } from './spring'
 import { computeCameraPath, sampleCameraPath, visibleRect, type CameraPath } from './zoom'
+import { ZOOM_RAMP_MS } from './zoom-speech'
 import { fitRect } from './geometry'
 import { FOCUS_SPRING, actionFocusAt, buildActionFocus } from './action-focus'
 import { createContentTrack, type ContentMap } from './content-map'
@@ -292,7 +293,8 @@ export function deriveProject(project: Project, rawData: CursorData, format: For
   const mainKey = resolveLayout(project.style.defaultLayout, hasScreen, hasCamera, format.kind)
   if (format.kind === 'horizontal') {
     const view = { w: 1, h: 1 }
-    paths.main = { view, path: computeCameraPath(project, data.grid, { durationMs, view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.horizontal }) }
+    // o zoom do 16:9 abre e fecha em rampa de 0,9 s em ease-out (a curva medida no Screen Studio), não na mola (quase linear no começo)
+    paths.main = { view, path: computeCameraPath(project, data.grid, { durationMs, view, sourceAspect, scaleRamp: { ms: ZOOM_RAMP_MS } }) }
   } else {
     const keys = new Set<string>([mainKey])
     for (const pt of layoutPoints) keys.add(resolveLayout(pt.layout, hasScreen, hasCamera, format.kind))
