@@ -79,6 +79,7 @@ test('fechar o app no meio: o log avisa; ao reabrir o recorte continua do últim
   expect(existsSync(join(dirOf(s), MATTE_PARTS_DIR))).toBe(false)
   expect(logOf(s)).toContain(`retomando do pedaço ${done + 1}`)
   // a aba Câmera também sabe: o recorte está pronto
+  await s.page.getByTestId('tab-camera').click()
   await expect(s.page.getByTestId('matte-status')).toHaveAttribute('data-state', 'ready')
 })
 
