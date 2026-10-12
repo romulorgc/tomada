@@ -13,6 +13,7 @@ import {
   segmentChain,
   type LoudnormMeasure
 } from '../../src/main/audio-graph'
+import { handlesOf, planSeams } from '../../src/shared/seams'
 
 const kept = [
   { start: 0, end: 2000 },
@@ -53,13 +54,65 @@ describe('trecho de áudio', () => {
   })
 })
 
+describe('emenda de áudio com alças reais', () => {
+  it('o trecho puxa metade do cruzamento do que foi cortado de cada lado (e só das emendas, não das pontas)', () => {
+    const g = buildAudioGraph({ kept, voice, system: null, mode: 'final' })
+    // 1º trecho [0, 2000]: sem alça no começo, 35 ms de cauda; 2º [3500, 6000]: 35 ms antes e 35 ms depois; 3º [6800, 10000]: 35 ms antes
+    expect(g.graph).toContain('atrim=start=0.000000:end=2.035000')
+    expect(g.graph).toContain('atrim=start=3.465000:end=6.035000')
+    expect(g.graph).toContain('atrim=start=6.765000:end=10.000000')
+    // os trechos têm o comprimento da ALÇA somada, para o apad/atrim finais não cortarem o cruzamento
+    expect(g.graph).toContain('apad=whole_dur=2.035000')
+    expect(g.graph).toContain('apad=whole_dur=2.570000')
+    expect(g.graph).toContain('apad=whole_dur=3.235000')
+    // fade de 30 ms só na ponta do começo do vídeo e na do fim; as pontas das emendas são cruzadas, sem fade
+    expect(g.graph.match(/afade=t=in/g)).toHaveLength(1)
+    expect(g.graph.match(/afade=t=out/g)).toHaveLength(1)
+  })
+
+  it('o cruzamento não muda o comprimento: soma dos trechos − sobreposições + alças = soma dos trechos', () => {
+    const seams = planSeams(kept)
+    expect(seams.map((s) => s.halfMs)).toEqual([35, 35])
+    const lens = kept.map((r, i) => r.end - r.start + handlesOf(seams, i).head + handlesOf(seams, i).tail)
+    const overlaps = seams.reduce((a, s) => a + 2 * s.halfMs, 0)
+    expect(lens.reduce((a, b) => a + b, 0) - overlaps).toBe(kept.reduce((a, r) => a + (r.end - r.start), 0))
+  })
+
+  it('corte pequeno: a alça é metade do que foi cortado (as alças não se encavalam)', () => {
+    const seams = planSeams([{ start: 0, end: 3000 }, { start: 3040, end: 6000 }])
+    expect(seams[0]!.halfMs).toBe(20)
+    const g = buildAudioGraph({ kept: [{ start: 0, end: 3000 }, { start: 3040, end: 6000 }], voice, system: null, mode: 'final' })
+    expect(g.graph).toContain('acrossfade=d=0.040000:c1=qsin:c2=qsin')
+    expect(g.graph).toContain('atrim=start=0.000000:end=3.020000')
+    expect(g.graph).toContain('atrim=start=3.020000:end=6.000000')
+  })
+
+  it('trecho curto limita a alça a metade dele; corte de ~1 ms vira junção direta com microfade', () => {
+    expect(planSeams([{ start: 0, end: 100 }, { start: 5000, end: 9000 }])[0]!.halfMs).toBe(35)
+    expect(planSeams([{ start: 0, end: 40 }, { start: 5000, end: 9000 }])[0]!.halfMs).toBe(20)
+    const g = buildAudioGraph({ kept: [{ start: 0, end: 3000 }, { start: 3001, end: 6000 }], voice, system: null, mode: 'final' })
+    expect(g.graph).toContain('concat=n=2:v=0:a=1')
+    expect(g.graph).not.toContain('acrossfade')
+    expect(g.graph).toContain('afade=t=out:st=2.998000:d=0.002000')
+  })
+
+  it('o silenciamento de muleta continua no tempo certo com a alça na frente do trecho', () => {
+    const c = segmentChain({ start: 3500, end: 6000 }, 0, [{ start: 4000, end: 4100 }], { head: 35, tail: 35, fadeInMs: 0, fadeOutMs: 0 })
+    // o trecho começa 35 ms antes: o silenciamento (4000-4100) fica em 535-635 ms do trecho estendido
+    expect(c).toContain('(t-0.535000)/0.015')
+    expect(c).toContain('(0.635000-t)/0.015')
+  })
+})
+
 describe('grafo de áudio', () => {
   it('voz + som do sistema: asplit, atrim, concat, limpeza só na voz, −9 dB no sistema, mistura e loudnorm', () => {
     const g = buildAudioGraph({ kept, voice, system, mode: 'final', measured: measure, noiseFloorDb: -53.2 })
     expect(g.out).toBe('aout')
     expect(g.graph).toContain('[0:a]asplit=3[vs0][vs1][vs2]')
     expect(g.graph).toContain('[1:a]asplit=3[ys0][ys1][ys2]')
-    expect(g.graph.match(/concat=n=3:v=0:a=1/g)).toHaveLength(2)
+    // as emendas são cruzamentos de potência igual (qsin) de 70 ms, 2 por faixa; não há mais concat
+    expect(g.graph.match(/acrossfade=d=0\.070000:c1=qsin:c2=qsin/g)).toHaveLength(4)
+    expect(g.graph).not.toContain('concat=')
     // a limpeza da voz desconta a latência do afftdn (1200 amostras) e fecha na duração exata (2000 + 2500 + 3200 ms)
     expect(g.graph).toContain(
       'highpass=f=80,apad=pad_len=1200,afftdn=nr=6:nf=-53.20:gs=5,atrim=start_sample=1200,asetpts=PTS-STARTPTS,deesser=i=0.15:m=0.25,acompressor=threshold=-18dB:ratio=1.5:attack=20:release=180,apad=whole_dur=7.700000,atrim=end=7.700000,asetpts=PTS-STARTPTS,pan=stereo|c0=c0|c1=c0[voz]'
@@ -109,7 +162,7 @@ describe('grafo de áudio', () => {
     expect(args[args.indexOf('-/filter_complex') + 1]).toBe('C:/tmp/g.txt')
     // 600 segmentos = 600 ramos de cada faixa
     expect(g.graph).toContain('asplit=600')
-    expect((g.graph.match(/concat=n=600/g) ?? []).length).toBe(2)
+    expect((g.graph.match(/acrossfade=/g) ?? []).length).toBe(2 * 599)
   })
 
   it('argumentos: medição, AAC 48 kHz 320 kbps nos dois formatos, trilha muda e mux com faststart', () => {

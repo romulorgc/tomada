@@ -1,7 +1,9 @@
 /**
- * Grafo de áudio da exportação (passo 1): trechos mantidos com `atrim` + fade de
- * 30 ms em cada borda → `concat` → cadeia de voz → mistura com o som do sistema (−9 dB) →
- * `loudnorm` em dois passes → AAC. Construtor PURO (só monta texto): quem executa é `export-service.ts`.
+ * Grafo de áudio da exportação (passo 1): trechos mantidos com `atrim` → emendas por `acrossfade` de
+ * potência igual (`qsin`, 60-80 ms) com ALÇAS REAIS (cada trecho avança metade do cruzamento para dentro do que foi
+ * cortado, ver `seams.ts`) → cadeia de voz → mistura com o som do sistema (−9 dB) → `loudnorm` em dois passes → AAC.
+ * Só as pontas do vídeo (primeiro começo e último fim) levam fade de 30 ms. O cruzamento não muda o comprimento total:
+ * o meio dele cai no corte do vídeo. Construtor PURO (só monta texto): quem executa é `export-service.ts`.
  *
  * Armadilhas do `legado/README.md` que valem aqui:
  *  - o corte vem ANTES do `loudnorm` (modo dinâmico atrasa o sinal em ~3 s e o último trecho some);
@@ -11,9 +13,13 @@
  *    o grafo vai num ARQUIVO (`-/filter_complex <arquivo>`, ffmpeg 8).
  */
 import type { Range } from '@shared/types'
+import { handlesOf, planSeams } from '@shared/seams'
 import { assertFfmpegPath } from './ffmpeg-path'
 
+/** Fade das pontas do vídeo (primeiro começo e último fim): sem emenda para cruzar, só evita o estalo. */
 export const FADE_MS = 30
+/** Emenda sem material para cruzar (trecho cortado menor que ~2 ms): junção direta com um microfade anti-estalo. */
+export const HARD_JOIN_FADE_MS = 2
 export const TARGET_LUFS = -14
 export const TRUE_PEAK_DB = -1
 export const SYSTEM_GAIN_DB = -9
@@ -143,7 +149,6 @@ export type AudioGraph = {
   out: string
 }
 
-/** Um trecho de uma faixa: corta, completa com silêncio o que falta e põe fade nas duas bordas. */
 /** Rampa (ms) de cada lado de um silenciamento: sem ela a borda abrupta estala. */
 export const MUTE_RAMP_MS = 15
 /** Quantos silenciamentos cabem numa única expressão do `volume` (as expressões do ffmpeg são recursivas). */
@@ -164,32 +169,48 @@ export function muteFilters(mutes: readonly Range[]): string[] {
   return out
 }
 
-export function segmentChain(range: Range, offsetMs: number, mutes: readonly Range[] = []): string {
-  const len = range.end - range.start
-  const fileStart = range.start - offsetMs
-  const fileEnd = range.end - offsetMs
+/**
+ * Como as pontas de um trecho se ligam aos vizinhos: `head`/`tail` são as ALÇAS (ms de material cortado que o trecho
+ * puxa de cada lado, para o cruzamento) e `fadeInMs`/`fadeOutMs` o fade de ponta (0 = a ponta é cruzada, sem fade).
+ */
+export type SegmentEdges = { head: number; tail: number; fadeInMs: number; fadeOutMs: number }
+const LONE_SEGMENT: SegmentEdges = { head: 0, tail: 0, fadeInMs: FADE_MS, fadeOutMs: FADE_MS }
+
+/**
+ * Um trecho de uma faixa: corta (já com as alças), completa com silêncio o que falta e põe fade só nas pontas que não são
+ * cruzadas. O tempo dos silenciamentos é relativo ao começo do trecho SEM a alça.
+ */
+export function segmentChain(range: Range, offsetMs: number, mutes: readonly Range[] = [], edges: SegmentEdges = LONE_SEGMENT): string {
+  const ext: Range = { start: range.start - edges.head, end: range.end + edges.tail }
+  const len = ext.end - ext.start
+  const fileStart = ext.start - offsetMs
+  const fileEnd = ext.end - offsetMs
   const lead = fileStart < 0 ? -fileStart : 0
   const trimStart = Math.max(0, fileStart)
   const trimEnd = Math.max(trimStart, fileEnd)
-  const fade = Math.min(FADE_MS, len / 2)
   const steps = [`atrim=start=${sec(trimStart)}:end=${sec(trimEnd)}`, 'asetpts=PTS-STARTPTS']
   if (lead > 0.5) steps.push(`adelay=delays=${Math.round(lead)}:all=1`)
   // garante a duração exata do trecho mesmo se o arquivo for mais curto que o vídeo
   steps.push(`apad=whole_dur=${sec(len)}`, `atrim=end=${sec(len)}`, 'asetpts=PTS-STARTPTS')
-  // muletas silenciadas: só os trechos que caem neste pedaço, com o tempo relativo ao começo dele
+  // muletas silenciadas: só os trechos que caem neste pedaço, com o tempo relativo ao começo dele (alça incluída)
   const local = mutes
-    .filter((m) => m.end > range.start && m.start < range.end)
-    .map((m) => ({ start: Math.max(0, m.start - range.start), end: Math.min(len, m.end - range.start) }))
+    .filter((m) => m.end > ext.start && m.start < ext.end)
+    .map((m) => ({ start: Math.max(0, m.start - ext.start), end: Math.min(len, m.end - ext.start) }))
   steps.push(...muteFilters(local))
-  if (fade > 0.5) {
-    steps.push(`afade=t=in:st=0:d=${sec(fade)}`, `afade=t=out:st=${sec(len - fade)}:d=${sec(fade)}`)
-  }
+  const fadeIn = Math.min(edges.fadeInMs, len / 2)
+  const fadeOut = Math.min(edges.fadeOutMs, len / 2)
+  if (fadeIn > 0.5) steps.push(`afade=t=in:st=0:d=${sec(fadeIn)}`)
+  if (fadeOut > 0.5) steps.push(`afade=t=out:st=${sec(len - fadeOut)}:d=${sec(fadeOut)}`)
   return steps.join(',')
 }
 
-/** `[in:a]asplit` + trechos + `concat` para uma faixa; devolve as linhas do grafo e o rótulo da saída. */
+/**
+ * `[in:a]asplit` + trechos (com alças) + emendas para uma faixa; devolve as linhas do grafo e o rótulo da saída. Cada emenda é
+ * um `acrossfade` de potência igual (`qsin`) de `2 × halfMs`; sem material para cruzar (corte de ~2 ms) é um `concat` simples.
+ */
 function trackBranch(kept: readonly Range[], track: AudioTrackInput, tag: string, mutes: readonly Range[] = []): { lines: string[]; out: string } {
   const n = kept.length
+  const seams = planSeams(kept)
   const lines: string[] = []
   const labels = kept.map((_, i) => `${tag}s${i}`)
   if (n === 1) lines.push(`[${track.input}:a]anull[${labels[0]}]`)
@@ -197,11 +218,34 @@ function trackBranch(kept: readonly Range[], track: AudioTrackInput, tag: string
   const outs: string[] = []
   kept.forEach((range, i) => {
     const o = `${tag}c${i}`
-    lines.push(`[${labels[i]}]${segmentChain(range, track.offsetMs, mutes)}[${o}]`)
+    const { head, tail } = handlesOf(seams, i)
+    const before = i > 0 ? seams[i - 1]! : null
+    const after = i < n - 1 ? seams[i]! : null
+    const edges: SegmentEdges = {
+      head,
+      tail,
+      fadeInMs: before === null ? FADE_MS : before.halfMs > 0 ? 0 : HARD_JOIN_FADE_MS,
+      fadeOutMs: after === null ? FADE_MS : after.halfMs > 0 ? 0 : HARD_JOIN_FADE_MS
+    }
+    lines.push(`[${labels[i]}]${segmentChain(range, track.offsetMs, mutes, edges)}[${o}]`)
     outs.push(o)
   })
   const cat = `${tag}cat`
-  lines.push(n === 1 ? `[${outs[0]}]anull[${cat}]` : `${outs.map((o) => `[${o}]`).join('')}concat=n=${n}:v=0:a=1[${cat}]`)
+  if (n === 1) {
+    lines.push(`[${outs[0]}]anull[${cat}]`)
+    return { lines, out: cat }
+  }
+  let current = outs[0]!
+  for (let i = 1; i < n; i++) {
+    const seam = seams[i - 1]!
+    const joined = i === n - 1 ? cat : `${tag}x${i}`
+    lines.push(
+      seam.halfMs > 0
+        ? `[${current}][${outs[i]}]acrossfade=d=${sec(seam.halfMs * 2)}:c1=qsin:c2=qsin[${joined}]`
+        : `[${current}][${outs[i]}]concat=n=2:v=0:a=1[${joined}]`
+    )
+    current = joined
+  }
   return { lines, out: cat }
 }
 
