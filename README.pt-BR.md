@@ -34,6 +34,18 @@ silêncios, muletas e recomeços, põe zoom nos seus cliques, escolhe os layouts
 do YouTube, sugere os melhores cortes verticais com legenda e escreve título, descrição,
 capítulos e hashtags. Depois você revisa, ajusta e posta. O Tomada não publica nada por você.
 
+## Telas
+
+| Editar pelo texto | Vertical 9:16 com legenda |
+| --- | --- |
+| ![Aba Texto: apagar palavras corta o vídeo](assets/readme/text.png) | ![Editor vertical com os estilos de legenda](assets/readme/vertical.png) |
+
+| Cortes verticais sugeridos | Exportação |
+| --- | --- |
+| ![Aba Cortes com um corte sugerido, a nota e o gancho](assets/readme/clips.png) | ![Janela de exportação de um vídeo vertical](assets/readme/export.png) |
+
+As telas mostram um projeto de demonstração sintético: nenhuma gravação real, rosto ou dado pessoal.
+
 ## Recursos
 
 **Gravação**

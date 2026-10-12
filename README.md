@@ -34,6 +34,18 @@ filler words and restarts, adds zooms on your clicks, picks the layouts, exports
 video, suggests the best vertical clips with captions and writes the title, description,
 chapters and hashtags. Then you review, adjust and post. Tomada publishes nothing for you.
 
+## Screens
+
+| Edit by text | Vertical 9:16 with captions |
+| --- | --- |
+| ![Transcript tab: deleting words cuts the video](assets/readme/text.png) | ![Vertical editor with caption styles](assets/readme/vertical.png) |
+
+| Suggested vertical clips | Export |
+| --- | --- |
+| ![Clips tab with a suggested clip, its score and hook](assets/readme/clips.png) | ![Export dialog for a vertical video](assets/readme/export.png) |
+
+The screens show a synthetic demo project: no real recording, face or personal data.
+
 ## Features
 
 **Recording**
