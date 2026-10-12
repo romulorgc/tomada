@@ -53,8 +53,11 @@ export interface CameraService {
    * pedaços), RETOMA sozinho e deixa no log o que encontrou. Devolve o que fez. Nunca lança.
    */
   recoverMatte(projectId: string): Promise<'resumed' | 'regenerated' | 'failed' | 'idle'>
-  /** Espera a preparação e a fila terminarem (testes). */
-  idle(): Promise<void>
+  /**
+   * Espera a preparação e a fila terminarem. `kinds` limita a espera a esses tipos de análise: o piloto automático espera só o ROSTO antes
+   * de transcrever e exportar (o recorte, que leva minutos, dá lugar a eles na placa) e só espera o recorte quando o vídeo o usa.
+   */
+  idle(opts?: { kinds?: readonly CameraKind[] }): Promise<void>
   /** Para tudo. O recorte em curso fica ANOTADO como interrompido (log + andamento no projeto) e continua ao reabrir; a promessa só resolve depois disso. */
   shutdown(): Promise<void>
 }
@@ -620,12 +623,17 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
       return null
     },
 
-    async idle() {
+    async idle(opts) {
+      const only = opts?.kinds
+      const counts = (kind: CameraKind): boolean => !only || only.includes(kind)
       for (;;) {
+        // só há o que esperar se o que está rodando OU o que está na fila é de um dos tipos pedidos (ou se o motor está se preparando)
+        const interesting = (running !== null && counts(running.kind)) || queue.some((q) => counts(q.kind))
+        if (!preparing && !interesting) return
         const waits: Promise<unknown>[] = []
         if (preparing) waits.push(preparing.promise)
+        // a fila só anda quando o que roda agora termina (seja do tipo que for)
         if (running) waits.push(running.promise)
-        if (waits.length === 0 && queue.length === 0) return
         await Promise.allSettled(waits)
         await new Promise((r) => setTimeout(r, 0))
       }

@@ -544,6 +544,33 @@ describe('o recorte dá lugar à placa (exportação, transcrição, prévia)', 
   })
 })
 
+describe('idle por tipo: quem não precisa do recorte não espera por ele', () => {
+  it('idle({ kinds: ["face"] }) volta quando o rosto termina, com o recorte ainda rodando; idle() espera tudo', async () => {
+    const t = setup({ delayMs: 1200 })
+    const service = t.open()
+    await service.analyze('p1', 'face')
+    await service.analyze('p1', 'matte')
+    await service.idle({ kinds: ['face'] })
+    const faceDone = [...t.jobs].reverse().find((j) => j.kind === 'face' && j.state === 'done')
+    expect(faceDone).toBeDefined()
+    expect(t.lastJob('p1')!.state).not.toBe('done')
+    // o recorte ainda não terminou, e quem só quer o rosto já pode seguir
+    await service.idle({ kinds: ['matte'] })
+    expect(t.lastJob('p1')).toMatchObject({ state: 'done' })
+  })
+
+  it('sem nada do tipo pedido na fila nem rodando, volta na hora (mesmo com outro tipo rodando)', async () => {
+    const t = setup({ delayMs: 1500 })
+    const service = t.open()
+    await service.analyze('p1', 'matte')
+    const started = Date.now()
+    await service.idle({ kinds: ['face'] })
+    expect(Date.now() - started).toBeLessThan(500)
+    service.cancel('p1', 'matte')
+    await service.idle()
+  })
+})
+
 /** Esquece os trabalhos anunciados antes (para provar o que a abertura do app anuncia). */
 function jobsReset(t: { jobs: CameraJob[] }): void {
   t.jobs.length = 0
