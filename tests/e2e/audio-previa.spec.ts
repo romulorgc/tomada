@@ -41,6 +41,17 @@ test('um play() interrompido pelo pause() do próprio motor NÃO vira aviso de �
   const { page } = s
   await openWithTreatedAudio(s)
 
+  // observa o que acontece com cada play() do <audio> (sem consumir a rejeição): o resultado de cada um fica em window.__playOutcomes
+  await page.evaluate(() => {
+    const w = window as unknown as { __playOutcomes: string[] }
+    w.__playOutcomes = []
+    const original = HTMLMediaElement.prototype.play
+    HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
+      const promise = original.call(this)
+      if (this instanceof HTMLAudioElement) promise.then(() => w.__playOutcomes.push('ok'), (err: { name?: string }) => w.__playOutcomes.push(err?.name ?? 'erro'))
+      return promise
+    }
+  })
   // toca e pausa NO MESMO instante, várias vezes: o play() do áudio fica pendente e o pause() o interrompe (AbortError)
   await page.evaluate(async () => {
     const button = document.querySelector('[data-testid="play-toggle"]') as HTMLElement
@@ -51,6 +62,9 @@ test('um play() interrompido pelo pause() do próprio motor NÃO vira aviso de �
     }
   })
   await page.waitForTimeout(800)
+  const outcomes = await page.evaluate(() => (window as unknown as { __playOutcomes: string[] }).__playOutcomes)
+  // a repetição reproduz o log de 09/10: houve play() interrompido (AbortError)
+  expect(outcomes, `resultados dos play(): ${outcomes.join(',')}`).toContain('AbortError')
 
   const chip = page.getByTestId('audio-status')
   await expect(chip).toHaveAttribute('data-treated', 'true')
