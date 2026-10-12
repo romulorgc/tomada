@@ -63,7 +63,7 @@ class FakeEncoder:
         self.frames = 0
 
     def write(self, payload):
-        self.fh.write(b"x")
+        self.fh.write(payload + b"\n")  # o conteudo de cada instante fica no arquivo (as provas de retomada comparam byte a byte)
         self.frames += 1
 
     def close(self):
@@ -200,6 +200,167 @@ time.sleep(120)
             for p in (child, parent):
                 if p.poll() is None:
                     p.kill()
+
+
+class Pipeline:
+    """O laço do recorte inteiro (SlotWriter + pedaços + pontos de retomada) com um "RVM" de brinquedo que TEM MEMÓRIA longa: o estado de cada
+    quadro depende de todos os anteriores. Prova que uma retomada pelo ponto guardado dá EXATAMENTE a mesma máscara da rodada contínua."""
+
+    CHUNK_SLOTS = 30
+
+    def __init__(self, tmp, times):
+        import numpy as np
+
+        self.np = np
+        self.dir = tmp
+        self.times = times
+        self.meta = {"outW": 8, "outH": 8, "ratio": 0.5, "fps": RATE, "chunkSlots": self.CHUNK_SLOTS, "model": 1}
+
+    def initial_state(self):
+        return [self.np.zeros(1, dtype=self.np.float64) for _ in range(4)]
+
+    @staticmethod
+    def infer(frame, state):
+        # o estado de cada camada mistura o quadro de agora com TODA a historia (memoria longa, como o GRU do RVM)
+        new = [0.97 * s + 0.03 * (frame * (i + 1)) for i, s in enumerate(state)]
+        return ("%.9f" % float(new[0][0])).encode(), new
+
+    def run(self, start_chunk=0, stop_after=None, use_checkpoint=True, warmup=1.0):
+        np = self.np
+        stop_file = os.path.join(self.dir, "parar")
+        ck = tools.Checkpointer(self.dir, self.CHUNK_SLOTS, start_chunk, self.meta, np, lambda s: s)
+
+        def on_chunk(index, frames, size):
+            ck.drop(index)
+            if stop_after is not None and index == stop_after:
+                open(stop_file, "w").close()
+
+        sink = tools.PartsSink(lambda path: FakeEncoder(path), self.dir, self.CHUNK_SLOTS, start_chunk, on_chunk)
+        writer = tools.SlotWriter(lambda payload: sink(payload, writer.slot), RATE, 0.0, anchor=start_chunk > 0)
+        state = self.initial_state()
+        skip_time = None
+        skip_slot = 0
+        frames = list(enumerate(self.times))
+        mode = None
+        if start_chunk > 0:
+            saved = ck.load(start_chunk) if use_checkpoint else None
+            if saved is not None:
+                state = saved["arrays"]
+                writer.pending = saved["pending"]
+                writer.pending_slot = saved["pending_slot"]
+                skip_slot = start_chunk * self.CHUNK_SLOTS
+                seek = max(0.0, (skip_slot - 1) / RATE - 1.0)
+                mode = "checkpoint"
+            else:
+                skip_time = max(0.0, (start_chunk * self.CHUNK_SLOTS) / RATE - warmup)
+                seek = max(0.0, skip_time - 0.5)
+                mode = "warmup"
+            frames = [(i, t) for i, t in frames if t >= seek]  # o salto do decodificador: cai um pouco antes
+        state, done, stopped = tools.process_frames(
+            ((t, float(i)) for i, t in frames), self.infer, state, writer, ck=ck, parts_sink=sink, stop_file=stop_file, skip_before_time=skip_time, skip_before_slot=skip_slot
+        )
+        if not stopped:
+            writer.finish()
+            sink.finish()
+        else:
+            sink.abort()
+        return {"stopped": stopped, "done": done, "mode": mode, "chunks": [c[0] for c in sink.completed]}
+
+    def parts(self):
+        out = {}
+        for name in sorted(os.listdir(self.dir)):
+            if name.startswith("p") and name.endswith(".mp4"):
+                with open(os.path.join(self.dir, name), "rb") as fh:
+                    out[int(name[1:5])] = fh.read()
+        return out
+
+
+class CheckpointChecks(unittest.TestCase):
+    def setUp(self):
+        self.times = camera_times(12.0, drop_every=9, jitter=0.003)
+
+    def test_resume_from_the_checkpoint_gives_exactly_the_continuous_run(self):
+        with tempfile.TemporaryDirectory() as full_dir, tempfile.TemporaryDirectory() as cut_dir:
+            full = Pipeline(full_dir, self.times)
+            r = full.run()
+            self.assertFalse(r["stopped"])
+            expected = full.parts()
+            self.assertGreaterEqual(len(expected), 5)
+            # nada sobra em disco depois de uma rodada inteira: o ponto de cada pedaco e apagado quando ele fecha
+            self.assertEqual([n for n in os.listdir(full_dir) if n.endswith(".npz")], [])
+
+            cut = Pipeline(cut_dir, self.times)
+            first = cut.run(stop_after=1)  # para no fim do pedaco 1 (pedido de parada)
+            self.assertTrue(first["stopped"])
+            self.assertEqual(first["chunks"], [0, 1])
+            # ficou o ponto de retomada do pedaco 2 (e so ele)
+            self.assertEqual([n for n in os.listdir(cut_dir) if n.endswith(".npz")], ["s0002.npz"])
+            os.remove(os.path.join(cut_dir, "parar"))
+
+            second = cut.run(start_chunk=2)
+            self.assertEqual(second["mode"], "checkpoint")
+            self.assertFalse(second["stopped"])
+            got = cut.parts()
+            self.assertEqual(sorted(got), sorted(expected))
+            for index in expected:
+                self.assertEqual(got[index], expected[index], "pedaco %d diferente da rodada continua" % index)
+            self.assertEqual([n for n in os.listdir(cut_dir) if n.endswith(".npz")], [])
+
+    def test_resume_at_every_chunk_boundary_is_exact(self):
+        with tempfile.TemporaryDirectory() as full_dir:
+            full = Pipeline(full_dir, self.times)
+            full.run()
+            expected = full.parts()
+        for cut_after in (0, 1, 2, 3):
+            with tempfile.TemporaryDirectory() as cut_dir:
+                cut = Pipeline(cut_dir, self.times)
+                cut.run(stop_after=cut_after)
+                os.remove(os.path.join(cut_dir, "parar"))
+                cut.run(start_chunk=cut_after + 1)
+                self.assertEqual(cut.parts(), expected, "retomada depois do pedaco %d" % cut_after)
+
+    def test_without_the_checkpoint_the_resume_falls_back_to_warmup_and_still_covers_every_slot(self):
+        with tempfile.TemporaryDirectory() as full_dir, tempfile.TemporaryDirectory() as cut_dir:
+            full = Pipeline(full_dir, self.times)
+            full.run()
+            expected = full.parts()
+            cut = Pipeline(cut_dir, self.times)
+            cut.run(stop_after=1)
+            os.remove(os.path.join(cut_dir, "parar"))
+            os.remove(os.path.join(cut_dir, "s0002.npz"))  # o ponto sumiu
+            second = cut.run(start_chunk=2)
+            self.assertEqual(second["mode"], "warmup")
+            got = cut.parts()
+            self.assertEqual(sorted(got), sorted(expected))
+            # o aquecimento nao e identico (a memoria longa do estado nao volta), mas cada pedaco tem o mesmo numero de instantes
+            for index in expected:
+                self.assertEqual(len(got[index].splitlines()), len(expected[index].splitlines()))
+            self.assertEqual(got[0], expected[0])
+            self.assertEqual(got[1], expected[1])
+            self.assertNotEqual(got[2], expected[2])
+
+    def test_a_checkpoint_that_does_not_fit_is_refused(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Pipeline(tmp, self.times)
+            p.run(stop_after=0)
+            good = tools.Checkpointer(tmp, Pipeline.CHUNK_SLOTS, 0, p.meta, np, lambda s: s)
+            self.assertIsNotNone(good.load(1))
+            self.assertIsNone(good.load(2))  # nao existe
+            other_size = tools.Checkpointer(tmp, Pipeline.CHUNK_SLOTS, 0, dict(p.meta, outW=16), np, lambda s: s)
+            self.assertIsNone(other_size.load(1))  # outro tamanho de imagem
+            other_chunk = tools.Checkpointer(tmp, Pipeline.CHUNK_SLOTS, 0, dict(p.meta, chunkSlots=60), np, lambda s: s)
+            self.assertIsNone(other_chunk.load(1))  # outro tamanho de pedaco
+            path = tools.checkpoint_path(tmp, 1)
+            with open(path, "rb") as fh:
+                data = fh.read()
+            with open(path, "wb") as fh:
+                fh.write(data[: len(data) // 2])  # pela metade
+            self.assertIsNone(good.load(1))
+            with open(path, "wb") as fh:
+                fh.write(b"isto nao e um npz")
+            self.assertIsNone(good.load(1))
 
 
 if __name__ == "__main__":

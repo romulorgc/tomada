@@ -70,6 +70,11 @@ export type MatteResult = {
   stopped?: boolean
   /** Em pedaços: todos os pedaços prontos depois desta rodada (os de antes e os novos). */
   chunks?: MatteChunk[]
+  /**
+   * Em pedaços, rodada que RETOMOU de pedaços já prontos: `checkpoint` = continuou do estado do RVM guardado (máscara idêntica à rodada contínua);
+   * `warmup` = não havia ponto de retomada e o RVM foi aquecido com 1 s de vídeo (máscara visualmente igual, não idêntica). Ausente = rodada que começou do zero.
+   */
+  resume?: 'checkpoint' | 'warmup' | null
 }
 
 export interface CameraEngine {

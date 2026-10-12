@@ -20,7 +20,7 @@ import { CAMERA_KINDS, type CameraJob, type CameraKind, type CameraView } from '
 import { FACE_FILE, FACE_TRACK_VERSION, faceCoverage, parseFaceTrack, type FaceTrack } from '@shared/face'
 import type { IpcEvents } from '@shared/ipc'
 import { MATTE_FILE, MATTE_META_FILE, MATTE_PARTIAL_FILE, MATTE_VERSION, type MatteMeta } from '@shared/matte'
-import { chunksFraction, MATTE_CHUNK_SECONDS, MATTE_PARTS_DIR, MATTE_PROGRESS_FILE, MATTE_PROGRESS_VERSION, progressMatchesCamera, type MatteChunk, type MatteProgress } from '@shared/matte-parts'
+import { chunksFraction, MATTE_CHUNK_SECONDS, MATTE_PARTS_DIR, MATTE_PROGRESS_FILE, MATTE_PROGRESS_VERSION, MATTE_WARMUP_SECONDS, progressMatchesCamera, type MatteChunk, type MatteProgress } from '@shared/matte-parts'
 import { mediaUrl } from '@shared/media-url'
 import { documentFilePaths } from '@shared/safe-path'
 import type { PrepareSnapshot } from '@shared/transcription'
@@ -386,6 +386,13 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
           if (grace) clearTimeout(grace)
           ctl.signal.removeEventListener('abort', relay)
           await rm(stopFile, { force: true }).catch(() => undefined)
+        }
+        if (result?.resume) {
+          logger.info(
+            result.resume === 'checkpoint'
+              ? `${label}: retomada exata (o estado do RVM voltou do ponto guardado: a máscara é a mesma da rodada contínua).`
+              : `${label}: retomada com aquecimento de ${MATTE_WARMUP_SECONDS} s (o ponto de retomada não existia: a máscara fica visualmente igual, não idêntica).`
+          )
         }
         if (result && !result.stopped) break
         await writes

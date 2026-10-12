@@ -350,6 +350,112 @@ class PartsSink:
             self.current = None
 
 
+CHECKPOINT_VERSION = 1
+
+
+def checkpoint_path(parts_dir, index):
+    """O ponto de retomada do pedaco `index` (`s0003.npz`): o estado do RVM no INICIO dele."""
+    return os.path.join(parts_dir, "s%04d.npz" % index)
+
+
+class Checkpointer:
+    """Guarda o ESTADO do RVM no inicio de cada pedaco, para a retomada continuar EXATAMENTE de onde a rodada parou: sem aquecimento e sem
+    diferenca de mascara na emenda (o estado recorrente do RVM guarda memoria longa; so reaquecer 1 s deixava a mascara um pouco diferente da
+    rodada continua pelo resto do video).
+
+    O ponto do pedaco k e tirado ANTES de processar o primeiro quadro cujo instante cai no pedaco k: e o estado depois do quadro anterior, e
+    junto vai a mascara desse quadro (o `pending` do SlotWriter, que ainda cobre os primeiros instantes do pedaco k). So ficam em disco o ponto
+    do pedaco em curso e o do seguinte: o do pedaco que fechou e apagado (`drop`). Se o ponto falta ou nao vale, a retomada usa o aquecimento.
+    """
+
+    def __init__(self, parts_dir, chunk_slots, first_chunk, meta, np_module, to_arrays):
+        self.dir = parts_dir
+        self.chunk_slots = int(chunk_slots)
+        self.next = int(first_chunk) + 1  # o proximo pedaco cujo ponto ainda nao foi guardado
+        self.meta = meta
+        self.np = np_module
+        self.to_arrays = to_arrays
+
+    def save_before(self, slot, writer, state):
+        """Chamado antes de processar o quadro que cai no instante `slot`: guarda o ponto de cada pedaco que esse quadro abre."""
+        while writer.pending is not None and slot >= self.next * self.chunk_slots:
+            self._save(self.next, writer, state)
+            self.next += 1
+
+    def _save(self, index, writer, state):
+        path = checkpoint_path(self.dir, index)
+        tmp = path + ".tmp"
+        try:
+            arrays = self.to_arrays(state)
+            fields = {"r%d" % i: a for i, a in enumerate(arrays)}
+            with open(tmp, "wb") as fh:
+                self.np.savez(
+                    fh,
+                    version=CHECKPOINT_VERSION,
+                    meta=json.dumps(self.meta, sort_keys=True),
+                    pending=self.np.frombuffer(writer.pending, dtype=self.np.uint8),
+                    pending_slot=writer.pending_slot,
+                    **fields
+                )
+            os.replace(tmp, path)
+        except Exception as exc:  # noqa: BLE001 - o ponto de retomada e um luxo: sem ele a retomada usa o aquecimento
+            _log("AVISO: nao consegui guardar o ponto de retomada do pedaco %d: %s" % (index, exc))
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    def load(self, index):
+        """O ponto de retomada do pedaco `index`, ou None se nao existe, esta pela metade ou e de outro tamanho/modelo."""
+        try:
+            with open(checkpoint_path(self.dir, index), "rb") as fh:
+                with self.np.load(fh, allow_pickle=False) as z:
+                    if int(z["version"]) != CHECKPOINT_VERSION:
+                        return None
+                    if json.loads(str(z["meta"])) != json.loads(json.dumps(self.meta, sort_keys=True)):
+                        return None
+                    return {"arrays": [z["r%d" % i] for i in range(4)], "pending": z["pending"].tobytes(), "pending_slot": int(z["pending_slot"])}
+        except Exception:  # noqa: BLE001 - qualquer problema = sem ponto (a retomada cai no aquecimento)
+            return None
+
+    def drop(self, index):
+        """O pedaco `index` fechou: o ponto do inicio dele nao serve mais."""
+        try:
+            os.remove(checkpoint_path(self.dir, index))
+        except OSError:
+            pass
+
+
+def process_frames(frames, infer, state, writer, ck=None, parts_sink=None, stop_file=None, skip_before_time=None, skip_before_slot=0, report=None):
+    """O laco do recorte: cada quadro `(instante em s, imagem)` da camera, em ordem, passa pelo `infer(imagem, estado) -> (mascara em bytes,
+    estado novo)` e a mascara entra na grade do `writer`. Devolve `(estado, quadros processados, parou)`.
+
+    Retomada: `skip_before_time` pula (so decodifica) os quadros anteriores ao inicio do aquecimento; `skip_before_slot` pula os que a rodada
+    anterior ja processou (a retomada exata, a partir do ponto guardado). `ck` guarda os pontos de retomada; `stop_file` faz parar no fim do
+    pedaco em curso, sem perder nada.
+    """
+    done = 0
+    for when, frame in frames:
+        if skip_before_time is not None and when < skip_before_time - 0.0005:
+            continue
+        slot = writer.slot_of(when)
+        if slot < skip_before_slot:
+            continue
+        if ck is not None:
+            ck.save_before(slot, writer, state)
+        payload, state = infer(frame, state)
+        writer.push(when, payload)
+        done += 1
+        if report is not None:
+            report(when, done)
+        if parts_sink is not None and stop_file and parts_sink.pulse:
+            # um pedaco acabou de ficar pronto: se pediram para parar (a exportacao precisa da placa), para AQUI, sem perder nada
+            parts_sink.pulse = False
+            if os.path.exists(stop_file):
+                return state, done, True
+    return state, done, False
+
+
 def _lower_priority():
     """O recorte e trabalho de fundo: roda com prioridade abaixo do normal (o ffmpeg filho herda), para nao atrapalhar a pessoa nem a previa."""
     try:
@@ -464,8 +570,10 @@ def _matte(request):
     # SlotWriter, que segura o primeiro quadro desde o instante 0
     encoder = None
     parts_sink = None
-    first_slot_time = None  # na retomada: o instante (s) a partir do qual os quadros entram no RVM
-    anchor = False
+    ck = None
+    start_chunk = 0
+    chunk_slots = 0
+    stop_file = None
     if parts:
         # MODO EM PEDACOS (retomavel): um arquivo por `chunkSeconds`; `startChunk` = o primeiro que falta (os anteriores ja estao prontos)
         parts_dir = parts["dir"]
@@ -474,8 +582,11 @@ def _matte(request):
         start_chunk = max(0, int(parts.get("startChunk") or 0))
         stop_file = parts.get("stopFile")
         warmup_seconds = max(0.0, float(parts.get("warmupSeconds") if parts.get("warmupSeconds") is not None else 1.0))
+        ck_meta = {"outW": out_w, "outH": out_h, "ratio": ratio_value, "fps": fps, "chunkSlots": chunk_slots, "model": os.path.getsize(model)}
+        ck = Checkpointer(parts_dir, chunk_slots, start_chunk, ck_meta, np, lambda rec: [v.numpy() for v in rec])
 
         def on_chunk(index, frames, size):
+            ck.drop(index)  # o pedaco fechou: o ponto de retomada do inicio dele nao serve mais
             _log("CHUNK %d %d %d" % (index, frames, size))
 
         def make_encoder(path):
@@ -487,11 +598,6 @@ def _matte(request):
         def sink(payload):
             parts_sink(payload, writer.slot)  # `writer` nasce logo abaixo; o instante absoluto vem dele
 
-        if start_chunk > 0:
-            anchor = True
-            first_slot_time = max(0.0, (start_chunk * chunk_slots) / fps - warmup_seconds)
-            seek_to = max(0.0, first_slot_time - 0.5)  # um pouco antes: o salto cai num quadro-chave anterior de qualquer jeito
-            container.seek(int(seek_to / float(stream.time_base)), stream=stream, backward=True, any_frame=False)
     else:
         encoder = Encoder(ffmpeg, out_path, (out_w, out_h), rate, crf, gop)
 
@@ -500,49 +606,73 @@ def _matte(request):
 
     # o estado recorrente (memoria entre quadros) fica na placa: o que torna a mascara estavel de um quadro para o outro
     z = np.zeros((1, 1, 1, 1), np.float32)
-    rec = [ort.OrtValue.ortvalue_from_numpy(z, device, 0) for _ in range(4)]
+    state = [ort.OrtValue.ortvalue_from_numpy(z, device, 0) for _ in range(4)]
     ratio = np.array([ratio_value], np.float32)
 
-    writer = SlotWriter(sink, fps, 0.0, anchor=anchor)
+    writer = SlotWriter(sink, fps, 0.0, anchor=start_chunk > 0)
+    skip_before_time = None
+    skip_before_slot = 0
+    resume = None
+    if start_chunk > 0:
+        saved = ck.load(start_chunk)
+        if saved is not None:
+            # RETOMADA EXATA: o estado do RVM e a mascara do quadro anterior voltam do ponto guardado; os quadros que a rodada anterior ja
+            # processou so sao decodificados. O resultado e o da rodada continua.
+            state = [ort.OrtValue.ortvalue_from_numpy(a, device, 0) for a in saved["arrays"]]
+            writer.pending = saved["pending"]
+            writer.pending_slot = saved["pending_slot"]
+            skip_before_slot = start_chunk * chunk_slots
+            seek_to = max(0.0, (skip_before_slot - 1) / fps - 1.0)  # a margem cobre taxa variavel; o salto cai num quadro-chave anterior
+            resume = "checkpoint"
+        else:
+            # sem ponto de retomada: o RVM ve 1 s de video antes do primeiro instante que falta so para "esquentar" a memoria dele (a
+            # mascara desse trecho nao e gravada); a continuacao fica visualmente igual, nao identica
+            skip_before_time = max(0.0, (start_chunk * chunk_slots) / fps - warmup_seconds)
+            seek_to = max(0.0, skip_before_time - 0.5)
+            resume = "warmup"
+        container.seek(int(seek_to / float(stream.time_base)), stream=stream, backward=True, any_frame=False)
+        _log("RESUME %s %d" % (resume, start_chunk))
+
+    def infer(frame, rec):
+        rgb = frame.reformat(width=out_w, height=out_h, format="rgb24").to_ndarray()
+        src = np.ascontiguousarray(rgb.transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
+        io = session.io_binding()
+        io.bind_cpu_input("src", src)
+        io.bind_cpu_input("downsample_ratio", ratio)
+        for i in range(4):
+            io.bind_ortvalue_input("r%di" % (i + 1), rec[i])
+        io.bind_output("pha", "cpu")
+        for i in range(4):
+            io.bind_output("r%do" % (i + 1), device, 0)
+        session.run_with_iobinding(io)
+        outs = io.get_outputs()
+        alpha = np.clip(outs[0].numpy()[0, 0], 0.0, 1.0)
+        gray = (alpha * 255.0 + 0.5).astype(np.uint8)
+        return gray.tobytes(), [outs[i + 1] for i in range(4)]
+
+    def timed(frames):
+        for index, frame in enumerate(frames):
+            yield (frame.time if frame.time is not None else (start_seconds + index / fps)), frame
+
+    last_report = [0.0]
+
+    def report(when, count):
+        now = time.time()
+        if now - last_report[0] < 0.25:
+            return
+        last_report[0] = now
+        if parts and duration_ms > 0:
+            _log("PROGRESS %.3f" % min(0.999, max(0.0, when * 1000.0 / duration_ms)))
+        elif total > 0:
+            _log("PROGRESS %.3f" % min(0.999, count / float(total)))
+
     done = 0
     stopped = False
-    last_report = 0.0
     _log("PROGRESS 0")
     try:
-        for frame in container.decode(stream):
-            when = frame.time if frame.time is not None else (start_seconds + done / fps)
-            if first_slot_time is not None and when < first_slot_time - 0.0005:
-                continue  # quadros do salto ate o inicio do aquecimento: so decodificados, nunca vao ao RVM
-            rgb = frame.reformat(width=out_w, height=out_h, format="rgb24").to_ndarray()
-            src = np.ascontiguousarray(rgb.transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
-            io = session.io_binding()
-            io.bind_cpu_input("src", src)
-            io.bind_cpu_input("downsample_ratio", ratio)
-            for i in range(4):
-                io.bind_ortvalue_input("r%di" % (i + 1), rec[i])
-            io.bind_output("pha", "cpu")
-            for i in range(4):
-                io.bind_output("r%do" % (i + 1), device, 0)
-            session.run_with_iobinding(io)
-            outs = io.get_outputs()
-            rec = [outs[i + 1] for i in range(4)]
-            alpha = np.clip(outs[0].numpy()[0, 0], 0.0, 1.0)
-            gray = (alpha * 255.0 + 0.5).astype(np.uint8)
-            writer.push(when, gray.tobytes())
-            done += 1
-            if parts_sink is not None and stop_file and parts_sink.pulse:
-                # um pedaco acabou de ficar pronto: se pediram para parar (a exportacao precisa da placa), para AQUI, sem perder nada
-                parts_sink.pulse = False
-                if os.path.exists(stop_file):
-                    stopped = True
-                    break
-            now = time.time()
-            if now - last_report >= 0.25:
-                last_report = now
-                if parts and duration_ms > 0:
-                    _log("PROGRESS %.3f" % min(0.999, max(0.0, when * 1000.0 / duration_ms)))
-                elif total > 0:
-                    _log("PROGRESS %.3f" % min(0.999, done / float(total)))
+        state, done, stopped = process_frames(
+            timed(container.decode(stream)), infer, state, writer, ck=ck, parts_sink=parts_sink, stop_file=stop_file, skip_before_time=skip_before_time, skip_before_slot=skip_before_slot, report=report
+        )
         if not stopped:
             writer.finish()
         if encoder is not None:
@@ -583,6 +713,7 @@ def _matte(request):
         result["lastChunk"] = last_chunk
         result["chunkSlots"] = chunk_slots
         result["stopped"] = stopped
+        result["resume"] = resume
     json.dump(result, sys.stdout)
     sys.stdout.flush()
 

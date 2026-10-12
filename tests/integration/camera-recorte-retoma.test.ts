@@ -13,11 +13,12 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CameraJob } from '@shared/camera-analysis'
 import type { IpcEvents } from '@shared/ipc'
 import { MATTE_FILE, MATTE_PARTIAL_FILE } from '@shared/matte'
-import { matteChunkName, MATTE_PARTS_DIR, MATTE_PROGRESS_FILE, MATTE_PROGRESS_VERSION, parseMatteProgress, type MatteProgress } from '@shared/matte-parts'
+import { matteChunkName, matteStateName, MATTE_PARTS_DIR, MATTE_PROGRESS_FILE, MATTE_PROGRESS_VERSION, parseMatteProgress, type MatteProgress } from '@shared/matte-parts'
 import { parseProject } from '@shared/project'
 import type { Project } from '@shared/types'
 import { createMockCamera } from '../../src/main/camera/mock-engine'
 import { MatteJoinError } from '../../src/main/camera/matte-join'
+import { loadResume } from '../../src/main/camera/matte-resume'
 import { createCameraService, type CameraService } from '../../src/main/camera/service'
 import type { CameraEngine, MakeMatteOptions } from '../../src/main/camera/types'
 import type { GpuGate } from '../../src/main/gpu-queue'
@@ -546,6 +547,25 @@ describe('o recorte dá lugar à placa (exportação, transcrição, prévia)', 
     expect(t.progressOf('p1')).toMatchObject({ status: 'interrupted', chunks: [] })
     expect(t.messages('error')).toEqual([])
     expect(t.messages('warn').some((m) => m.includes('interrompido pelo fechamento do app'))).toBe(true)
+  })
+})
+
+describe('pontos de retomada do estado do RVM (retomada idêntica)', () => {
+  it('a retomada guarda só os pedaços inteiros e o ponto do SEGUINTE; tira os pontos velhos, os de depois do buraco e o que sobrou de uma rodada que morreu', async () => {
+    const t = setup()
+    plant(t.dirs.p1!, 5)
+    const parts = join(t.dirs.p1!, MATTE_PARTS_DIR)
+    for (const name of [matteStateName(3), matteStateName(5), matteStateName(6), `${matteStateName(7)}.tmp`, 'p0005.mp4.tmp', 'junta.txt', 'parar']) writeFileSync(join(parts, name), 'x')
+    const cam = statSync(join(t.dirs.p1!, 'media', 'camera.mp4'))
+    const state = await loadResume({ partsDir: parts, progressFile: join(t.dirs.p1!, MATTE_PROGRESS_FILE), cameraPath: 'media/camera.mp4', cameraMtimeMs: Math.trunc(cam.mtimeMs), chunkSeconds: CHUNK_S })
+    expect(state.chunks.map((c) => c.index)).toEqual([0, 1, 2, 3, 4])
+    expect(state.restart).toBe(false)
+    expect(readdirSync(parts).sort()).toEqual([matteChunkName(0), matteChunkName(1), matteChunkName(2), matteChunkName(3), matteChunkName(4), matteStateName(5)])
+  })
+
+  it('o nome do ponto de retomada é s0000.npz, s0001.npz… (o mesmo que o script em Python grava)', () => {
+    expect(matteStateName(0)).toBe('s0000.npz')
+    expect(matteStateName(12)).toBe('s0012.npz')
   })
 })
 

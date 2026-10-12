@@ -461,6 +461,7 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
       chunks?: { index?: number; frames?: number }[]
       lastChunk?: number
       stopped?: boolean
+      resume?: 'checkpoint' | 'warmup' | null
     }
     let json: Json
     try {
@@ -487,14 +488,15 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
     // --- em pedaços: os de antes (o serviço guardou) + os desta rodada (o script contou) -------------------------------------
     const fresh: MatteChunk[] = (json.chunks ?? []).filter((c): c is { index: number; frames: number } => Number.isInteger(c.index) && typeof c.frames === 'number' && c.frames > 0).map((c) => ({ index: c.index, frames: c.frames, bytes: 0 }))
     const all = contiguousChunks([...done, ...fresh.filter((c) => !done.some((d) => d.index === c.index))])
-    if (json.stopped) return result(all.reduce((sum, c) => sum + c.frames, 0), { stopped: true, chunks: all })
+    const resume = json.resume === 'checkpoint' || json.resume === 'warmup' ? json.resume : null
+    if (json.stopped) return result(all.reduce((sum, c) => sum + c.frames, 0), { stopped: true, chunks: all, resume })
     if (all.length === 0) throw new Error('O recorte do fundo terminou sem quadros.')
     const last = typeof json.lastChunk === 'number' ? json.lastChunk : all.length - 1
     if (all.length !== last + 1) throw new MatteJoinError(`Faltam pedaços do recorte (prontos: ${all.length}, esperados: ${last + 1}).`)
     const frames = all.reduce((sum, c) => sum + c.frames, 0)
     await joinMatteParts({ ffmpeg, dir: parts.dir, indices: all.map((c) => c.index), out: o.out, frames, fps: json.fps, ...(o.signal ? { signal: o.signal } : {}) })
     o.onProgress?.(1)
-    return result(frames, { chunks: all })
+    return result(frames, { chunks: all, resume })
   }
 
   return { id: CAMERA_ENGINE_ID, prepareSteps: CAMERA_STEPS, check, prepare, detectFaces, makeMatte }

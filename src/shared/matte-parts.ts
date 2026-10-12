@@ -16,10 +16,15 @@ export const MATTE_PROGRESS_FILE = 'media/camera-matte.progress.json'
 export const MATTE_PROGRESS_VERSION = 1
 /** Duração de cada pedaço (s). Perder o pedaço em curso custa até ~15 s de trabalho; juntar nove pedaços custa menos de 1 s. */
 export const MATTE_CHUNK_SECONDS = 10
-/** Antes do primeiro instante que falta, o RVM vê este tanto de vídeo (s) só para "esquentar" a memória dele (a máscara não é gravada). */
+/** Sem ponto de retomada: antes do primeiro instante que falta, o RVM vê este tanto de vídeo (s) só para "esquentar" a memória dele (a máscara não é gravada). */
 export const MATTE_WARMUP_SECONDS = 1
 
 export const matteChunkName = (index: number): string => `p${String(index).padStart(4, '0')}.mp4`
+/**
+ * O PONTO DE RETOMADA do pedaço `index` (`s0003.npz`, 4,4 MB): o estado do RVM no início dele. Com ele a retomada continua IDÊNTICA à rodada contínua;
+ * sem ele (sumiu, outra versão) ela cai no aquecimento de `MATTE_WARMUP_SECONDS`. Só o do pedaço em curso e o do seguinte ficam em disco.
+ */
+export const matteStateName = (index: number): string => `s${String(index).padStart(4, '0')}.npz`
 
 export type MatteChunk = { index: number; frames: number; bytes: number }
 

@@ -52,7 +52,7 @@ process.stdin.on('end', () => {
       if (mode === 'pedacos-parou') break
     }
     const last = mode === 'pedacos-buraco' ? total + 2 : total - 1
-    return process.stdout.write(JSON.stringify({ engine: 'rvm', device: 'cuda', frames: 0, fps: 30, frame: { w: 160, h: 90 }, chunks: made, lastChunk: last, stopped: mode === 'pedacos-parou', stats: { seconds: 1, msPerFrame: 10 } }))
+    return process.stdout.write(JSON.stringify({ engine: 'rvm', device: 'cuda', frames: 0, fps: 30, frame: { w: 160, h: 90 }, chunks: made, lastChunk: last, stopped: mode === 'pedacos-parou', resume: req.parts.startChunk > 0 ? 'checkpoint' : null, stats: { seconds: 1, msPerFrame: 10 } }))
   }
   fs.writeFileSync(req.out, 'máscara')
   process.stdout.write(JSON.stringify({ engine: 'rvm', device: 'cuda', frames: 90, fps: 30, frame: { w: 640, h: 360 }, stats: { seconds: 3, msPerFrame: 33.3 } }))
@@ -253,6 +253,7 @@ describe('makeMatte EM PEDAÇOS com o interpretador falso (e o ffmpeg de verdade
     expect(req.maxSide).toBe(1280)
     expect(heard).toEqual([0, 1, 2])
     expect(r.stopped).toBeUndefined()
+    expect(r.resume).toBeNull() // rodada que começou do zero
     expect(r.frames).toBe(140)
     expect(r.chunks?.map((c) => c.index)).toEqual([0, 1, 2])
     const v = probeJson(out).streams.find((x) => x.codec_type === 'video')!
@@ -273,6 +274,7 @@ describe('makeMatte EM PEDAÇOS com o interpretador falso (e o ffmpeg de verdade
     const r = await engineOf(s, realFfmpeg()).makeMatte({ video, out, durationMs: 4667, parts: parts(done, (c) => heard.push(c.index)) })
     expect((s.pedido() as unknown as { parts: { startChunk: number } }).parts.startChunk).toBe(2)
     expect(heard).toEqual([2])
+    expect(r.resume).toBe('checkpoint')
     expect(r.frames).toBe(140)
     expect(r.chunks?.map((c) => c.index)).toEqual([0, 1, 2])
     expect(Number(probeJson(out).streams.find((x) => x.codec_type === 'video')!.nb_frames)).toBe(140)

@@ -7,7 +7,7 @@
  */
 import { mkdir, readdir, readFile, rm, rmdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { contiguousChunks, matteChunkName, MATTE_PROGRESS_VERSION, parseMatteProgress, progressMatchesCamera, type MatteChunk, type MatteProgress } from '@shared/matte-parts'
+import { contiguousChunks, matteChunkName, matteStateName, MATTE_PROGRESS_VERSION, parseMatteProgress, progressMatchesCamera, type MatteChunk, type MatteProgress } from '@shared/matte-parts'
 import { writeFileAtomic } from '../fs-utils'
 
 export type ResumeState = {
@@ -71,9 +71,12 @@ async function verifiedChunks(partsDir: string, chunks: readonly MatteChunk[]): 
   return ok
 }
 
-/** Deixa na pasta só os pedaços de `keep`: tira o que sobrou de uma rodada que morreu (`.tmp`), o que veio depois de um buraco, a lista da junção. */
+/**
+ * Deixa na pasta só os pedaços de `keep` e o ponto de retomada do SEGUINTE (o estado do RVM para continuar daí): tira o que sobrou de uma rodada que
+ * morreu (`.tmp`), o que veio depois de um buraco, a lista da junção e pontos de retomada que não servem mais.
+ */
 async function keepOnly(partsDir: string, keep: readonly MatteChunk[]): Promise<void> {
-  const wanted = new Set(keep.map((c) => matteChunkName(c.index)))
+  const wanted = new Set([...keep.map((c) => matteChunkName(c.index)), matteStateName(keep.length)])
   const names = await readdir(partsDir).catch(() => [] as string[])
   for (const name of names) if (!wanted.has(name)) await rm(join(partsDir, name), { force: true, maxRetries: 8, retryDelay: 250 })
 }
