@@ -22,7 +22,7 @@ import { projectForFormat, ensureVertical } from '@shared/vertical'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
 import { AudioQualityNotice } from '../components/AudioQualityNotice'
-import { cameraJobKey, useCamera } from '../camera-store'
+import { cameraJobKey, useCamera, useMatteStatus } from '../camera-store'
 import { useApp } from '../store'
 import { useTranscription } from '../transcription-store'
 import { createAiUiStore } from './ai-store'
@@ -32,6 +32,7 @@ import { PreviewEngine } from './engine'
 import { ExportDialog } from './ExportDialog'
 import { useEditorOps } from './ops'
 import { createPlaybackStore } from './playback-store'
+import { usePreviewHeartbeat } from './use-preview-heartbeat'
 import { applyClean, buildCleanInput } from './text/clean-actions'
 import { createTextStore } from './text/text-store'
 import { SidePanel } from './panels/SidePanel'
@@ -185,6 +186,8 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   )
   useEffect(() => { if(itemId && itemId !== 'youtube') store.getState().setFormat('vertical') },[store,itemId])
   const playback = useMemo(() => createPlaybackStore(), [detail.id])
+  // a prévia tocando tem prioridade sobre o recorte do fundo (que roda em segundo plano na mesma placa)
+  usePreviewHeartbeat(playback)
   const text = useMemo(() => createTextStore(), [detail.id])
   const clips = useMemo(() => createClipsUiStore(), [detail.id])
   const aiUi = useMemo(() => createAiUiStore(), [detail.id])
@@ -338,6 +341,8 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   useEffect(() => {
     if (matteJob?.state === 'done' && matteJob.url) setMatteUrl(matteJob.url)
   }, [matteJob])
+  // O estado ÚNICO do recorte (pronto | em andamento com % | na fila | falhou): o chip da barra, a aba Câmera e quem desenha a cena consultam este.
+  const matteStatus = useMatteStatus(detail.id, matteUrl)
 
   // --- cena -----------------------------------------------------------------------------------------------
   const cursorData = useMemo(() => (rawData ? applyScreenCrop(rawData, project) : null), [rawData, project.screenCrop, project.sources.screen])
@@ -660,7 +665,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       transcript,
       reloadTranscript: loadTranscript,
       face,
-      matte: { url: matteUrl, needed: needsMatteAny },
+      matte: { url: matteUrl, needed: needsMatteAny, status: matteStatus },
       levels,
       text,
       exporter,
@@ -669,7 +674,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, itemId, store, playback, cursorData, rawData, screenActive, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
+    [detail, itemId, store, playback, cursorData, rawData, screenActive, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, matteStatus, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (

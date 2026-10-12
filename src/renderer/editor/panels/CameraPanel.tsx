@@ -89,12 +89,13 @@ function MatteStatus() {
   const pct = Math.round((job?.fraction ?? 0) * 100)
 
   if (isCameraJobActive(job)) {
+    const text = job!.waiting === 'gpu' ? P.status.waiting(pct) : job!.state === 'queued' ? P.status.queued : job!.resumed ? P.status.resumed(pct) : P.status.running(pct)
     return (
       <div className="cam-status" data-testid="matte-status" data-state={job!.state}>
         <p className="ctl-note" aria-live="polite">
-          {job!.state === 'queued' ? P.status.queued : P.status.running(pct)}
+          {text}
         </p>
-        <div className="meter" role="progressbar" aria-label={P.status.running(pct)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+        <div className="meter" role="progressbar" aria-label={text} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
           <i style={{ width: `${pct}%` }} />
         </div>
         <button type="button" className="btn btn-ghost" onClick={() => void cancel(detail.id, 'matte')} data-testid="matte-cancel">
@@ -110,7 +111,8 @@ function MatteStatus() {
           {P.status.failed}
           {job.error ? `: ${job.error}` : ''}
         </p>
-        <button type="button" className="btn" onClick={() => void analyze(detail.id, 'matte', true)} data-testid="matte-retry">
+        {/* "Tentar de novo" CONTINUA do último pedaço pronto; só "Recortar de novo" (abaixo, quando pronto) refaz do zero */}
+        <button type="button" className="btn" onClick={() => void analyze(detail.id, 'matte')} data-testid="matte-retry">
           {P.status.retry}
         </button>
       </div>

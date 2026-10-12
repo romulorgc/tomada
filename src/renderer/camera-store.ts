@@ -5,8 +5,10 @@
  *
  * Falha nunca é silenciosa: o erro vai para o estado, a tela o mostra com "Tentar de novo", e o motivo técnico vai para o log.
  */
+import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { CameraJob, CameraKind, CameraView } from '@shared/camera-analysis'
+import { matteStatusOf, type MatteStatus } from '@shared/matte-parts'
 import type { PrepareSnapshot } from '@shared/transcription'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -111,3 +113,13 @@ export const useCamera = create<CameraStore>()((set, get) => ({
 
 /** O trabalho está na fila ou rodando? */
 export const isCameraJobActive = (job: CameraJob | undefined): boolean => job?.state === 'queued' || job?.state === 'running'
+
+/**
+ * O ESTADO ÚNICO do recorte do fundo de um projeto (R1): pronto, em andamento (com `percent`), na fila / em espera pela placa, ou falhou
+ * (com o motivo). `matteUrl` é a URL do `camera-matte.mp4` que vale para a câmera (a leitura do projeto); o trabalho vem dos eventos
+ * `camera:job`. É isto que o chip do editor, a aba Câmera e a prévia consultam - nada de reler `jobs` à mão.
+ */
+export function useMatteStatus(projectId: string, matteUrl: string | null): MatteStatus {
+  const job = useCamera((s) => s.jobs[cameraJobKey(projectId, 'matte')])
+  return useMemo(() => matteStatusOf({ url: matteUrl, job }), [matteUrl, job])
+}
