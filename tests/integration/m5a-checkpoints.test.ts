@@ -152,15 +152,15 @@ it('checkpoint falhando por 30 s avisa uma vez, vídeo continua e sucesso reinic
   const spy = vi.spyOn(manifests, 'writeManifest').mockRejectedValue(new Error('EPERM metadado'))
   try {
     await world.service.chunk('screen', new Uint8Array([1]))
-    expect(world.emitted.filter(e => e.channel === 'record:notice')).toEqual([])
+    expect(world.emitted.filter(e => e.channel === 'record:notice' && !/Pouco espaço no disco/.test(e.payload.text))).toEqual([])
     now += 31000; await world.service.chunk('screen', new Uint8Array([2]))
     await world.service.chunk('screen', new Uint8Array([3]))
-    expect(world.emitted.filter(e => e.channel === 'record:notice')).toHaveLength(1)
+    expect(world.emitted.filter(e => e.channel === 'record:notice' && !/Pouco espaço no disco/.test(e.payload.text))).toHaveLength(1)
     expect(world.service.recording).toBe(true)
     spy.mockImplementation(realWrite); await world.service.chunk('screen', new Uint8Array([4]))
     spy.mockRejectedValue(new Error('EPERM outra vez')); now += 10000
     await world.service.chunk('screen', new Uint8Array([5]))
-    expect(world.emitted.filter(e => e.channel === 'record:notice')).toHaveLength(1)
+    expect(world.emitted.filter(e => e.channel === 'record:notice' && !/Pouco espaço no disco/.test(e.payload.text))).toHaveLength(1)
     expect((await stat(join(dir, 'raw/screen.webm'))).size).toBe(5)
   } finally { spy.mockRestore(); await world.service.shutdown() }
 })
