@@ -19,7 +19,7 @@ import { buildCaptionTrack, captionAt, pageAlpha, popScale, PAGE_FADE_MS, type C
 import { resolveCaptionStyle, resolveHookStyle, type CaptionRenderStyle, type HookRenderStyle } from './caption-style'
 import { cropSignature, pointToCrop, rectFromCrop, resolveScreenCrop, type CropTimeline } from './crop'
 import { projectDurationMs } from './project'
-import { BUBBLE_TARGET, PRESENTER_TARGET, buildFaceFramer, cameraCropRect, faceAimAt, lerpTarget, type CropTarget, type FaceFramer, type FaceTrack } from './face'
+import { BUBBLE_TARGET, PRESENTER_TARGET, buildFaceFramer, cameraCropRect, faceAimAt, lerpTarget, sideBySideTarget, type CropTarget, type FaceFramer, type FaceTrack } from './face'
 import { cornerAt, greenscreenTarget, greenscreenWindow, isGreenscreen, personFit, planGreenCorner, typicalAim, type CornerPlan, type GreenscreenKind, type PersonFit } from './greenscreen'
 import { LEGIBLE_PROFILES, bodyTextPx, legibilityIssues, legiblePath, legibleStateAt, legibleZoom, planLegibleWindow, textPxOnFrame, type LegibilityIssue, type LegiblePlan } from './legible'
 import {
@@ -41,6 +41,7 @@ import { GRID_HZ } from './cursor'
 import { CENTER_BOX, HOOK_BAND, HOOK_CLEAR_Y, HOOK_MS, VERTICAL_W, WIDE_BOX, cropView, hookPlacement, layoutFollow, safeBoxFor, stackRects, verticalCaptionY, type View } from './vertical'
 import { ZOOM_SCALE_SPRING } from './spring'
 import { computeCameraPath, sampleCameraPath, visibleRect, type CameraPath } from './zoom'
+import { ZOOM_RAMP_MS } from './zoom-speech'
 import { fitRect } from './geometry'
 import { focusPoints } from './action-focus'
 import { createContentTrack, type ContentMap } from './content-map'
@@ -317,7 +318,8 @@ export function deriveProject(project: Project, rawData: CursorData, format: For
   const layoutKeys = new Set<string>()
   if (format.kind === 'horizontal') {
     const view = { w: 1, h: 1 }
-    paths.main = { view, path: computeCameraPath(project, data.grid, { durationMs, view, sourceAspect, scaleSpring: ZOOM_SCALE_SPRING.horizontal }) }
+    // o zoom do 16:9 abre e fecha em rampa de 0,9 s em ease-out (a curva medida no Screen Studio), não na mola (quase linear no começo)
+    paths.main = { view, path: computeCameraPath(project, data.grid, { durationMs, view, sourceAspect, scaleRamp: { ms: ZOOM_RAMP_MS } }) }
   } else {
     layoutKeys.add(mainKey)
     for (const pt of layoutPoints) layoutKeys.add(resolveLayout(pt.layout, hasScreen, hasCamera, format.kind))
@@ -905,6 +907,16 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
   const punchNow = 1 + (punchScale - 1) * punchWeight
 
   const faceAim = derived.cameraSize && derived.face ? faceAimAt(derived.face, sourceT) : null
+  // O alvo do enquadramento: o do lado a lado fecha mais no rosto quando o cartão é estreito (o rosto não encolhe com ele); o do
+  // apresentador põe a cabeça perto do topo da janela. Cada um entra com o peso do layout (a troca de layout é gradual).
+  const sideWeight = clamp01((curKey === 'side-by-side' ? e : 0) + (p < 1 && prevKey === 'side-by-side' && prevKey !== curKey ? 1 - e : 0))
+  const sideCard = sideWeight > 0 ? layoutGeometry('side-by-side', style, format, sources, 0).camera?.rect.h : undefined
+  const baseTarget = sideCard ? lerpTarget(BUBBLE_TARGET, sideBySideTarget(format.h, sideCard), sideWeight) : BUBBLE_TARGET
+  // o alvo do recorte (apresentador do 16:9, V-D ou V-E): cada layout com você sem fundo põe o rosto do seu jeito; na troca entre dois deles o alvo é gradual
+  const curCut = isCutoutLayout(curKey) ? cropTargetOf(curKey) : null
+  const prevCut = p < 1 && isCutoutLayout(prevKey) ? cropTargetOf(prevKey) : null
+  const cutTarget = curCut && prevCut && prevKey !== curKey ? lerpTarget(prevCut, curCut, e) : (curCut ?? prevCut ?? PRESENTER_TARGET)
+  const cropTarget = cutWeight > 0 ? lerpTarget(baseTarget, cutTarget, cutWeight) : baseTarget
   const camera: SceneCamera | null =
     cameraBox && derived.cameraSize
       ? {
@@ -917,7 +929,7 @@ export function evaluateScene(project: Project, derived: Derived, sourceT: numbe
               cameraBox.rect.w / cameraBox.rect.h,
               faceAim,
               style.camera.framing,
-              p < 1 && prevKey !== curKey ? lerpTarget(cropTargetOf(prevKey), cropTargetOf(curKey), e) : cropTargetOf(curKey)
+              cropTarget
             ),
             punchNow,
             faceAim

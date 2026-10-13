@@ -11,6 +11,7 @@ import type { ClipQueue } from '@shared/clip-queue'
 import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import type { CursorData, Derived } from '@shared/scene'
 import type { FaceTrack } from '@shared/face'
+import type { MatteStatus } from '@shared/matte-parts'
 import type { Range, Transcript } from '@shared/types'
 import type { AiUiStore } from './ai-store'
 import type { ClipsUiStore } from './clips-store'
@@ -50,8 +51,12 @@ export type EditorCtx = {
   reloadTranscript(): void
   /** A análise do rosto na câmera (enquadramento): lida de `media/camera-face.json`; `none` = ainda não existe. */
   face: AssetState<FaceTrack>
-  /** O recorte do fundo da câmera (M4c): a URL do vídeo da máscara (`null` = ainda não existe) e se algum trecho do formato aberto o usa; `fallback`: o usuário escolheu um layout com recorte e ele ainda não existe (a prévia mostra o layout sem recorte). */
-  matte: { url: string | null; needed: boolean; fallback: boolean }
+  /**
+   * O recorte do fundo da câmera (M4c): a URL do vídeo da máscara (`null` = ainda não existe), se algum trecho do formato aberto o usa e,
+   * desde a R1, o ESTADO ÚNICO dele (`status`: `ready` | `running` com `percent` | `queued` | `failed` com `error` | `none`). `fallback` (F2): o usuário
+   * escolheu um layout com recorte e ele ainda não existe (a prévia mostra o layout sem recorte).
+   */
+  matte: { url: string | null; needed: boolean; status: MatteStatus; fallback: boolean }
   /** Nível do áudio por quadro (para achar silêncio); só é pedido depois que há transcrição. */
   levels: AssetState<Levels>
   /** Estado da aba Texto (seleção, busca, escolhas da limpeza). */

@@ -182,6 +182,17 @@ export const ptBR = {
       exportDone: 'Exportado',
       exportError: 'Falhou: ver'
     },
+    /** O aviso discreto do recorte do fundo na barra do editor (R1). */
+    matteChip: {
+      running: (pct: number): string => `Recortando você do fundo: ${pct}%`,
+      resumed: (pct: number): string => `Continuando o recorte do fundo de onde parou: ${pct}%`,
+      waiting: (pct: number): string => `Recorte do fundo em espera enquanto o app usa a placa de vídeo: ${pct}%`,
+      queued: 'Recorte do fundo na fila…',
+      resumedToast: (pct: number): string => `O recorte do fundo ficou pela metade quando o app fechou. Vou continuar de onde parou (${pct}% já pronto).`,
+      tip: 'O recorte do fundo roda neste computador, em segundo plano. Se o app fechar no meio, ele continua de onde parou.',
+      failed: 'Não consegui recortar você do fundo.',
+      retry: 'Tentar de novo'
+    },
 
     transport: {
       label: 'Controles de reprodução',
@@ -344,8 +355,10 @@ export const ptBR = {
         status: {
           queued: 'Na fila para recortar você do fundo…',
           running: (pct: number): string => `Recortando você do fundo: ${pct}%`,
+          resumed: (pct: number): string => `Continuando o recorte do fundo de onde parou: ${pct}%`,
+          waiting: (pct: number): string => `Em espera enquanto o app exporta, transcreve ou toca a prévia: ${pct}%`,
           ready: 'Você já está recortado do fundo.',
-          missing: 'Você ainda não foi recortado do fundo. Isso começa sozinho quando um layout usa você sem fundo; se não começou, use o botão abaixo.',
+          missing: 'Você ainda não foi recortado do fundo. Isso acontece sozinho depois de cada gravação com câmera.',
           start: 'Recortar você do fundo agora',
           redo: 'Recortar de novo',
           failed: 'Não consegui recortar você do fundo',
@@ -375,8 +388,8 @@ export const ptBR = {
       presets: { off: 'Desligado', subtle: 'Sutil', moderate: 'Moderado', intense: 'Intenso' },
       presetHelp: {
         off: 'Sem zoom nos cliques.',
-        subtle: 'Aproxima pouco (1,3×) e raramente: até 3 por minuto.',
-        moderate: 'Como nos vídeos publicados (1,5×, até 5 por minuto, um movimento de 1 s).',
+        subtle: 'Aproxima pouco (1,5×) e raramente: até 3 por minuto.',
+        moderate: 'Como nos vídeos publicados (1,6×, até 5 por minuto): abre e fecha em 0,9 s junto com a frase, e segura pelo menos 4 s.',
         intense: 'Aproxima mais (1,8×) e com mais frequência, bom para telas pequenas: até 8 por minuto.'
       },
       presetHelpVertical: {
@@ -451,7 +464,7 @@ export const ptBR = {
         failed: 'Não consegui recortar você do fundo',
         retry: 'Tentar de novo',
         needsEngine: 'O green screen precisa do recorte do fundo, e o app ainda não está preparado para isso. Prepare na aba Câmera. Até lá a prévia mostra o layout sem recorte.',
-        cancelled: 'O recorte do fundo foi cancelado, e o green screen só sai com ele.',
+        notStarted: 'O recorte do fundo ainda não começou. Até ele existir, a prévia mostra o layout sem recorte.',
         start: 'Recortar agora'
       },
       quick: {

@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
-import { cameraCropRect } from '../../src/shared/face'
+import { cameraCropRect, sideBySideTarget } from '../../src/shared/face'
 import { HORIZONTAL_1080, layoutGeometry } from '../../src/shared/scene'
 import { frameRgb } from '../helpers/media'
 import { EXAMPLE_FOLDER, launchTomada, shot, type Session } from './helpers'
@@ -139,6 +139,9 @@ test('arrastar DENTRO da câmera na prévia move a imagem (um passo de desfazer)
   const canvasW = await page.getByTestId('preview-canvas').evaluate((el) => (el as HTMLCanvasElement).width)
   const toScreen = (b: Box): { x: number; y: number } => ({ x: frame.x + ((b.x + b.w / 2) / canvasW) * frame.width, y: frame.y + ((b.y + b.h / 2) / (canvasW * 0.5625)) * frame.height })
 
+  // o padrão é a câmera ESPELHADA (33b7e5f): na imagem espelhada, arrastar para a direita leva o recorte para o outro lado
+  const mirrored = readSaved(s).style.camera.mirror
+  expect(mirrored).toBe(true)
   const dest = await cameraDest(page)
   const before = await cropNow(page)
   const at = toScreen(dest)
@@ -149,17 +152,20 @@ test('arrastar DENTRO da câmera na prévia move a imagem (um passo de desfazer)
   await page.mouse.up()
   await waitSaved(s)
   const dragged = readSaved(s).style.camera.framing
-  // a imagem foi para a direita: o recorte andou para a esquerda (dx < 0) e um pouco para cima (a imagem desceu)
-  expect(dragged?.dx).toBeLessThan(0)
+  // a imagem foi para a direita: o recorte andou para a esquerda (dx < 0), ou para a direita se a imagem está espelhada, e um pouco para cima (a imagem desceu)
+  if (mirrored) expect(dragged?.dx).toBeGreaterThan(0)
+  else expect(dragged?.dx).toBeLessThan(0)
   expect(dragged?.dy).toBeLessThan(0)
-  expect(centerX(await cropNow(page))).toBeLessThan(centerX(before))
+  if (mirrored) expect(centerX(await cropNow(page))).toBeGreaterThan(centerX(before))
+  else expect(centerX(await cropNow(page))).toBeLessThan(centerX(before))
   // o arraste inteiro é UM passo de desfazer
   await page.keyboard.press('Control+z')
   await waitSaved(s)
   expect(readSaved(s).style.camera.framing).toBeUndefined()
   await page.keyboard.press('Control+Shift+z')
   await waitSaved(s)
-  expect(readSaved(s).style.camera.framing?.dx).toBeLessThan(0)
+  if (mirrored) expect(readSaved(s).style.camera.framing?.dx).toBeGreaterThan(0)
+  else expect(readSaved(s).style.camera.framing?.dx).toBeLessThan(0)
 
   // na bolha o arraste normal ANDA com a bolha (corner); com Alt, move a imagem
   await page.getByTestId('tab-layout').click()
@@ -179,7 +185,9 @@ test('arrastar DENTRO da câmera na prévia move a imagem (um passo de desfazer)
   await page.keyboard.up('Alt')
   await waitSaved(s)
   const alt = readSaved(s).style.camera
-  expect(alt.framing?.dx).toBeGreaterThan(0) // a imagem foi para a esquerda: o recorte, para a direita
+  // a imagem foi para a esquerda: o recorte, para a direita (para a esquerda se a imagem está espelhada)
+  if (mirrored) expect(alt.framing?.dx).toBeLessThan(0)
+  else expect(alt.framing?.dx).toBeGreaterThan(0)
   expect(alt.corner).toBe('bottom-right') // a bolha NÃO mudou de canto
 })
 
@@ -294,7 +302,7 @@ test('EXPORTAÇÃO 16:9 com o enquadramento: o cartão da câmera mostra o mesmo
   const card = geo.camera!.rect
   expect(card.x).toBeLessThan(960) // à esquerda
   // o cálculo puro bate com a prévia (mesma função)
-  const pure = cameraCropRect({ w: 640, h: 360 }, card.w / card.h, { cx: 0.8, cy: 0.4, faceW: 0.14, faceH: 0.3 }, project.style.camera.framing)
+  const pure = cameraCropRect({ w: 640, h: 360 }, card.w / card.h, { cx: 0.8, cy: 0.4, faceW: 0.14, faceH: 0.3 }, project.style.camera.framing, sideBySideTarget(1080, card.h))
   expect(centerX(crop)).toBeCloseTo(centerX(pure), 2)
 
   const done = await exportProject(page, EXAMPLE_FOLDER, { resolution: '1080p', fps: 30 })
@@ -311,8 +319,11 @@ test('EXPORTAÇÃO 16:9 com o enquadramento: o cartão da câmera mostra o mesmo
     return [frame[i]!, frame[i + 1]!, frame[i + 2]!]
   }
   // o meio do cartão corresponde ao x = 0,8 da imagem da câmera (a barra magenta, 255·0·255) e a borda direita, ao x ≈ 0,93 (ciano, 0·255·255)
+  // a câmera sai ESPELHADA por padrão (33b7e5f): a borda direita do recorte (ciano) aparece na borda ESQUERDA do cartão
+  const mirrored = project.style.camera.mirror
+  expect(mirrored).toBe(true)
   const mid = px(0.5)
-  const right = px(0.9)
+  const right = px(mirrored ? 0.1 : 0.9)
   console.log(`na exportação: meio do cartão ${mid.join(',')} (magenta esperado) · à direita ${right.join(',')} (ciano esperado) · recorte ${crop.x.toFixed(3)}–${(crop.x + crop.w).toFixed(3)}`)
   expect(mid[0]).toBeGreaterThan(170)
   expect(mid[2]).toBeGreaterThan(170)

@@ -18,12 +18,13 @@ import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
 import { HORIZONTAL_1080, VERTICAL_1080, applyScreenCrop, deriveProject, prepareEvents, usesPresenter, type CursorData } from '@shared/scene'
 import type { Transcript } from '@shared/types'
+import { keptRanges } from '@shared/timeline'
 import { projectForFormat, ensureVertical } from '@shared/vertical'
 import { withMatteFallback } from '@shared/matte-fallback'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
 import { AudioQualityNotice } from '../components/AudioQualityNotice'
-import { cameraJobKey, useCamera } from '../camera-store'
+import { cameraJobKey, useCamera, useMatteStatus } from '../camera-store'
 import { useApp } from '../store'
 import { useTranscription } from '../transcription-store'
 import { createAiUiStore } from './ai-store'
@@ -33,6 +34,7 @@ import { PreviewEngine } from './engine'
 import { ExportDialog } from './ExportDialog'
 import { useEditorOps } from './ops'
 import { createPlaybackStore } from './playback-store'
+import { usePreviewHeartbeat } from './use-preview-heartbeat'
 import { applyClean, buildCleanInput } from './text/clean-actions'
 import { createTextStore } from './text/text-store'
 import { SidePanel } from './panels/SidePanel'
@@ -186,6 +188,8 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   )
   useEffect(() => { if(itemId && itemId !== 'youtube') store.getState().setFormat('vertical') },[store,itemId])
   const playback = useMemo(() => createPlaybackStore(), [detail.id])
+  // a prévia tocando tem prioridade sobre o recorte do fundo (que roda em segundo plano na mesma placa)
+  usePreviewHeartbeat(playback)
   const text = useMemo(() => createTextStore(), [detail.id])
   const clips = useMemo(() => createClipsUiStore(), [detail.id])
   const aiUi = useMemo(() => createAiUiStore(), [detail.id])
@@ -339,6 +343,8 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   useEffect(() => {
     if (matteJob?.state === 'done' && matteJob.url) setMatteUrl(matteJob.url)
   }, [matteJob])
+  // O estado ÚNICO do recorte (pronto | em andamento com % | na fila | falhou): o chip da barra, a aba Câmera e quem desenha a cena consultam este.
+  const matteStatus = useMatteStatus(detail.id, matteUrl)
 
   // --- cena -----------------------------------------------------------------------------------------------
   const cursorData = useMemo(() => (rawData ? applyScreenCrop(rawData, project) : null), [rawData, project.screenCrop, project.sources.screen])
@@ -399,16 +405,17 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   }, [format, cursorData, transcript.status, words, durationMs, store, detail.events.cursor, matteUrl, matteEngineReady, hasCamera, cameraKnown])
 
   // Ao abrir um projeto que nunca teve zoom automático, gera os do preset padrão (uma vez; não entra no "desfazer").
+  // Espera a transcrição chegar: o zoom do 16:9 começa e termina em limites da fala (`zoom-speech.ts`) e conta o tempo depois dos cortes.
   const generated = useRef(false)
   useEffect(() => {
-    if (!cursorData || generated.current) return
+    if (!cursorData || generated.current || transcript.status === 'loading') return
     generated.current = true
     const p = store.getState().doc
     if (p.zoomPreset === undefined && p.zooms.length === 0 && detail.events.cursor) {
-      const auto = generateAutoZooms({ clicks: cursorData.clicks, keys: cursorData.keys, cursor: cursorData.grid, duration: durationMs, preset: DEFAULT_ZOOM_PRESET })
+      const auto = generateAutoZooms({ clicks: cursorData.clicks, keys: cursorData.keys, cursor: cursorData.grid, duration: durationMs, preset: DEFAULT_ZOOM_PRESET, words, kept: keptRanges(durationMs, p.cuts) })
       store.getState().change((doc) => regenerateZooms(doc, DEFAULT_ZOOM_PRESET, auto), { history: false })
     }
-  }, [cursorData, store, durationMs, detail.events.cursor])
+  }, [cursorData, store, durationMs, detail.events.cursor, transcript.status, words])
 
   // --- motor da prévia ------------------------------------------------------------------------------------
   const screenUrl = detail.media.screen?.url ?? null
@@ -429,6 +436,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
         playback.setState({ audioError: message })
         if (message) window.tomada.log({ level: 'warn', message: 'Áudio da prévia', detail: message })
       },
+      onAudioNote: (message) => window.tomada.log({ level: 'info', message: 'Áudio da prévia', detail: message }),
       onFontsError: (message) => {
         window.tomada.log({ level: 'error', message: 'Falha ao carregar as fontes das legendas', detail: message })
         notify({ kind: 'error', text: t.editor.captions.fontsFailed, detail: message })
@@ -669,7 +677,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       transcript,
       reloadTranscript: loadTranscript,
       face,
-      matte: { url: matteUrl, needed: needsMatteAny, fallback: needsMatteAny && !matteUrl },
+      matte: { url: matteUrl, needed: needsMatteAny, status: matteStatus, fallback: needsMatteAny && !matteUrl },
       levels,
       text,
       exporter,
@@ -678,7 +686,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
       ai: aiUi,
       refs: { canvas, host, frame }
     }),
-    [detail, itemId, store, playback, cursorData, rawData, screenActive, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, levels, text, exporter, clips, queue, aiUi]
+    [detail, itemId, store, playback, cursorData, rawData, screenActive, eventsError, derived, sceneDerived, durationMs, hasScreen, hasCamera, peaks, thumbs, retryAssets, transcript, loadTranscript, face, matteUrl, needsMatteAny, matteStatus, levels, text, exporter, clips, queue, aiUi]
   )
 
   return (

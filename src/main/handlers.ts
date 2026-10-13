@@ -63,8 +63,10 @@ export type HandlerDeps = {
   exporter: ExportService
   derived: DerivedMedia
   transcription: TranscriptionService
-  /** A análise da câmera (M4c): o rosto, para enquadrar. */
+  /** A análise da câmera (M4c): o rosto, para enquadrar; e (R1) o recorte do fundo, em segundo plano e retomável. */
   camera: CameraService
+  /** O editor avisa que a prévia está tocando (ou parou): o recorte de fundo dá lugar a ela na placa de vídeo. */
+  previewActive?(active: boolean): void
   llm: LlmManager
   /** Diálogo de escolher a pasta da exportação (em teste, `TOMADA_TEST_PICK_DIR`). */
   pickExportDir(defaultPath?: string): Promise<string | null>
@@ -190,7 +192,12 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'app:info': async () => deps.info,
 
     'projects:list': () => store.list(),
-    'projects:get': (id) => store.detail(id),
+    'projects:get': async (id) => {
+      const detail = await store.detail(id)
+      // abrir o projeto retoma o recorte que ficou pela metade (ou o `.partial` de antes dos pedaços); nunca atrasa nem derruba a abertura
+      void camera.recoverMatte(id)
+      return detail
+    },
     'projects:rename': (id, title) => deps.autopilot ? deps.autopilot.renameProject(id,title) : store.rename(id, title),
     'projects:save': async (id, project,base) => {
       // o que vai para o disco passa pelo mesmo esquema de quem lê; campos desconhecidos são preservados
@@ -338,6 +345,10 @@ export function createHandlers(deps: HandlerDeps): IpcHandlers {
     'camera:cancel': async (projectId, kind) => {
       store.dirOf(projectId) // id inválido falha aqui
       camera.cancel(projectId, cameraKind(kind))
+    },
+    'camera:preview-active': async (active) => {
+      if (typeof active !== 'boolean') throw new Error('Aviso da prévia inválido.')
+      deps.previewActive?.(active)
     },
 
     'transcription:status': () => transcription.view(),

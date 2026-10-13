@@ -122,8 +122,13 @@ export function cameraRadius(shape: CameraStyle['shape'], w: number, h: number):
 // ---------------------------------------------------------------------------
 // Câmera AO LADO da tela (lado a lado, estilo Tella)
 
-/** Largura do cartão da câmera: fração da largura do quadro. O padrão (27%) é o que o estudo E1 mediu no Tella (câmera em pé x 68-97%). */
-export const SIDE_WIDTH = { min: 0.25, max: 0.45, default: 0.27 } as const
+/**
+ * Largura do cartão da câmera: fração da largura do quadro. As referências lado a lado (Tella, estudo E1, e as de 12/10) têm a câmera em pé
+ * em x 68-74% a 97% (23-29% do quadro) e a tela em 60-69%. O padrão é 24% (era 27%): com a página do navegador gravada em ~2,1:1
+ * (1920×912, o caso do usuário) o cartão de 24% tem a MESMA altura da página (614 contra 613 px), como o padrão de 27% tinha numa tela
+ * 16:9, e a página ganha 5% de largura. O rosto não encolhe: o recorte da câmera fecha mais (`sideBySideTarget`, em face.ts).
+ */
+export const SIDE_WIDTH = { min: 0.2, max: 0.45, default: 0.24 } as const
 /** Espaço entre a tela e a câmera: fração do lado menor do quadro (o padrão é o de sempre: 60% da margem de 6%). */
 export const SIDE_GAP = { min: 0, max: 0.08, default: 0.036 } as const
 

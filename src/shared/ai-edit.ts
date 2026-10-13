@@ -18,7 +18,7 @@ import { buildSentences } from './sentences'
 import { restoreWords, wordCutRange } from './text-edit'
 import { keptRanges, outputDuration } from './timeline'
 import type { CaptionStyleId, Cut, LayoutKind, Project, Word } from './types'
-import { DEFAULT_VERTICAL_ZOOM_PRESET, DEFAULT_ZOOM_PRESET, VERTICAL_ZOOM_SCALE, ZOOM_PRESETS } from './zoom'
+import { DEFAULT_VERTICAL_ZOOM_PRESET, DEFAULT_ZOOM_PRESET, HORIZONTAL_ZOOM_PRESETS, VERTICAL_ZOOM_SCALE } from './zoom'
 
 /** Passou disto do vídeo (depois dos cortes de agora), a interface pede confirmação. */
 export const EDIT_CONFIRM_FRACTION = 0.2
@@ -258,7 +258,7 @@ export function planAiEdit(input: PlanInput): AiEditPlan {
   let cutMs = 0
   let restoredMs = 0
   const layoutsAllowed = format === 'vertical' ? VERTICAL_LAYOUT_VALUES : HORIZONTAL_LAYOUT_VALUES
-  const zoomDefault = format === 'vertical' ? VERTICAL_ZOOM_SCALE[DEFAULT_VERTICAL_ZOOM_PRESET] : ZOOM_PRESETS[DEFAULT_ZOOM_PRESET].scale
+  const zoomDefault = format === 'vertical' ? VERTICAL_ZOOM_SCALE[DEFAULT_VERTICAL_ZOOM_PRESET] : HORIZONTAL_ZOOM_PRESETS[DEFAULT_ZOOM_PRESET].scale
 
   const refuse = (index: number, op: string, why: string): void => {
     refused.push({ index, op, why })

@@ -109,20 +109,22 @@ describe('geometria dos layouts horizontais', () => {
     expect(square.radius).toBe(0)
   })
 
-  it('side-by-side: tela ~70% da largura útil, câmera em pé (3:4, 27% do quadro) ao lado, praticamente da altura da tela, tudo dentro do quadro', () => {
+  it('side-by-side: tela ~72% da largura útil, câmera em pé (3:4, 24% do quadro) ao lado, centrada na altura da tela, tudo dentro do quadro', () => {
     const g = layoutGeometry('side-by-side', style, F, { screen: SCREEN, camera: CAMERA })
     const s = g.screen!
     const c = g.camera!.rect
     expect(c.x).toBeGreaterThanOrEqual(s.x + s.w)
-    expect(Math.abs(c.h - s.h)).toBeLessThanOrEqual(3) // o padrão (27%, 3:4) deixa os dois da mesma altura, como no Tella
-    expect(Math.abs(c.y - s.y)).toBeLessThanOrEqual(2)
-    expect(c.w / 1920).toBeCloseTo(0.27, 2)
+    // numa tela 16:9 o cartão (24%) fica mais baixo que a página; com a página larga do navegador (2,1:1) as duas têm a mesma altura
+    // (lado-a-lado.test.ts). Os dois ficam centrados um no outro na vertical.
+    expect(Math.abs(c.y + c.h / 2 - (s.y + s.h / 2))).toBeLessThanOrEqual(2)
+    expect(c.h).toBeLessThan(s.h)
+    expect(c.w / 1920).toBeCloseTo(0.24, 2)
     expect(c.w / c.h).toBeCloseTo(0.75, 2)
     expect(c.h).toBeGreaterThan(c.w) // em pé
     const pad = Math.round(style.padding * 1080)
     const usable = 1920 - 2 * pad
-    expect(s.w / usable).toBeGreaterThan(0.64)
-    expect(s.w / usable).toBeLessThan(0.72)
+    expect(s.w / usable).toBeGreaterThan(0.7)
+    expect(s.w / usable).toBeLessThan(0.76)
     expect(s.w / s.h).toBeCloseTo(16 / 9, 1)
     expect(inside(s) && inside(c)).toBe(true)
     expect(c.x + c.w).toBeLessThanOrEqual(1920 - pad + 1)

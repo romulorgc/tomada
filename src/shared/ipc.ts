@@ -444,6 +444,8 @@ export type IpcContract = {
   /** `force`: refaz mesmo com o resultado guardado valendo ("Recortar de novo"); ausente = devolve o guardado. */
   'camera:analyze': { args: [projectId: string, kind: CameraKind, force?: boolean]; result: CameraJob }
   'camera:cancel': { args: [projectId: string, kind: CameraKind]; result: void }
+  /** A prévia do editor está tocando (`true`, repetido enquanto toca) ou parou (`false`): o recorte de fundo dá lugar a ela na placa. */
+  'camera:preview-active': { args: [active: boolean]; result: void }
 
   // Transcrição (M3): a interface só diz QUAL projeto; o main resolve a voz, executa o motor e grava o transcript.json.
   'transcription:status': { args: []; result: TranscriptionView }
@@ -617,6 +619,7 @@ export type TomadaApi = {
     cancelPrepare(): Promise<void>
     analyze(projectId: string, kind: CameraKind, force?: boolean): Promise<CameraJob>
     cancel(projectId: string, kind: CameraKind): Promise<void>
+    previewActive(active: boolean): Promise<void>
   }
   transcription: {
     status(): Promise<TranscriptionView>

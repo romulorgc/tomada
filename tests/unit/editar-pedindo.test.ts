@@ -111,7 +111,7 @@ describe('editar pedindo: aplicar as operações', () => {
     expect(r.summary).toMatch(/^Cortei 2 trechos \(−\d+(,\d)? s\), adicionei 1 zoom e troquei o título\.$/)
     expect(r.project.title).toBe('Agendaí em 3 minutos')
     expect(r.project.zooms).toHaveLength(1)
-    expect(r.project.zooms[0]).toMatchObject({ origin: 'manual', scale: 1.5 })
+    expect(r.project.zooms[0]).toMatchObject({ origin: 'manual', scale: 1.6 }) // o padrão do 16:9 (F3: 1,5 a 1,8×)
   })
 
   it('operação inválida é RECUSADA com o motivo e as válidas valem; nada é aplicado pela metade', () => {
@@ -167,7 +167,7 @@ describe('editar pedindo: aplicar as operações', () => {
     expect(back.removedMs).toBeLessThan(0)
   })
 
-  it('zoom: escala fora de 1,1–4 é recusada; outro zoom em cima do mesmo trecho não cabe; o padrão é 1,5× no 16:9 e 1,35× no vertical', () => {
+  it('zoom: escala fora de 1,1–4 é recusada; outro zoom em cima do mesmo trecho não cabe; o padrão é 1,6× no 16:9 e 1,35× no vertical', () => {
     const [from, to] = sentenceRange(demo, 12, 12)
     expect(plan([{ op: 'zoom', from, to, scale: 5 }]).refused[0]!.why).toBe('a escala 5 está fora de 1.1 a 4')
     const twice = plan([{ op: 'zoom', from, to }, { op: 'zoom', from, to }])

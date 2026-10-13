@@ -74,15 +74,15 @@ const CASES: Case[] = [
   }
 ]
 
-test('goldens: lado a lado (esquerda, direita, quadrado, em pé) e o enquadramento do rosto na bolha, no lado a lado e no V-B', async () => {
-  test.setTimeout(180_000)
+/** Os goldens de um formato: o 16:9 é da F3 e o 9:16 da F2 (os dois eram um teste só; um golden de 9:16 vermelho escondia o resto). */
+async function checkGoldens(kind: 'horizontal' | 'vertical'): Promise<void> {
   s = await launchTomada()
   await expect(s.page.getByTestId('project-card')).toHaveCount(1)
   const lab = await openLab(s.app)
   const faceUrl = writeFace(s, { cx: 0.82 })
 
   const results: string[] = []
-  for (const c of CASES) {
+  for (const c of CASES.filter((c) => c.format.kind === kind)) {
     const project = readProject(s)
     c.edit(project)
     const [png] = await renderStills(lab, { project, times: [c.t], format: c.format, faceUrl: c.face !== undefined ? faceUrl : null })
@@ -93,6 +93,16 @@ test('goldens: lado a lado (esquerda, direita, quadrado, em pé) e o enquadramen
     expect(r.ratio, `${c.name} difere do golden em ${(r.ratio * 100).toFixed(3)}% (ver test-results/goldens-diff)`).toBeLessThanOrEqual(0.004)
   }
   console.log(results.join('\n'))
+}
+
+test('goldens 16:9: lado a lado (esquerda, direita, quadrado, em pé) e o enquadramento do rosto no lado a lado e na bolha', async () => {
+  test.setTimeout(180_000)
+  await checkGoldens('horizontal')
+})
+
+test('goldens 9:16 (F2): o enquadramento do rosto no V-B', async () => {
+  test.setTimeout(180_000)
+  await checkGoldens('vertical')
 })
 
 test('o enquadramento muda o que a câmera mostra: com o rosto à direita o quadro em pé vê as barras da direita, sem ele vê as do centro', async () => {

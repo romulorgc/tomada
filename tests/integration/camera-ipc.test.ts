@@ -3,8 +3,10 @@
  * (`force`, do botão "Recortar de novo") passa pelo IPC com o booleano VALIDADO e refaz a máscara; sem ele o cache é devolvido.
  * O que vem da interface não é confiável: `force` que não é booleano é recusado.
  */
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { MATTE_FILE, MATTE_PARTIAL_FILE } from '@shared/matte'
 import { createHandlers, type HandlerDeps } from '../../src/main/handlers'
 import { createCameraService } from '../../src/main/camera/service'
 import { createMockCamera } from '../../src/main/camera/mock-engine'
@@ -43,7 +45,9 @@ async function build() {
     }
   }
   const camera = createCameraService({ logger, engine, read: (id) => store.read(id), emit: () => undefined })
+  const previews: boolean[] = []
   const deps: HandlerDeps = {
+    previewActive: (active) => previews.push(active),
     info: { name: 'Tomada', version: '0.0.0', platform: 'win32', electron: '40', userDataDir: base, logsDir: base },
     state,
     store,
@@ -65,7 +69,7 @@ async function build() {
     finishCountdown: () => undefined,
     clock: () => 0
   }
-  return { handlers: createHandlers(deps), camera, calls }
+  return { handlers: createHandlers(deps), camera, calls, previews, root, logger }
 }
 
 describe('camera:analyze: pedido explícito de refazer (force) pelo IPC', () => {
@@ -101,5 +105,39 @@ describe('camera:analyze: pedido explícito de refazer (force) pelo IPC', () => 
   it('o tipo continua um conjunto fechado, com ou sem `force`', async () => {
     const { handlers } = await build()
     await expect(handlers['camera:analyze']('p1', 'qualquer-coisa' as never, true)).rejects.toThrow(/inválido/)
+  })
+})
+
+describe('R1: abrir o projeto retoma o recorte; a prévia avisa que está tocando', () => {
+  it('abrir um projeto com o `.partial.mp4` de antes dos pedaços refaz o recorte sozinho (e apaga o parcial)', async () => {
+    const { handlers, camera, calls, root, logger } = await build()
+    const partial = join(root, 'p1', MATTE_PARTIAL_FILE)
+    writeFileSync(partial, Buffer.alloc(200_000, 3))
+    await handlers['projects:get']('p1')
+    // a retomada corre em segundo plano (abrir o projeto não espera por ela): espera o motor ser chamado e depois a fila esvaziar
+    await vi.waitFor(() => expect(calls.matte).toBe(1))
+    await camera.idle()
+    expect(existsSync(partial)).toBe(false)
+    expect(existsSync(join(root, 'p1', MATTE_FILE))).toBe(true)
+    expect(logger.entries.some((e) => e.message.includes('sobrou um recorte parcial antigo'))).toBe(true)
+  })
+
+  it('abrir um projeto sem nada pendente não dispara recorte nenhum', async () => {
+    const { handlers, camera, calls } = await build()
+    await handlers['projects:get']('p1')
+    await new Promise((r) => setTimeout(r, 100))
+    await camera.idle()
+    expect(calls.matte).toBe(0)
+  })
+
+  it('`camera:preview-active` só aceita booleano e repassa para a porta da placa', async () => {
+    const { handlers, previews } = await build()
+    await handlers['camera:preview-active'](true)
+    await handlers['camera:preview-active'](false)
+    expect(previews).toEqual([true, false])
+    for (const bad of ['true', 1, null, undefined, {}]) {
+      await expect(handlers['camera:preview-active'](bad as unknown as boolean), `aceitou ${JSON.stringify(bad)}`).rejects.toThrow(/inválido/)
+    }
+    expect(previews).toEqual([true, false])
   })
 })

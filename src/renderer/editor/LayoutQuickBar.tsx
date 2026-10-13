@@ -6,7 +6,7 @@
 import { useStore } from 'zustand'
 import { setLayoutOfSeg } from '@shared/edits'
 import type { Clip, LayoutKind, Project, VerticalLayout } from '@shared/types'
-import { cameraJobKey, isCameraJobActive, useCamera } from '../camera-store'
+import { useCamera } from '../camera-store'
 import { t } from '../i18n/pt-BR'
 import { useDoc, useEditor } from './context'
 import { kindsOf, layoutHint, layoutIcon, layoutLabel, layoutUnavailable } from './layout-kinds'
@@ -16,35 +16,34 @@ const T = t.editor.layout
 const mapClip = (doc: Project, id: string, fn: (c: Clip) => Clip): Project => ({ ...doc, clips: doc.clips.map((c) => (c.id === id ? fn(c) : c)) })
 
 /**
- * O estado do recorte do fundo, em uma linha, lido do que o serviço da câmera já publica (`useCamera.jobs` do trabalho `matte`, o motor e
- * `matte.url`): andamento, falha com "Tentar de novo", cancelado com "Recortar agora" ou o motor ainda não preparado. Só CONSOME o estado do
- * recorte; quem gera, retoma e persiste o recorte é o pipeline do processo principal.
+ * O aviso do recorte do fundo para o layout ESCOLHIDO (F2): o usuário escolheu um layout com você sem fundo e o recorte ainda não existe, então a
+ * prévia mostra o layout anterior; esta linha diz isso, com o andamento, e não deixa o motivo calado. O estado do recorte vem de UM lugar, o
+ * `useEditor().matte.status` (`MatteStatus`, em `@shared/matte-parts`, do R1); o chip da barra de cima (`MatteChip`) mostra o mesmo andamento para
+ * qualquer layout, e aqui só aparece o que muda para o layout escolhido. Só CONSOME o estado: quem gera, retoma e persiste o recorte é o R1.
  */
 export function MatteNotice() {
   const { detail, matte, hasCamera } = useEditor()
-  const job = useCamera((s) => s.jobs[cameraJobKey(detail.id, 'matte')])
   const engineState = useCamera((s) => s.view?.matte.state ?? null)
   const analyze = useCamera((s) => s.analyze)
   const M = T.matte
-  if (!hasCamera || matte.url) return null
-  const pct = Math.round((job?.fraction ?? 0) * 100)
-  if (isCameraJobActive(job)) {
-    const queued = job!.state === 'queued'
+  if (!hasCamera || matte.url || !matte.fallback) return null
+  const st = matte.status
+  if (st.state === 'running' || st.state === 'queued') {
     return (
-      <div className="matte-notice" role="status" data-testid="matte-notice" data-state={job!.state} data-fallback={String(matte.fallback)}>
-        <span>{queued ? M.queued : matte.fallback ? M.runningFallback(pct) : M.running(pct)}</span>
-        <span className="mn-meter" role="progressbar" aria-label={M.running(pct)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-          <i style={{ width: `${pct}%` }} />
+      <div className="matte-notice" role="status" data-testid="matte-notice" data-state={st.state} data-fallback="true">
+        <span>{st.state === 'queued' ? M.queued : M.runningFallback(st.percent)}</span>
+        <span className="mn-meter" role="progressbar" aria-label={M.running(st.percent)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={st.percent}>
+          <i style={{ width: `${st.percent}%` }} />
         </span>
       </div>
     )
   }
-  if (job?.state === 'error') {
+  if (st.state === 'failed') {
     return (
       <div className="matte-notice" role="alert" data-testid="matte-notice" data-state="error">
         <span>
           {M.failed}
-          {job.error ? `: ${job.error}` : ''}
+          {st.error ? `: ${st.error}` : ''}
         </span>
         <button type="button" className="btn" data-testid="matte-notice-retry" onClick={() => void analyze(detail.id, 'matte', true)}>
           {M.retry}
@@ -52,24 +51,21 @@ export function MatteNotice() {
       </div>
     )
   }
-  if (job?.state === 'cancelled') {
-    return (
-      <div className="matte-notice" role="status" data-testid="matte-notice" data-state="cancelled">
-        <span>{M.cancelled}</span>
-        <button type="button" className="btn" data-testid="matte-notice-start" onClick={() => void analyze(detail.id, 'matte')}>
-          {M.start}
-        </button>
-      </div>
-    )
-  }
-  if (matte.fallback && engineState !== null && engineState !== 'ready') {
+  if (engineState !== null && engineState !== 'ready') {
     return (
       <div className="matte-notice" role="status" data-testid="matte-notice" data-state="needs-engine">
         <span>{M.needsEngine}</span>
       </div>
     )
   }
-  return null
+  return (
+    <div className="matte-notice" role="status" data-testid="matte-notice" data-state="not-started">
+      <span>{M.notStarted}</span>
+      <button type="button" className="btn" data-testid="matte-notice-start" onClick={() => void analyze(detail.id, 'matte')}>
+        {M.start}
+      </button>
+    </div>
+  )
 }
 
 export function LayoutQuickBar() {
