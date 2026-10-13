@@ -608,6 +608,30 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     await exporting
     expect(w.start).toHaveBeenCalledOnce()
   })
+  it('R1: o recorte roda sempre em segundo plano; a exportação de um vídeo que NÃO usa o Apresentador espera só o rosto', async () => {
+    const doc = withCamera(baseProject())
+    finishedPipeline(doc)
+    const w = await world(doc, { camera: makeCamera() })
+    await w.service.reexport(id, 'youtube')
+    expect(w.camera!.idle).toHaveBeenCalledWith({ kinds: ['face'] })
+    expect(w.camera!.idle).not.toHaveBeenCalledWith({ kinds: ['face', 'matte'] })
+    expect(w.start).toHaveBeenCalledOnce()
+  })
+  it('R1: a exportação de um vídeo que USA o Apresentador espera o rosto E o recorte', async () => {
+    const doc = withCamera(baseProject(), 'presenter')
+    doc.style.defaultLayout = 'presenter'
+    finishedPipeline(doc)
+    const w = await world(doc, { camera: makeCamera({ matte: true }) })
+    await w.service.reexport(id, 'youtube')
+    expect(w.camera!.idle).toHaveBeenCalledWith({ kinds: ['face', 'matte'] })
+  })
+  it('R1: a transcrição não espera o recorte do fundo (ele dá lugar a ela na placa), só o rosto', async () => {
+    const doc = withCamera(baseProject())
+    const w = await world(doc, { camera: makeCamera() })
+    await w.service.start(id)
+    expect(w.camera!.idle).toHaveBeenCalledWith({ kinds: ['face'] })
+    expect(w.camera!.idle).not.toHaveBeenCalledWith()
+  })
 })
 
 describe('readIntent: o manifesto que não lê avisa, e o piloto não some em silêncio (M4d)', () => {

@@ -39,6 +39,7 @@ export function chooseCameraEngine(args: { env: NodeJS.ProcessEnv; scriptPath: s
     return createMockCamera({
       ready: forced === 'mock',
       ...(num(env.TOMADA_TEST_CAMERA_DELAY_MS) !== undefined ? { delayMs: num(env.TOMADA_TEST_CAMERA_DELAY_MS)! } : {}),
+      ...(num(env.TOMADA_TEST_MATTE_DELAY_MS) !== undefined ? { matteDelayMs: num(env.TOMADA_TEST_MATTE_DELAY_MS)! } : {}),
       ...(num(env.TOMADA_TEST_CAMERA_FROM) !== undefined ? { from: num(env.TOMADA_TEST_CAMERA_FROM)! } : {}),
       ...(num(env.TOMADA_TEST_CAMERA_TO) !== undefined ? { to: num(env.TOMADA_TEST_CAMERA_TO)! } : {}),
       ...(env.TOMADA_TEST_CAMERA_NOFACE === '1' ? { noFace: true } : {}),

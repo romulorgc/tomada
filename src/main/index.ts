@@ -205,7 +205,11 @@ async function main(): Promise<void> {
       ffmpeg: () => locateFfmpeg(state.ffmpegLocateOptions())?.ffmpeg ?? null
     }),
     read: (id) => store.read(id),
-    emit
+    emit,
+    // o recorte do fundo é trabalho de fundo: dá lugar à exportação, à transcrição e à prévia (a placa de vídeo é uma só)
+    gpu: gpu.gate,
+    // só teste: pedaços curtos (segundos) para provar a retomada com um projeto pequeno
+    ...(Number(process.env.TOMADA_TEST_MATTE_CHUNK_S) > 0 ? { chunkSeconds: Number(process.env.TOMADA_TEST_MATTE_CHUNK_S) } : {})
   })
   const vault: KeyVault = {
     available: () => safeStorage.isEncryptionAvailable(),
@@ -225,8 +229,12 @@ async function main(): Promise<void> {
   const autoStarted = new Set<string>()
   let autopilot: AutopilotService | null = null
   const processingStarted = new Map<string,number>()
-  /** Depois de cada gravação com câmera processada, o rosto é analisado em segundo plano (se o motor está pronto; senão o editor oferece preparar). */
-  const autoAnalyzeFace = async (folder: string): Promise<void> => {
+  /**
+   * Depois de cada gravação com câmera processada, a câmera é analisada em segundo plano (se o motor está pronto; senão o editor oferece
+   * preparar): primeiro o rosto (rápido) e depois o RECORTE DO FUNDO (R1), qualquer que seja o estilo da câmera escolhido ao gravar. O
+   * recorte é em pedaços, com o andamento no projeto: se o app fechar no meio, continua ao reabrir.
+   */
+  const autoAnalyzeCamera = async (folder: string): Promise<void> => {
     try {
       const ready = (await camera.view()).face.state === 'ready'
       if (ready) await camera.analyze(folder, 'face')
@@ -234,6 +242,23 @@ async function main(): Promise<void> {
       // projeto sem câmera ou outro motivo: o editor tenta de novo ao abrir e mostra o motivo; aqui só fica no log
       logger.warn(`Não comecei a análise do rosto de ${folder}: ${err instanceof Error ? err.message : String(err)}`)
     }
+    try {
+      const view = await camera.view()
+      if (view.matte.state === 'ready') await camera.analyze(folder, 'matte')
+      else logger.info(`Recorte do fundo do projeto ${folder}: não começou porque o recorte ainda não está preparado neste computador (aba Câmera do editor).`)
+    } catch (err) {
+      logger.warn(`Não comecei o recorte do fundo de ${folder}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  /** Ao abrir o app: os recortes que ficaram pela metade (app fechado, queda) continuam sozinhos; o que sobrou do formato antigo é refeito. */
+  const recoverMattes = async (): Promise<void> => {
+    const projects = await store.list() // do mais novo para o mais antigo
+    let restarted = 0
+    for (const project of projects.slice(0, 25)) {
+      const outcome = await camera.recoverMatte(project.id)
+      if (outcome === 'resumed' || outcome === 'regenerated') restarted++
+    }
+    if (restarted > 0) logger.info(`Recorte do fundo: ${restarted} projeto(s) com o recorte pela metade foram retomados ao abrir o app.`)
   }
   const emitRecording = <K extends keyof IpcEvents>(channel: K, payload: IpcEvents[K]): void => {
     emit(channel, payload)
@@ -243,7 +268,7 @@ async function main(): Promise<void> {
       if (snap.status === 'done' && !autoStarted.has(snap.sessionId)) {
         autoStarted.add(snap.sessionId)
         // o rosto entra na fila da câmera ANTES do piloto: as exportações dele esperam essa fila terminar
-        void autoAnalyzeFace(snap.folder)
+        void autoAnalyzeCamera(snap.folder)
         void autopilot?.start(snap.folder,processingStarted.get(snap.sessionId))
       }
     }
@@ -357,10 +382,11 @@ async function main(): Promise<void> {
     quitting = true
     autopilot?.shutdown()
     transcription.shutdown()
-    camera.shutdown()
+    // o recorte em curso fica ANOTADO como interrompido (log + andamento no projeto) antes de o app sair; sem prazo ele travaria o fechamento
+    const cameraStopped = Promise.race([camera.shutdown(), new Promise<void>((resolve) => setTimeout(resolve, 15_000))])
     derived.shutdown()
     windows.closeAll()
-    void Promise.allSettled([recording.shutdown(), exporter.shutdown()]).then(results => {
+    void Promise.allSettled([recording.shutdown(), exporter.shutdown(), cameraStopped]).then(results => {
       for (const result of results) if (result.status === 'rejected') logger.warn('Falha ao encerrar e preservar o trabalho no disco.', result.reason)
       app.quit()
     })
@@ -377,6 +403,7 @@ async function main(): Promise<void> {
       derived,
       transcription,
       camera,
+      previewActive: (active) => gpu.setPreviewActive(active),
       llm,
       calibration,
       autopilot,
@@ -522,6 +549,8 @@ async function main(): Promise<void> {
   mainWindow.webContents.once('did-finish-load',() => {
     void (async () => { await recording.recover(); await autopilot?.resume() })()
       .catch((err) => logger.error('Não consegui retomar o processamento e o piloto automático.',err))
+    // um pouco depois da partida (a janela abre primeiro): retoma o recorte do fundo que ficou pela metade
+    setTimeout(() => { void recoverMattes().catch((err) => logger.warn('Não consegui conferir os recortes pela metade ao abrir o app.',err)) }, 2_000)
   })
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()

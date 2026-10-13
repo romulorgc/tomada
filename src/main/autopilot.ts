@@ -8,9 +8,9 @@ import { PACING } from '@shared/pacing'
 import { screenActivityOfData } from '@shared/screen-activity'
 import { protectionFingerprint, PROTECTION_CHANGED_MESSAGE } from '@shared/blur'
 import { planClean } from '@shared/clean-plan'
-import { heuristicClips, heuristicClipLabels, mergeSuggestedClips, titleFromText, type ClipDraft } from '@shared/clips'
+import { clipScene, heuristicClips, heuristicClipLabels, mergeSuggestedClips, titleFromText, type ClipDraft } from '@shared/clips'
 import { eventsFromText, EVENT_FILES } from '@shared/events'
-import { applyScreenCrop, prepareEvents } from '@shared/scene'
+import { applyScreenCrop, prepareEvents, usesPresenter } from '@shared/scene'
 import { sanitizeFileName } from '@shared/export'
 import { uniqueName } from '@shared/recording'
 import { projectDurationMs } from '@shared/project'
@@ -134,6 +134,18 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     // cliques no espaço dele; um clique fora do recorte, na barra de abas, não abre zoom e o foco de um zoom é lido dentro do recorte).
     return applyScreenCrop(prepareEvents(eventsFromText(texts), durationMs), project)
   }
+  /**
+   * Este item exporta com o Apresentador recortado? Então a exportação precisa do recorte do fundo. Na dúvida (documento que não abre),
+   * diz que precisa: esperar é seguro, exportar sem o recorte falha.
+   */
+  const itemNeedsMatte = (project: Project, itemId: string): boolean => {
+    try {
+      const doc = reviewDocument(project, itemId)
+      if (itemId === 'youtube') return usesPresenter(doc, 'horizontal')
+      const clip = doc.clips.find((c) => c.id === itemId)
+      return clip ? usesPresenter(clipScene(doc, clip), 'vertical') : usesPresenter(doc, 'vertical')
+    } catch { return true }
+  }
   const automaticExportEnabled = (itemId: string, prefs = deps.prefs()): boolean => prefs.mode === 'everything' && prefs.steps[itemId === 'youtube' ? 'youtube' : 'clipExports'] !== false
   async function exportItem(id: string, itemId: string): Promise<void> {
     // Cada exportação nasce de uma revisão da edição do item. Se o usuário ajustar durante a exportação (updateItem sobe a revisão
@@ -144,8 +156,10 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     try {
       // Transcrição e exportação compartilham GPU; também esperamos a exportação manual que já estiver em voo.
       await deps.transcription.idle()
-      // O enquadramento do rosto e o recorte do fundo (M4c) entram no vídeo: a exportação só começa com a análise pronta.
-      await deps.camera?.idle()
+      // O enquadramento do rosto e o recorte do fundo (M4c) entram no vídeo: a exportação só começa com a análise pronta. O recorte (R1) roda
+      // SEMPRE em segundo plano e leva minutos: só se espera por ele quando este vídeo o usa; senão ele dá lugar à exportação na placa.
+      const needsMatte = itemNeedsMatte((await deps.store.read(id)).project, itemId)
+      await deps.camera?.idle({ kinds: needsMatte ? ['face', 'matte'] : ['face'] })
       await deps.exporter.idle()
       const protection = protectionFingerprint((await deps.store.read(id)).project)
       const { exportId } = await deps.exporter.start({ projectId: id, format: itemId === 'youtube' ? 'horizontal' : 'vertical', resolution: itemId === 'youtube' ? deps.prefs().youtubeResolution : '1080p', fps: 30, ...(itemId === 'youtube' ? {} : { clipId: itemId }) })
@@ -175,8 +189,9 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       case 'transcribe': {
         if (await deps.transcription.getTranscript(id)) return 'Transcrição já disponível.'
         await deps.exporter.idle()
-        // A placa é uma só: o recorte do fundo (Apresentador), se foi pedido logo depois de gravar, termina antes da transcrição.
-        await deps.camera?.idle()
+        // O rosto (rápido, no processador) termina antes da transcrição. O recorte do fundo (R1) roda em segundo plano na mesma placa e dá lugar
+        // à transcrição: para no fim do pedaço em curso e continua depois; a pipeline não espera minutos por ele.
+        await deps.camera?.idle({ kinds: ['face'] })
         await deps.transcription.start(id)
         await deps.transcription.idle()
         const t = await transcript(id)
@@ -416,7 +431,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     if (!deps.camera) return { ok: false, reason: 'O serviço da câmera não está disponível.' }
     try {
       await deps.camera.analyze(id, 'matte')
-      await deps.camera.idle()
+      await deps.camera.idle({ kinds: ['matte'] })
     } catch (err) { return { ok: false, reason: err instanceof Error ? err.message : String(err) } }
     if (await deps.camera.result(id, 'matte').catch(() => null)) return { ok: true }
     const job = (await deps.camera.view().catch(() => null))?.jobs.find((j) => j.projectId === id && j.kind === 'matte')

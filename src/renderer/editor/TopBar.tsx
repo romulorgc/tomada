@@ -7,6 +7,7 @@ import { AlertIcon, BackIcon, CheckIcon, ExportIcon, GuideIcon, PencilIcon, Redo
 import { t } from '../i18n/pt-BR'
 import { Tip, IconButton } from './controls'
 import { useDoc, useEditor } from './context'
+import { MatteChip } from './MatteChip'
 
 const T = t.editor.top
 const MAX_TITLE = 200
@@ -146,6 +147,7 @@ export function TopBar({ onBack }: { onBack: () => void }) {
             </button>
           </Tip>
         </div>
+        <MatteChip />
         <SaveStatus />
         {exporter.busy ? (
           <button type="button" className="export-pill" data-testid="export-pill" data-state="busy" onClick={() => exporter.setOpen(true)} aria-label={T.exporting(pct)}>

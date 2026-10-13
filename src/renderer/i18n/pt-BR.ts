@@ -182,6 +182,17 @@ export const ptBR = {
       exportDone: 'Exportado',
       exportError: 'Falhou: ver'
     },
+    /** O aviso discreto do recorte do fundo na barra do editor (R1). */
+    matteChip: {
+      running: (pct: number): string => `Recortando você do fundo: ${pct}%`,
+      resumed: (pct: number): string => `Continuando o recorte do fundo de onde parou: ${pct}%`,
+      waiting: (pct: number): string => `Recorte do fundo em espera enquanto o app usa a placa de vídeo: ${pct}%`,
+      queued: 'Recorte do fundo na fila…',
+      resumedToast: (pct: number): string => `O recorte do fundo ficou pela metade quando o app fechou. Vou continuar de onde parou (${pct}% já pronto).`,
+      tip: 'O recorte do fundo roda neste computador, em segundo plano. Se o app fechar no meio, ele continua de onde parou.',
+      failed: 'Não consegui recortar você do fundo.',
+      retry: 'Tentar de novo'
+    },
 
     transport: {
       label: 'Controles de reprodução',
@@ -343,9 +354,11 @@ export const ptBR = {
         mirrorHint: 'Para as suas mãos apontarem para a tela, use "Espelhar a imagem" em Comportamento. Mostre o tronco e as mãos, com a luz de frente.',
         status: {
           queued: 'Na fila para recortar o fundo…',
-          running: (pct: number): string => `Recortando o fundo… ${pct}%`,
+          running: (pct: number): string => `Recortando você do fundo: ${pct}%`,
+          resumed: (pct: number): string => `Continuando o recorte do fundo de onde parou: ${pct}%`,
+          waiting: (pct: number): string => `Em espera enquanto o app exporta, transcreve ou toca a prévia: ${pct}%`,
           ready: 'O fundo da câmera já está recortado.',
-          missing: 'O fundo ainda não foi recortado. Isso acontece sozinho quando você escolhe o layout Apresentador.',
+          missing: 'O fundo ainda não foi recortado. Isso acontece sozinho depois de cada gravação com câmera.',
           start: 'Recortar o fundo agora',
           redo: 'Recortar de novo',
           failed: 'Não consegui recortar o fundo',

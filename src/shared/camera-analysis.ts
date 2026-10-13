@@ -32,6 +32,10 @@ export type CameraJob = {
   /** `face`: quantos rostos entraram e quanto da gravação tem rosto (0..1), para a interface dizer. */
   faces?: number
   coverage?: number
+  /** `matte`: continua de pedaços que já estavam prontos (o app fechou ou o recorte parou antes). */
+  resumed?: boolean
+  /** `matte`, na fila: dando lugar a uma exportação, à transcrição ou à prévia (a GPU é uma só). */
+  waiting?: 'gpu'
 }
 
 export type CameraView = {

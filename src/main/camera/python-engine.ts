@@ -13,6 +13,7 @@
 import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { FACE_TRACK_VERSION, parseFaceTrack, type FaceTrack } from '@shared/face'
+import { contiguousChunks, MATTE_WARMUP_SECONDS, type MatteChunk } from '@shared/matte-parts'
 import { writeFileAtomic } from '../fs-utils'
 import type { Logger } from '../logger'
 import type { PrepareStepId } from '@shared/transcription'
@@ -20,6 +21,7 @@ import { ProcessError, runProcess, tail } from '../process-runner'
 import { downloadFile, DownloadError } from '../transcription/download'
 import { detectNvidiaGpu, explain, FW_CUDA_PACKAGES, FW_PIP_INDEX, parsePipDownloadLine, parsePipProgressLine, pipHasRawProgress, venvPython } from '../transcription/faster-whisper'
 import { bytesLine, type PrepareTracker, type StepSpec } from '../transcription/prepare-tracker'
+import { joinMatteParts, MatteJoinError } from './matte-join'
 import { locatePython, type PythonFound } from '../transcription/python-locator'
 import type { ToolPaths } from '../transcription/tools-dir'
 import type { CameraCheck, CameraEngine, DetectFacesOptions, MakeMatteOptions, MatteResult } from './types'
@@ -57,7 +59,10 @@ const MATTE_PIP_ESTIMATE_BYTES = 290_000_000
 /** De quanto em quanto tempo o detector olha a imagem (ms): 5 por segundo bastam para um rosto que fala. */
 export const FACE_SAMPLE_MS = 200
 const MARKER_VERSION = 1
-/** A máscara é calculada e gravada numa imagem de no máximo isto (px, lado maior): a de 1080p custa o dobro e a borda sai igual. */
+/**
+ * A máscara é calculada e gravada numa imagem de no máximo isto (px, lado maior): a de 1080p custa o dobro e a borda sai igual. Uma câmera
+ * de 4K chega ao RVM em 1280×720; nada passa de 1080p (o `camera_tools.py` tem o mesmo teto, `MATTE_HARD_MAX_SIDE`).
+ */
 export const MATTE_MAX_SIDE = 1280
 /** Qualidade do vídeo da máscara (x264 crf; baixo = mais fiel). */
 export const MATTE_CRF = 14
@@ -392,20 +397,41 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
 
   async function makeMatte(o: MakeMatteOptions): Promise<MatteResult> {
     if (!isAbsolute(o.video) || o.video.startsWith('-') || !isAbsolute(o.out) || o.out.startsWith('-')) throw new Error('Caminho inválido para o recorte do fundo.')
+    if (o.parts && (!isAbsolute(o.parts.dir) || o.parts.dir.startsWith('-') || !isAbsolute(o.parts.stopFile) || o.parts.stopFile.startsWith('-'))) throw new Error('Caminho inválido para o recorte do fundo.')
     const state = await check()
     if (state.matte.state !== 'ready') throw new Error(state.matte.detail ?? 'O recorte do fundo não está preparado.')
     const ffmpeg = deps.ffmpeg?.() ?? null
     if (!ffmpeg) throw new Error('Não achei o ffmpeg, que grava o vídeo do recorte do fundo. Aponte o ffmpeg nos Ajustes.')
-    const request = JSON.stringify({ mode: 'matte', video: o.video, out: o.out, model: mattePath(tools), ffmpeg, maxSide: MATTE_MAX_SIDE, crf: MATTE_CRF })
+    const parts = o.parts
+    const done = parts ? contiguousChunks(parts.done) : []
+    const request = JSON.stringify({
+      mode: 'matte',
+      video: o.video,
+      ...(parts
+        ? { parts: { dir: parts.dir, chunkSeconds: parts.chunkSeconds, startChunk: done.length, warmupSeconds: MATTE_WARMUP_SECONDS, stopFile: parts.stopFile } }
+        : { out: o.out }),
+      model: mattePath(tools),
+      ffmpeg,
+      maxSide: MATTE_MAX_SIDE,
+      crf: MATTE_CRF,
+      lowPriority: o.lowPriority === true,
+      parentPid: process.pid
+    })
     let buffer = ''
+    const onLine = (line: string): void => {
+      const p = /^PROGRESS\s+([\d.]+)/.exec(line)
+      if (p) {
+        o.onProgress?.(Math.min(1, Math.max(0, Number(p[1]))))
+        return
+      }
+      const c = /^CHUNK\s+(\d+)\s+(\d+)\s+(\d+)/.exec(line)
+      if (c && parts) parts.onChunk({ index: Number(c[1]), frames: Number(c[2]), bytes: Number(c[3]) })
+    }
     const onStderr = (text: string): void => {
       buffer += text
       const lines = buffer.split(/\r?\n/)
       buffer = lines.pop() ?? ''
-      for (const line of lines) {
-        const m = /^PROGRESS\s+([\d.]+)/.exec(line)
-        if (m) o.onProgress?.(Math.min(1, Math.max(0, Number(m[1]))))
-      }
+      for (const line of lines) onLine(line)
     }
     let stdout: string
     try {
@@ -424,23 +450,53 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
       }
       throw err
     }
-    let json: { engine?: string; device?: string; frames?: number; fps?: number; frame?: { w?: number; h?: number }; stats?: { seconds?: number; msPerFrame?: number } }
+    if (buffer) onLine(buffer)
+    type Json = {
+      engine?: string
+      device?: string
+      frames?: number
+      fps?: number
+      frame?: { w?: number; h?: number }
+      stats?: { seconds?: number; msPerFrame?: number }
+      chunks?: { index?: number; frames?: number }[]
+      lastChunk?: number
+      stopped?: boolean
+      resume?: 'checkpoint' | 'warmup' | null
+    }
+    let json: Json
     try {
-      json = JSON.parse(stdout) as typeof json
+      json = JSON.parse(stdout) as Json
     } catch {
       throw new Error('O recorte do fundo devolveu algo que não é JSON.')
     }
-    if (!json.frames || json.frames <= 0 || !json.fps || !json.frame?.w || !json.frame.h) throw new Error('O recorte do fundo terminou sem quadros.')
-    o.onProgress?.(1)
-    return {
+    if (!json.fps || !json.frame?.w || !json.frame.h) throw new Error('O recorte do fundo terminou sem quadros.')
+    const result = (frames: number, extra: Partial<MatteResult>): MatteResult => ({
       engine: MATTE_MODEL.id,
       device: json.device ?? 'cpu',
-      frames: json.frames,
-      fps: json.fps,
-      frame: { w: json.frame.w, h: json.frame.h },
+      frames,
+      fps: json.fps!,
+      frame: { w: json.frame!.w!, h: json.frame!.h! },
       seconds: json.stats?.seconds ?? 0,
-      msPerFrame: json.stats?.msPerFrame ?? 0
+      msPerFrame: json.stats?.msPerFrame ?? 0,
+      ...extra
+    })
+    if (!parts) {
+      if (!json.frames || json.frames <= 0) throw new Error('O recorte do fundo terminou sem quadros.')
+      o.onProgress?.(1)
+      return result(json.frames, {})
     }
+    // --- em pedaços: os de antes (o serviço guardou) + os desta rodada (o script contou) -------------------------------------
+    const fresh: MatteChunk[] = (json.chunks ?? []).filter((c): c is { index: number; frames: number } => Number.isInteger(c.index) && typeof c.frames === 'number' && c.frames > 0).map((c) => ({ index: c.index, frames: c.frames, bytes: 0 }))
+    const all = contiguousChunks([...done, ...fresh.filter((c) => !done.some((d) => d.index === c.index))])
+    const resume = json.resume === 'checkpoint' || json.resume === 'warmup' ? json.resume : null
+    if (json.stopped) return result(all.reduce((sum, c) => sum + c.frames, 0), { stopped: true, chunks: all, resume })
+    if (all.length === 0) throw new Error('O recorte do fundo terminou sem quadros.')
+    const last = typeof json.lastChunk === 'number' ? json.lastChunk : all.length - 1
+    if (all.length !== last + 1) throw new MatteJoinError(`Faltam pedaços do recorte (prontos: ${all.length}, esperados: ${last + 1}).`)
+    const frames = all.reduce((sum, c) => sum + c.frames, 0)
+    await joinMatteParts({ ffmpeg, dir: parts.dir, indices: all.map((c) => c.index), out: o.out, frames, fps: json.fps, ...(o.signal ? { signal: o.signal } : {}) })
+    o.onProgress?.(1)
+    return result(frames, { chunks: all, resume })
   }
 
   return { id: CAMERA_ENGINE_ID, prepareSteps: CAMERA_STEPS, check, prepare, detectFaces, makeMatte }
