@@ -56,10 +56,17 @@ The screens show a synthetic demo project: no real recording, face or personal d
 
 **Editing**
 - Local transcription with word timestamps. Delete a word in the text and the video is cut.
-- Automatic cleanup of silences, filler words and restarts, each one reversible.
+- Automatic cleanup of silences, filler words and restarts, each one reversible, with a cut
+  budget so the video keeps a natural pace.
+- Cuts that do not feel like jump cuts: equal power audio crossfades, an alternating punch-in
+  on your face, and no piece shorter than about a second between two cuts.
 - Automatic zoom on clicks, layouts that follow the screen activity, captions in four styles.
-- Camera as a bubble, side by side or alone. The presenter layout cuts you out of the
-  background, green screen style, without a green screen.
+- Camera as a bubble, side by side or alone, or cut out of your background with no green
+  screen needed.
+- Vertical green screen: the page fills the 9:16 frame and you stay in the corner opposite
+  to what you are showing.
+- Readable vertical video: the page is zoomed so body text lands around 30 px on a 1080 wide
+  frame, and the view follows your cursor and clicks.
 - Blur, pixelate or solid cover for sensitive regions. The original pixels are not in the export.
 - Everything you change by hand is kept: the automatic pass never undoes it.
 
@@ -113,8 +120,9 @@ AI engine, camera and microphone. For development, use `npm run dev`. Tests: `np
   encodes H.264 in hardware when available. The raw recording is never modified.
 - **Local speech to text.** `faster-whisper` on the GPU in a private Python environment, with
   `whisper.cpp` as the second engine. Nothing is uploaded.
-- **Local cutout.** RobustVideoMatting on ONNX Runtime for the presenter layout, and a face
-  detector for the camera framing.
+- **Local cutout.** RobustVideoMatting on ONNX Runtime, run in the background in 10 second
+  chunks, so it resumes where it stopped if you close the app. A face detector drives the
+  camera framing.
 - **AI as text in, text out.** Only the transcript text is sent. With Claude Code, Tomada runs
   `claude -p` in an empty working directory, with tools disabled, no saved session and the
   request on stdin. With an API key, it calls the Messages API over HTTPS and stores the key

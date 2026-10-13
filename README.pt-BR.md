@@ -56,10 +56,17 @@ As telas mostram um projeto de demonstração sintético: nenhuma gravação rea
 
 **Edição**
 - Transcrição local com tempo por palavra. Apague uma palavra no texto e o vídeo é cortado.
-- Limpeza automática de silêncios, muletas e recomeços, cada uma desfazível.
+- Limpeza automática de silêncios, muletas e recomeços, cada uma desfazível, com um limite de
+  cortes para o vídeo manter um ritmo natural.
+- Cortes que não parecem pulos: áudio cruzado em potência igual, punch-in alternado no seu
+  rosto e nenhum trecho menor que cerca de um segundo entre dois cortes.
 - Zoom automático nos cliques, layouts que seguem a atividade da tela, legendas em quatro estilos.
-- Câmera em bolha, ao lado da tela ou sozinha. O layout apresentador recorta você do fundo,
-  no estilo de tela verde, sem precisar de tela verde.
+- Câmera em bolha, ao lado da tela ou sozinha, ou recortada do seu fundo sem precisar de
+  tela verde.
+- Green screen no vertical: a página ocupa o quadro 9:16 e você fica no canto oposto ao que
+  está mostrando.
+- Vertical legível: a página é aproximada para o texto ficar em torno de 30 px num quadro de
+  1080 de largura, e a visão segue o cursor e os cliques.
 - Desfoque, pixelado ou tarja sólida para dados sensíveis. Os pixels originais não vão para o arquivo exportado.
 - O que você muda à mão fica: o automático nunca desfaz.
 
@@ -113,8 +120,9 @@ Testes: `npm run typecheck`, `npm test` e `npm run test:e2e`. Veja o [CONTRIBUTI
   `mediabunny` e codifica H.264 por hardware quando há. O bruto nunca é modificado.
 - **Fala para texto, local.** `faster-whisper` na placa de vídeo, num ambiente Python próprio,
   com `whisper.cpp` como segundo motor. Nada é enviado.
-- **Recorte local.** RobustVideoMatting no ONNX Runtime para o layout apresentador, e um
-  detector de rosto para o enquadramento da câmera.
+- **Recorte local.** RobustVideoMatting no ONNX Runtime, em segundo plano e em pedaços de
+  10 segundos, então ele continua de onde parou se você fechar o app. Um detector de rosto
+  guia o enquadramento da câmera.
 - **IA como texto que entra e texto que sai.** Só o texto da transcrição é enviado. Com o
   Claude Code, o Tomada roda `claude -p` numa pasta de trabalho vazia, sem ferramentas, sem sessão
   salva e com o pedido pelo stdin. Com a chave de API, chama a Messages API por HTTPS e guarda a
