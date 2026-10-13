@@ -21,7 +21,7 @@ export const SCREENS_DIR = join(ROOT, 'test-results', 'screens')
 /**
  * Bateria com janelas ocultas (padrão do playwright.config.ts): o compositor roda por software, sem GPU. Quase tudo vale igual;
  * o que mede GPU (velocidade, orçamento por quadro, espaço de cor marcado pela placa) usa esta constante e é conferido na rodada
- * visível: `TOMADA_E2E_HIDDEN=0 node scripts/fila-pesada.mjs npm run test:e2e -- <spec>`. Veja docs/etapas/acabamento-janelas.md.
+ * visível: `TOMADA_E2E_HIDDEN=0 node scripts/fila-pesada.mjs npm run test:e2e -- <spec>`.
  */
 export const E2E_HIDDEN = process.env.TOMADA_E2E_HIDDEN === '1'
 

@@ -1,7 +1,7 @@
 /**
  * Onde ficam as ferramentas da transcrição (venv do Python, modelos, whisper.cpp): FORA dos projetos, em
  * `%LOCALAPPDATA%\Tomada`, e num caminho SEM ACENTO. O Python, o ctranslate2 e os programas nativos tropeçam em
- * "ô" (esta máquina é `C:\Users\José\…`); então, se o caminho tem acento, usa o nome curto 8.3 do Windows
+ * acentos (por exemplo `C:\Users\José\…`); então, se o caminho tem acento, usa o nome curto 8.3 do Windows
  * (`C:\Users\JOS~1\AppData\Local\Tomada`) e, se nem ele serve, `%ProgramData%\Tomada`.
  *
  * Sem Electron. O caminho curto vem do Win32 por parâmetro (`shortPathOf`), então a decisão é testável.

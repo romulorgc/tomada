@@ -23,7 +23,7 @@ export function createAnthropicApiProvider(opts: ApiOptions): LlmProvider {
   const doFetch = opts.fetchImpl ?? fetch
   const ask: AskFn = async ({ system, prompt, signal, timeoutMs }) => {
     const key = opts.getKey()
-    if (!key) throw new LlmError('Falta a chave da IA. Cole a chave nos Ajustes.', false)
+    if (!key) throw new LlmError('Falta a chave de API da Anthropic. Cole a chave nos Ajustes.', false)
     const url = opts.url ?? API_URL
     if (new URL(url).protocol !== 'https:') throw new LlmError('A IA só é chamada por HTTPS.', false)
     const ctl = new AbortController()
@@ -39,7 +39,7 @@ export function createAnthropicApiProvider(opts: ApiOptions): LlmProvider {
       })
       if (!res.ok) {
         const body = (await res.text().catch(() => '')).slice(0, 300)
-        if (res.status === 401 || res.status === 403) throw new LlmError('A chave da IA foi recusada. Confira a chave nos Ajustes.', false)
+        if (res.status === 401 || res.status === 403) throw new LlmError('A Anthropic recusou a chave de API. Confira a chave nos Ajustes.', false)
         if (res.status === 429) throw new LlmError('A IA está com limite de uso no momento. Tente de novo daqui a pouco.', true)
         throw new LlmError(`A IA respondeu com erro ${res.status}${body ? `: ${body}` : ''}.`, res.status >= 500)
       }

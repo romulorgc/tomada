@@ -18,7 +18,7 @@ import type { Size } from './types'
 
 export type CameraQuality = 'max' | 'high'
 export const CAMERA_QUALITIES: readonly CameraQuality[] = ['max', 'high']
-/** Padrão do usuário (06/10/2026): "a câmera melhor de todas". */
+/** Padrão: a melhor qualidade de câmera. */
 export const DEFAULT_CAMERA_QUALITY: CameraQuality = 'max'
 
 /** A taxa que a câmera precisa entregar para o vídeo parecer fluido. */

@@ -3,7 +3,7 @@ rem Abre o Tomada. Se o app ainda nao foi construido (pasta out\), constroi ante
 setlocal
 cd /d "%~dp0"
 
-rem Este PC tem ELECTRON_RUN_AS_NODE ligada; com ela o Electron vira um Node comum e nao abre.
+rem Se ELECTRON_RUN_AS_NODE estiver ligada no ambiente, o Electron vira um Node comum e nao abre.
 set ELECTRON_RUN_AS_NODE=
 
 if not exist "node_modules\" (

@@ -129,7 +129,7 @@ export const CAPTION_Y_WIDE = 0.71
  */
 export function verticalCaptionY(layout: LayoutKind, presenter?: PresenterStyle, punch = 1, fit?: PersonFit): number {
   if (layout === 'screen-wide') return CAPTION_Y_WIDE
-  // V-D (apresentador recortado): logo ACIMA da cabeça, sem cobrir o rosto (nos Shorts verdes medidos o centro da legenda fica de 3 a 12 pontos acima do topo da cabeça, mediana 4,5; ver `estudo/green-screen-2026-10-05.md`)
+  // V-D (apresentador recortado): logo ACIMA da cabeça, sem cobrir o rosto (nos Shorts verdes medidos o centro da legenda fica de 3 a 12 pontos acima do topo da cabeça, mediana 4,5)
   // V-E: logo ACIMA do topo da cabeça (com o punch-in a cabeça sobe, e a legenda com ela)
   if (isGreenscreen(layout)) return greenscreenCaptionY(layout, presenter, punch, fit)
   if (layout === 'presenter') return 1 - resolvePresenter(presenter).heightV - PRESENTER.captionGapV

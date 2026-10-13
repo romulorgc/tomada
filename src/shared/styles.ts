@@ -150,7 +150,7 @@ export function resolveSideBySide(s: SideBySideStyle | undefined): { side: 'left
 // Apresentador RECORTADO (M4c)
 
 /**
- * Medido em vídeos reais (`estudo/green-screen-2026-10-05.md`): no YouTube 16:9 (11 vídeos, 3 criadores) a pessoa recortada tem 56% da
+ * Medido em vídeos reais de referência: no YouTube 16:9 (11 vídeos, 3 criadores) a pessoa recortada tem 56% da
  * altura do quadro [52-65], 36% da largura [31-37], ancorada na borda de baixo e colada na borda da direita (centro em x 81%);
  * nos Shorts 9:16 verdes (14 vídeos, 3 criadores) ela tem 43% da altura [38-48], o topo da cabeça em y 57% [52-62] e 84% da largura.
  * A pessoa ocupa ~85% da altura da JANELA (o recorte da webcam), que é de onde a janela sai a partir da altura da pessoa.

@@ -128,9 +128,9 @@ describe('ClaudeCliProvider (processo filho)', () => {
       }
     }
     expect(await msg(fails('timeout'))).toMatch(/demorou demais/)
-    expect(await msg(fails('spawn'))).toMatch(/Não consegui abrir o programa da IA/)
+    expect(await msg(fails('spawn'))).toMatch(/Não consegui abrir o Claude Code/)
     expect(await msg(fails('exit', 'Not logged in'))).toMatch(/Not logged in/)
-    for (const reason of ['timeout', 'spawn', 'exit'] as const) expect(await msg(fails(reason))).not.toMatch(/claude|anthropic/i)
+    for (const reason of ['timeout', 'spawn', 'exit'] as const) expect(await msg(fails(reason))).not.toMatch(/openai|gpt|gemini/i)
     const isError = okRun(() => envelope('limite de uso atingido', { is_error: true }), [])
     expect(await msg(isError)).toMatch(/limite de uso atingido/)
     expect(await msg(okRun(() => 'não é json', []))).toMatch(/formato que não reconheci/)
@@ -143,7 +143,7 @@ describe('AnthropicApiProvider', () => {
   it('só HTTPS no endereço fixo, chave no cabeçalho, nada da chave no corpo', async () => {
     const seen: { url: string; headers: Record<string, string>; body: string }[] = []
     const provider = createAnthropicApiProvider({
-      getKey: () => 'chave-de-teste-falsa',
+      getKey: () => 'chave-de-teste-falsa-123',
       fetchImpl: (async (url: URL | string, init?: RequestInit) => {
         seen.push({ url: String(url), headers: init?.headers as Record<string, string>, body: String(init?.body) })
         return ok('{"ok":true}')
@@ -152,7 +152,7 @@ describe('AnthropicApiProvider', () => {
     expect(await provider.complete({ task: 't', system: 'S', prompt: 'P', schema })).toEqual({ ok: true })
     expect(seen[0]!.url).toBe(API_URL)
     expect(seen[0]!.url.startsWith('https://')).toBe(true)
-    expect(seen[0]!.headers['x-api-key']).toBe('chave-de-teste-falsa')
+    expect(seen[0]!.headers['x-api-key']).toBe('chave-de-teste-falsa-123')
     expect(seen[0]!.body).not.toContain('chave-secreta')
     expect(JSON.parse(seen[0]!.body)).toMatchObject({ system: 'S', messages: [{ role: 'user', content: 'P' }] })
   })
@@ -167,8 +167,8 @@ describe('AnthropicApiProvider', () => {
         return (err as Error).message
       }
     }
-    expect(await run({ getKey: () => null })).toMatch(/Falta a chave da IA/)
-    expect(await run({ getKey: () => 'k', fetchImpl: fetchStatus(401) })).toMatch(/chave da IA foi recusada/)
+    expect(await run({ getKey: () => null })).toMatch(/Falta a chave de API da Anthropic/)
+    expect(await run({ getKey: () => 'k', fetchImpl: fetchStatus(401) })).toMatch(/A Anthropic recusou a chave de API/)
     expect(await run({ getKey: () => 'k', fetchImpl: fetchStatus(429) })).toMatch(/limite de uso/)
     expect(await run({ getKey: () => 'k', fetchImpl: fetchStatus(500) })).toMatch(/erro 500/)
     expect(await run({ getKey: () => 'k', url: 'http://api.exemplo.com/x', fetchImpl: fetchStatus(200) })).toMatch(/só é chamada por HTTPS/)

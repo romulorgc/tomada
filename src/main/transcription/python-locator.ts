@@ -1,8 +1,8 @@
 /**
  * Acha um Python utilizável para criar o venv do app: 3.9 a 3.14, preferindo 3.11 (o que o projeto fixou).
  *
- * Os caminhos NÃO são lidos da saída de texto do `py -0p` (que sai na página de código do console e estraga o "ô"
- * de `C:\Users\José`): só as etiquetas (`-V:Astral/CPython3.11.15`, ASCII) são lidas dali, e o caminho vem do
+ * Os caminhos NÃO são lidos da saída de texto do `py -0p` (que sai na página de código do console e estraga acentos
+ * como o de `C:\Users\José`): só as etiquetas (`-V:Astral/CPython3.11.15`, ASCII) são lidas dali, e o caminho vem do
  * próprio Python, em JSON com escapes (`json.dumps`), que não depende de página de código nenhuma.
  *
  * Sem Electron.

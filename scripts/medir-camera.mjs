@@ -13,7 +13,7 @@
  *
  * Presets: `aceite` (antes × depois, com e sem tela), `diagnostico` (a investigação inteira), `rapido`.
  * `--scenarios <arquivo.json>` roda uma lista própria. Os arquivos ficam em `C:\tmp\tomada-camera-medicao\`
- * (rosto do usuário: só nesta máquina, nunca no repositório; apague no fim: docs/LIXO.md).
+ * (contêm o rosto de quem mede: ficam só nesta máquina, nunca no repositório; apague ao terminar).
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { build } from 'esbuild'

@@ -553,7 +553,7 @@ export const ptBR = {
       suggestNoAi: 'Sugerir sem IA',
       suggestNoAiHint: 'Escolhe pelas pausas, pelo ritmo da fala e pela atividade da tela.',
       noTranscript: { title: 'Sem transcrição', body: 'Os cortes saem da transcrição da voz. Transcreva o vídeo na aba Texto primeiro.', cta: 'Ir para a aba Texto' },
-      aiOff: { title: 'Sem IA', body: 'A sugestão sem IA escolhe pelas pausas, pelo ritmo da fala e pela atividade da tela. Para ligar a IA, instale o programa da IA neste computador ou cole uma chave em Ajustes → IA.' },
+      aiOff: { title: 'Sem IA', body: 'A sugestão sem IA escolhe pelas pausas, pelo ritmo da fala e pela atividade da tela. Para ligar a IA, instale o Claude Code neste computador e entre com a sua conta, ou cole uma chave de API da Anthropic em Ajustes → IA.' },
       found: {
         ai: (n: number): string => `${n} ${n === 1 ? 'corte sugerido' : 'cortes sugeridos'} pela IA.`,
         heuristic: (n: number): string => `${n} ${n === 1 ? 'corte sugerido' : 'cortes sugeridos'} sem IA.`
@@ -640,7 +640,7 @@ export const ptBR = {
       generate: 'Gerar com IA',
       generating: 'Gerando…',
       generateFailed: 'Não consegui gerar os textos',
-      aiOff: { title: 'IA indisponível', body: 'Os títulos, a descrição, as tags e as hashtags vêm da IA. Para ligar a IA, instale o programa da IA neste computador ou cole uma chave em Ajustes → IA. Os capítulos por pausas funcionam sem ela.' },
+      aiOff: { title: 'IA indisponível', body: 'Os títulos, a descrição, as tags e as hashtags vêm da IA. Para ligar a IA, instale o Claude Code neste computador e entre com a sua conta, ou cole uma chave de API da Anthropic em Ajustes → IA. Os capítulos por pausas funcionam sem ela.' },
       noTranscript: { title: 'Sem transcrição', body: 'Os textos saem da transcrição da voz. Transcreva o vídeo na aba Texto primeiro.', cta: 'Ir para a aba Texto' },
       notes: (list: string): string => `Ajustes feitos nas respostas: ${list}.`,
       copy: 'Copiar',
@@ -685,7 +685,7 @@ export const ptBR = {
       suggestions: 'Sugestões',
       history: 'Histórico',
       historyEmpty: 'Nada pedido ainda.',
-      unavailable: { title: 'IA indisponível', body: 'Para pedir edições, instale o programa da IA neste computador ou cole uma chave em Ajustes → IA. Os cortes sem IA e os capítulos por pausas funcionam nas abas Cortes e Publicar.' },
+      unavailable: { title: 'IA indisponível', body: 'Para pedir edições, instale o Claude Code neste computador e entre com a sua conta, ou cole uma chave de API da Anthropic em Ajustes → IA. Os cortes sem IA e os capítulos por pausas funcionam nas abas Cortes e Publicar.' },
       noTranscript: { title: 'Sem transcrição', body: 'A IA edita pelo texto da transcrição. Transcreva o vídeo na aba Texto primeiro.', cta: 'Ir para a aba Texto' },
       status: { applied: 'Aplicado', refused: 'Recusado', noop: 'Sem mudança', cancelled: 'Cancelado', error: 'Erro' },
       applied: (summary: string): string => `${summary} Ctrl+Z desfaz.`,
@@ -1195,16 +1195,16 @@ export const ptBR = {
     },
     ai: {
       title: 'IA',
-      help: 'Usada só para achar recomeços no texto. Vai o texto da transcrição, nunca o áudio nem o vídeo.',
+      help: 'A edição automática depende dela: acha cortes e recomeços, sugere títulos e atende pedidos de edição. O Tomada usa o Claude Code que você já tem instalado e logado neste computador e nunca pede nem guarda as suas credenciais. Vai só o texto da transcrição, nunca o áudio nem o vídeo.',
       status: { ready: 'Disponível', missing: 'Nada configurado' },
       preference: {
         label: 'Como usar',
-        auto: 'Automático',
-        cli: 'Programa deste computador',
-        api: 'Chave de acesso'
+        auto: 'Automático (Claude Code primeiro)',
+        cli: 'Claude Code',
+        api: 'Chave de API da Anthropic'
       },
       key: {
-        label: 'Chave de acesso',
+        label: 'Chave de API da Anthropic (alternativa ao Claude Code)',
         placeholder: 'Cole a chave aqui',
         save: 'Guardar chave',
         clear: 'Apagar a chave',
@@ -1215,7 +1215,7 @@ export const ptBR = {
         failed: 'Não consegui guardar a chave',
         help: 'Fica cifrada pelo cofre do Windows e só o Tomada a usa.'
       },
-      cli: { found: 'Programa deste computador encontrado', missing: 'Programa deste computador não encontrado' },
+      cli: { found: 'Claude Code encontrado neste computador', missing: 'Claude Code não encontrado neste computador' },
       test: 'Testar',
       testing: 'Testando…',
       testOk: 'A IA respondeu.',

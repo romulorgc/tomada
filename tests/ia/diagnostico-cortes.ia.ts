@@ -27,7 +27,7 @@ it.skipIf(!pasta)('o que a IA devolve para os cortes desta pasta, e o que a conf
   const duration = projectDurationMs(project)
   const outputMs = rangesLength(keptRanges(duration, project.cuts))
   const exe = locateClaude()
-  expect(exe, 'o programa da IA não está instalado neste computador').not.toBeNull()
+  expect(exe, 'o Claude Code não está instalado neste computador').not.toBeNull()
   const cwd = join(tmpdir(), 'tomada-ia-diagnostico')
   mkdirSync(cwd, { recursive: true })
   const provider = createClaudeCliProvider({ exe: exe!, cwd })

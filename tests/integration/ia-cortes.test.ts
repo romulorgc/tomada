@@ -152,7 +152,7 @@ describe('IA: cortes verticais (canal ai:clips)', () => {
     expect(text).not.toMatch(/claude|anthropic|openai|gpt/i)
   })
 
-  it('sem IA (TOMADA_LLM=off): usa a heurística e explica o motivo e como ligar a IA, sem nome de fornecedor', async () => {
+  it('sem IA (TOMADA_LLM=off): usa a heurística e explica o motivo e como ligar a IA (Claude Code ou chave de API)', async () => {
     const { handlers } = await build({ llm: 'off' })
     const r = await handlers['ai:clips']('demo', 'auto')
     expect(r.source).toBe('heuristic')
@@ -163,7 +163,8 @@ describe('IA: cortes verticais (canal ai:clips)', () => {
     }
     expect(r.notice).toMatch(/^Sem IA: usei a heurística/)
     expect(r.notice).toMatch(/Ajustes → IA/)
-    expect(r.notice).not.toMatch(/claude|anthropic|openai|gpt/i)
+    expect(r.notice).toMatch(/Claude Code/)
+    expect(r.notice).not.toMatch(/openai|gpt/i)
   })
 
   it('a pessoa pode pedir a heurística mesmo com IA, e aí não há aviso de IA indisponível', async () => {
@@ -223,12 +224,12 @@ describe('IA: editar pedindo (canal ai:edit)', () => {
     await expect(handlers['ai:edit']('..', 'oi', 'horizontal')).rejects.toThrow()
   })
 
-  it('sem IA o pedido falha dizendo por quê e como ligar (sem nome de fornecedor); sem resposta de operações, a lista vem vazia', async () => {
+  it('sem IA o pedido falha dizendo por quê e como ligar; sem resposta de operações, a lista vem vazia', async () => {
     const off = await build({ llm: 'off' })
     const err = await off.handlers['ai:edit']('demo', 'tira o preço', 'horizontal').catch((e: unknown) => e as Error)
     expect(err).toBeInstanceOf(Error)
-    expect((err as Error).message).toMatch(/A IA está desligada neste teste\. Para ligar a IA, instale o programa da IA neste computador ou cole uma chave em Ajustes → IA\./)
-    expect((err as Error).message).not.toMatch(/claude|anthropic|openai|gpt/i)
+    expect((err as Error).message).toMatch(/A IA está desligada neste teste\. Para ligar a IA, instale o Claude Code neste computador e entre com a sua conta, ou cole uma chave de API da Anthropic em Ajustes → IA\./)
+    expect((err as Error).message).not.toMatch(/openai|gpt/i)
     const quiet = await build()
     expect(await quiet.handlers['ai:edit']('demo', 'qualquer coisa', 'horizontal')).toEqual({ ops: [], reply: 'A IA de teste não propõe mudanças.' })
   })

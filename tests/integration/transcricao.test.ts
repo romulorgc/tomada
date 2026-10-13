@@ -300,7 +300,7 @@ describe('gerente da IA', () => {
     expect(buildManager({ cli: null, prefs: { apiKeyEnc: 'cifrado:x' } }).manager.status()).toMatchObject({ provider: 'api', available: true, hasKey: true })
     const none = buildManager({ cli: null }).manager.status()
     expect(none).toMatchObject({ provider: null, available: false })
-    expect(none.detail).toMatch(/instale o programa ou cole uma chave/)
+    expect(none.detail).toMatch(/instale o Claude Code e entre com a sua conta, ou cole uma chave de API da Anthropic/)
   })
 
   it('preferência fixa: só o programa, ou só a chave, sem trocar escondido', () => {
@@ -309,18 +309,19 @@ describe('gerente da IA', () => {
     expect(buildManager({ cli: 'C:\\claude.exe', prefs: { provider: 'api', apiKeyEnc: 'cifrado:x' } }).manager.status()).toMatchObject({ provider: 'api', available: true })
   })
 
-  it('a interface nunca vê o nome do fornecedor: a mensagem diz "IA"', () => {
+  it('as mensagens indicam o Claude Code como caminho principal e não citam outros fornecedores', () => {
     const texts = [
       buildManager({ cli: null }).manager.status().detail,
       buildManager({ cli: null, prefs: { provider: 'cli' } }).manager.status().detail,
       buildManager({ cli: null, prefs: { provider: 'api' } }).manager.status().detail
     ].join(' ')
-    expect(texts).not.toMatch(/claude|anthropic|openai|gpt|gemini/i)
+    expect(texts).toMatch(/Claude Code/)
+    expect(texts).not.toMatch(/openai|gpt|gemini/i)
   })
 
   it('guardar a chave: cifrada pelo cofre, nunca devolvida; apagar remove', async () => {
     const { manager, saved, prefs } = buildManager({ cli: null })
-    const key = 'chave-de-teste-falsa'
+    const key = 'chave-de-teste-falsa-abcdef'
     const status = await manager.setKey(`  ${key}  `)
     expect(JSON.stringify(status)).not.toContain(key)
     expect(status).toMatchObject({ hasKey: true, provider: 'api', available: true })
@@ -394,7 +395,7 @@ async function buildIpc() {
 describe('IPC da transcrição e da IA', () => {
   it('a chave da IA nunca volta pela ponte e fica cifrada em disco', async () => {
     const { handlers, file } = await buildIpc()
-    const key = 'chave-de-teste-falsa'
+    const key = 'chave-de-teste-falsa-abcdef'
     const after = await handlers['llm:set-key'](key)
     expect(after).toMatchObject({ hasKey: true })
     const surfaces = [

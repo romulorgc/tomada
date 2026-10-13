@@ -83,8 +83,8 @@ export type HandlerDeps = {
   clock(): number
 }
 
-/** Como ligar a IA, para toda mensagem de "a IA não está disponível" (a interface nunca nomeia o fornecedor). */
-export const HOW_TO_ENABLE_AI = 'Para ligar a IA, instale o programa da IA neste computador ou cole uma chave em Ajustes → IA.'
+/** Como ligar a IA, para toda mensagem de "a IA não está disponível": o Claude Code do usuário é o caminho principal; a chave de API da Anthropic, a alternativa. */
+export const HOW_TO_ENABLE_AI = 'Para ligar a IA, instale o Claude Code neste computador e entre com a sua conta, ou cole uma chave de API da Anthropic em Ajustes → IA.'
 
 /** O motivo de a IA estar indisponível, mais o jeito de ligá-la (sem repetir o que o motivo já diz). */
 function unavailableText(detail: string | null): string {

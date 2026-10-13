@@ -1,6 +1,6 @@
 /**
  * COMO cada estilo de legenda se desenha: fonte, tamanho, contorno, cores, caixa, onde fica. Os números vêm dos 115 vídeos
- * publicados que o estudo E1 mediu (05/10/2026, `estudo/videos-referencia-2026-10-05.md`), não mais de blogs. No vertical:
+ * publicados que a medição de 05/10/2026 analisou, não mais de blogs. No vertical:
  *
  *  - Destaque: Montserrat ExtraBold em CAIXA ALTA, maiúscula de 58 px (corpo de 80), contorno de ~5 px, a palavra falada em
  *    #FFD93D com "pop" (E1: 58 [54-61] px, n = 21);

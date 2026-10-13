@@ -38,7 +38,7 @@ export const YUNET_FILE = {
 } as const
 /**
  * O modelo do recorte do fundo: RobustVideoMatting ResNet50 em ONNX (fp32), versão FIXA (tag v1.0.0), com tamanho e SHA-256 conferidos
- * aqui. Medido na gravação real do usuário na RTX 3050 (ver README, "Recorte do fundo"). Licença GPL-3.0 (uso pessoal: registrado).
+ * aqui. Medido numa gravação real na RTX 3050. Licença GPL-3.0: o modelo é baixado na primeira preparação e não faz parte do repositório.
  */
 export const MATTE_MODEL = {
   id: 'rvm-resnet50',
@@ -250,7 +250,7 @@ export function createPythonCamera(deps: PythonCameraDeps): CameraEngine {
   /**
    * Duas TRILHAS independentes sobre o mesmo ambiente do Python: o ROSTO (OpenCV, PyAV, detector YuNet) e o RECORTE DO FUNDO
    * (onnxruntime, modelo RVM de 107 MB). Cada uma grava a marca de preparo dela assim que passa na conferência: se o download do RVM
-   * cai, o enquadramento do rosto já está pronto e segue disponível (o especificação exige a independência); "Tentar de novo" refaz o que falta.
+   * cai, o enquadramento do rosto já está pronto e segue disponível (as duas trilhas são independentes); "Tentar de novo" refaz o que falta.
    */
   async function prepare(tracker: PrepareTracker, signal: AbortSignal): Promise<void> {
     let current: PrepareStepId = 'python'

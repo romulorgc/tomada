@@ -5,8 +5,8 @@ import { applyOwnerEditingDefaults, exportDefaultsSchema } from '@shared/setting
 import { createProject } from '@shared/project'
 
 describe('padrões pessoais da M5', () => {
-  it('traz exatamente o vocabulário do usuário, na ordem do especificação', () => {
-    expect(DEFAULT_DICTIONARY).toEqual(['Sintomax', 'Agendaí', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Outro Termo', 'Claude', 'Supabase', 'WhatsApp'])
+  it('traz o vocabulário inicial, na ordem definida', () => {
+    expect(DEFAULT_DICTIONARY).toEqual(['Tomada', 'YouTube', 'Shorts', 'GitHub', 'Windows'])
   })
   it('aplica legenda e zoom próprios a projetos novos, sem mudar o original', () => {
     const project = createProject({ id: 'p', title: 'Teste' })

@@ -20,7 +20,7 @@ test('a aba Texto mostra o produto composto uma vez e conserva os índices e o i
   copyTree(join(FIXTURES_DIR, 'projeto-exemplo'), dir)
   mkdirSync(userData)
   writeFileSync(join(userData, 'settings.json'), JSON.stringify({ autopilot: { mode: 'nothing' }, transcription: { auto: false, autoClean: false } }))
-  const words: Transcript['words'] = ['Conheça', 'Jus', 'pronto.', 'Agora', 'cadastre', 'seu', 'cliente.'].map((text, i) => ({ i, text, start: i * 700 + 300, end: i * 700 + 900, prob: .99, kind: 'word' }))
+  const words: Transcript['words'] = ['Conheça', 'Agen', 'daí.', 'Agora', 'cadastre', 'seu', 'cliente.'].map((text, i) => ({ i, text, start: i * 700 + 300, end: i * 700 + 900, prob: .99, kind: 'word' }))
   const transcript: Transcript = { words, segments: [], vad: [], durationMs: 20_000, engine: 'teste', model: 'sintético', language: 'pt', createdAt: '2026-10-06' }
   const doc = parseProject(readFileSync(join(dir, 'project.json'), 'utf8'))
   doc.cuts = []; doc.mutes = []; doc.autoCleaned = true; doc.zoomPreset = 'off'; doc.zooms = []; doc.captions.enabled = true
