@@ -52,13 +52,15 @@ test('um play() interrompido pelo pause() do próprio motor NÃO vira aviso de �
       return promise
     }
   })
-  // toca e pausa NO MESMO instante, várias vezes: o play() do áudio fica pendente e o pause() o interrompe (AbortError)
+  // anda 1 s (Shift+→, o áudio fica buscando) e, no MESMO instante, toca e pausa (Espaço, Espaço): o play() do áudio fica pendente enquanto
+  // ele busca e o pause() o interrompe (AbortError). É a sequência de quem revisa os cortes, como no log de 09/10.
   await page.evaluate(async () => {
-    const button = document.querySelector('[data-testid="play-toggle"]') as HTMLElement
+    const press = (code: string, shiftKey = false): void => void document.body.dispatchEvent(new KeyboardEvent('keydown', { code, key: code === 'Space' ? ' ' : code, shiftKey, bubbles: true }))
     for (let i = 0; i < 8; i++) {
-      button.click()
-      button.click()
-      await new Promise((r) => setTimeout(r, 40))
+      press('ArrowRight', true)
+      press('Space')
+      press('Space')
+      await new Promise((r) => setTimeout(r, 60))
     }
   })
   await page.waitForTimeout(800)
