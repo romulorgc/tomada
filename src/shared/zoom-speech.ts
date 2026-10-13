@@ -298,11 +298,13 @@ export function shapeZoomWindows<T extends ZoomWindow>(wins: readonly T[], shapi
     shaped.push({ ...w, start, end })
   }
 
-  // separação: zooms mais perto que `separationMs` viram um só (o foco passa a seguir o cursor se os dois eram diferentes)
+  // separação: zooms mais perto que `separationMs` viram um só (o foco passa a seguir o cursor se os dois eram diferentes).
+  // A distância é a do vídeo de SAÍDA: um corte entre os dois não os afasta (o espectador vê o zoom sair e entrar de novo em seguida).
   const out: T[] = []
   for (const w of shaped) {
     const last = out[out.length - 1]
-    if (last && w.start - last.end < shaping.separationMs) {
+    const gap = last ? (kept ? keptOverlap(kept, last.end, w.start) : w.start - last.end) : 0
+    if (last && gap < shaping.separationMs) {
       const sameFocus = last.focus !== 'auto' && w.focus !== 'auto' && last.focus.x === w.focus.x && last.focus.y === w.focus.y
       out[out.length - 1] = { ...last, end: Math.max(last.end, w.end), hits: last.hits + w.hits, click: last.click || w.click, focus: sameFocus ? last.focus : 'auto' }
     } else out.push({ ...w })

@@ -252,6 +252,50 @@ describe('forma do zoom: platô de 4 s, 1,5 s entre zooms, escala de 1,5 a 1,8×
     }
   })
 
+  it('com cortes a separação também é a do vídeo de SAÍDA: dois zooms colados depois do corte viram um só, e os que sobram ficam a 1,5 s ou mais', () => {
+    for (let seed = 1; seed <= 30; seed++) {
+      const { words, sentences } = speech(seed, DURATION)
+      const kept = keptRanges(DURATION, cutsOf(sentences, seed + 7).map((c) => ({ ...c, enabled: true })))
+      const r = rng(seed * 29)
+      const clicks = Array.from({ length: 14 }, () => click(2000 + Math.floor(r() * (DURATION - 8000))))
+      const zooms = horizontal(clicks, { words, kept, preset: 'intense' })
+      for (let k = 1; k < zooms.length; k++) {
+        expect(keptOverlap(kept, zooms[k - 1]!.end, zooms[k]!.start), `semente ${seed}`).toBeGreaterThanOrEqual(ZOOM_SEPARATION_MS)
+      }
+    }
+  })
+
+  it('um corte entre dois zooms os aproxima no vídeo final: 2,4 s na gravação, 0,5 s na saída, então viram um só', () => {
+    const kept: Range[] = [{ start: 0, end: 15_500 }, { start: 17_400, end: 60_000 }]
+    const wins = [
+      { start: 10_000, end: 15_000, hits: 1, click: true, focus: 'auto' as const },
+      { start: 17_000, end: 22_000, hits: 1, click: true, focus: 'auto' as const }
+    ]
+    const out = shapeZoomWindows(wins, HORIZONTAL_SHAPING, { words: [], kept, durationMs: 60_000 })
+    expect(out).toHaveLength(1)
+    // a mesma distância na gravação, sem o corte, são dois zooms
+    expect(shapeZoomWindows(wins, HORIZONTAL_SHAPING, { words: [], kept: null, durationMs: 60_000 })).toHaveLength(2)
+  })
+
+  it('gravação muito cortada: três zooms de 5 s que, no vídeo final, ficam colados (cortes entre eles) viram um zoom só em vez de três pulsos', () => {
+    // formato de um projeto real bem editado: 28 s de fala em 13 trechos, os cortes comem as pausas entre os pedidos de zoom
+    const kept: Range[] = [
+      [3597, 4762], [5406, 8624], [9712, 11920], [12732, 13822], [16212, 17342], [18912, 19082], [19678, 23184], [23592, 23982],
+      [27412, 30402], [31772, 34462], [36812, 37582], [38952, 41077], [42557, 50366]
+    ].map(([start, end]) => ({ start: start!, end: end! }))
+    const wins = [
+      { start: 22132, end: 26456, hits: 1, click: true, focus: 'auto' as const },
+      { start: 32506, end: 36156, hits: 1, click: true, focus: 'auto' as const },
+      { start: 41898, end: 50366, hits: 1, click: true, focus: 'auto' as const }
+    ]
+    const out = shapeZoomWindows(wins, HORIZONTAL_SHAPING, { words: [], kept, durationMs: 50_366 })
+    // o primeiro já precisa de 0,9 s + 4 s de vídeo mantido: o fim dele cai depois do início do segundo (nos cortes), e assim por diante
+    expect(out).toHaveLength(1)
+    // sem os cortes são três zooms separados: a fusão vem dos cortes, não da forma
+    const semCortes = shapeZoomWindows(wins, HORIZONTAL_SHAPING, { words: [], kept: null, durationMs: 50_366 })
+    expect(semCortes).toHaveLength(3)
+  })
+
   it('dois zooms que ficariam a menos de 1,5 s viram um só (o foco passa a seguir o cursor)', () => {
     const wins = [
       { start: 1000, end: 6000, hits: 1, click: true, focus: { x: 0.2, y: 0.2 } as const },
