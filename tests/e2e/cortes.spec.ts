@@ -6,8 +6,9 @@
  *    destaque, dentro da caixa segura) + folha de contato de um corte;
  *  - editar pedindo: UMA mudança, Ctrl+Z desfaz; confirmação acima de 20%; operação inválida recusada com o motivo;
  *  - publicar: capítulos válidos para o YouTube; textos por corte;
- *  - sem IA: a heurística de cortes e os capítulos por pausas funcionam e a interface explica como ligar a IA;
- *  - a interface nunca nomeia o fornecedor da IA.
+ *  - sem IA: a heurística de cortes e os capítulos por pausas funcionam e a interface explica como ligar a IA (Claude Code
+ *    logado neste computador, ou chave de API da Anthropic em Ajustes → IA);
+ *  - com a IA funcionando, a interface nunca nomeia o fornecedor; só o aviso de "como ligar a IA" nomeia esses dois caminhos.
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -72,10 +73,25 @@ function yellowBox(px: Uint8Array): { count: number; x0: number; x1: number; y0:
   return { count, x0: first(cols), x1: last(cols), y0: first(rows), y1: last(rows) }
 }
 
-/** O texto visível da página inteira: nenhum fornecedor de IA pode aparecer. */
-async function expectNoVendor(page: Page, where: string): Promise<void> {
-  const text = await page.evaluate(() => document.body.innerText)
+/** O que o aviso de "como ligar a IA" nomeia de propósito: o Claude Code (caminho principal) e a chave de API da Anthropic (alternativa). */
+const HOW_TO_ENABLE_NAMES = /Claude Code|chave de API da Anthropic/g
+
+/**
+ * O texto visível da página inteira: nenhum fornecedor de IA pode aparecer. Com `howToEnable` (abas sem IA) os dois nomes do aviso
+ * de "como ligar a IA" são tirados do texto antes da conferência: qualquer outro nome de fornecedor segue proibido.
+ */
+async function expectNoVendor(page: Page, where: string, opts: { howToEnable?: boolean } = {}): Promise<void> {
+  const raw = await page.evaluate(() => document.body.innerText)
+  const text = opts.howToEnable ? raw.replace(HOW_TO_ENABLE_NAMES, '') : raw
   expect(text, `a interface nomeou o fornecedor da IA (${where})`).not.toMatch(VENDOR)
+}
+
+/** O aviso nomeia os dois caminhos para ligar a IA: o Claude Code logado neste computador ou a chave de API da Anthropic. */
+async function expectHowToEnableAi(page: Page, testId: string): Promise<void> {
+  const note = page.getByTestId(testId)
+  await expect(note).toContainText('Claude Code')
+  await expect(note).toContainText('chave de API da Anthropic')
+  await expect(note).toContainText('Ajustes')
 }
 
 /** "Sugerir cortes" e, em seguida, "Sugerir mais cortes": os três cortes do roteiro (o terceiro vem do segundo pedido). */
@@ -448,13 +464,13 @@ test('SEM IA: a heurística sugere cortes, os capítulos saem das pausas, e a in
 
   // Cortes: o aviso, e "Sugerir cortes" cai na heurística com o motivo
   await page.getByTestId('tab-clips').click()
-  await expect(page.getByTestId('clips-ai-off')).toContainText('Ajustes')
+  await expectHowToEnableAi(page, 'clips-ai-off')
   await expect(page.getByTestId('clips-ai-off')).toContainText('desligada')
   await page.getByTestId('clips-suggest').click()
   await expect(page.getByTestId('clip-card').first()).toBeVisible()
   await expect(page.getByTestId('clips-last')).toHaveAttribute('data-source', 'heuristic')
   await expect(page.getByTestId('clips-notice')).toContainText('Sem IA')
-  await expect(page.getByTestId('clips-notice')).toContainText('Ajustes')
+  await expectHowToEnableAi(page, 'clips-notice')
   const n = await page.getByTestId('clip-card').count()
   expect(n).toBeGreaterThanOrEqual(1)
   for (let k = 0; k < n; k++) {
@@ -463,10 +479,11 @@ test('SEM IA: a heurística sugere cortes, os capítulos saem das pausas, e a in
     expect(secs).toBeLessThanOrEqual(65)
   }
   await shot(page, 'cortes-07-sem-ia')
+  await expectNoVendor(page, 'aba Cortes sem IA', { howToEnable: true })
 
   // Publicar: gerar com IA está desligado e explica; capítulos pelas pausas funcionam
   await page.getByTestId('tab-publish').click()
-  await expect(page.getByTestId('publish-ai-off')).toContainText('Ajustes')
+  await expectHowToEnableAi(page, 'publish-ai-off')
   await expect(page.getByTestId('publish-generate')).toBeDisabled()
   await page.getByTestId('publish-chapters-pauses').click()
   await expect(page.getByTestId('publish-chapter').first()).toBeVisible()
@@ -478,11 +495,11 @@ test('SEM IA: a heurística sugere cortes, os capítulos saem das pausas, e a in
   // IA: indisponível, com o motivo e como ligar (e um botão para conferir de novo)
   await page.getByTestId('tab-ai').click()
   await expect(page.getByTestId('ai-panel')).toHaveAttribute('data-state', 'unavailable')
-  await expect(page.getByTestId('ai-panel')).toContainText('Ajustes')
+  await expectHowToEnableAi(page, 'ai-panel')
   await expect(page.getByTestId('ai-unavailable-why')).toContainText('desligada')
   await expect(page.getByTestId('ai-recheck')).toBeVisible()
   await expect(page.getByTestId('ai-input')).toHaveCount(0)
-  await expectNoVendor(page, 'abas sem IA')
+  await expectNoVendor(page, 'abas sem IA', { howToEnable: true })
 })
 
 test('sem transcrição: Cortes, Publicar e IA explicam e levam à aba Texto', async () => {
