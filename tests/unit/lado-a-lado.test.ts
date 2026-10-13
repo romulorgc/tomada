@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildFaceFramer, type FaceTrack } from '@shared/face'
+import { BUBBLE_TARGET, SIDE_FACE_MIN_FRAME_H, buildFaceFramer, cameraCropRect, sideBySideTarget, type CropTarget, type FaceTrack } from '@shared/face'
 import { createProject, defaultStyle } from '@shared/project'
 import { HORIZONTAL_1080, deriveProject, evaluateScene, layoutGeometry, prepareEvents, type FormatSpec } from '@shared/scene'
 import { SIDE_GAP, SIDE_WIDTH, resolveSideBySide } from '@shared/styles'
@@ -15,15 +15,35 @@ const inside = (r: Rect, w = 1920, h = 1080): boolean => r.x >= 0 && r.y >= 0 &&
 const PAD = Math.round(style.padding * 1080)
 
 describe('lado a lado: o quadro da câmera ao lado da tela (estilo Tella)', () => {
-  it('padrão: à direita, em pé (3:4), 27% do quadro, praticamente da altura da tela', () => {
+  it('padrão: à direita, em pé (3:4), 24% do quadro, centrado na altura da tela', () => {
     const g = geo()
     const s = g.screen!
     const c = g.camera!.rect
     expect(c.x).toBeGreaterThanOrEqual(s.x + s.w)
     expect(c.w / c.h).toBeCloseTo(0.75, 2)
     expect(c.w / 1920).toBeCloseTo(SIDE_WIDTH.default, 2)
-    expect(Math.abs(c.h - s.h)).toBeLessThanOrEqual(3)
+    expect(Math.abs(c.y + c.h / 2 - (s.y + s.h / 2))).toBeLessThanOrEqual(2)
     expect(inside(s) && inside(c)).toBe(true)
+  })
+
+  it('a página gravada do navegador (1920×912, 2,1:1) fica ~4,6% maior e com a MESMA altura do cartão da câmera; a margem e o espaço entre os dois são os de sempre', () => {
+    const wide = { w: 1920, h: 912 }
+    const at = (width?: number) => layoutGeometry('side-by-side', { ...style, ...(width !== undefined ? { sideBySide: { width } } : {}) }, F, { screen: wide, camera: CAMERA })
+    const now = at()
+    const before = at(0.27) // o padrão de antes do F3
+    const s = now.screen!
+    const c = now.camera!.rect
+    expect(before.screen!.w).toBe(1233)
+    expect(s.w).toBeGreaterThanOrEqual(Math.round(before.screen!.w * 1.045)) // 1290 contra 1233 px
+    expect(s.w / 1920).toBeGreaterThan(0.66) // as referências: tela em 60–69% da largura
+    expect(s.h).toBeGreaterThan(before.screen!.h)
+    expect(Math.abs(c.h - s.h)).toBeLessThanOrEqual(3) // cartão e página alinhados em cima e embaixo
+    expect(Math.abs(c.y - s.y)).toBeLessThanOrEqual(3)
+    // a margem e o espaço entre os dois não mudaram
+    expect(c.x + c.w).toBeCloseTo(1920 - PAD, -1)
+    expect(c.x - (s.x + s.w)).toBeCloseTo(39, 0)
+    expect(s.x).toBeCloseTo(PAD, -1)
+    expect(c.w / 1920).toBeGreaterThanOrEqual(0.23) // dentro das referências (câmera em 23–29%)
   })
 
   it('à esquerda: a câmera vem antes da tela, e a margem do quadro é a mesma dos dois lados', () => {
@@ -46,9 +66,9 @@ describe('lado a lado: o quadro da câmera ao lado da tela (estilo Tella)', () =
     expect(c.h).toBeLessThan(s.h) // quadrado é mais baixo que a tela
   })
 
-  it('largura 25%–45% do quadro; fora da faixa é preso; a câmera nunca passa da altura útil', () => {
-    const minW = geo({ width: 0.25, ratio: 'square' }).camera!.rect.w
-    expect(minW / 1920).toBeCloseTo(0.25, 2)
+  it('largura 20%–45% do quadro; fora da faixa é preso; a câmera nunca passa da altura útil', () => {
+    const minW = geo({ width: SIDE_WIDTH.min, ratio: 'square' }).camera!.rect.w
+    expect(minW / 1920).toBeCloseTo(0.2, 2)
     expect(geo({ width: 0.05, ratio: 'square' }).camera!.rect.w).toBe(minW)
     const maxSquare = geo({ width: 0.45, ratio: 'square' }).camera!.rect
     expect(maxSquare.w / 1920).toBeCloseTo(SIDE_WIDTH.max, 2)
@@ -89,6 +109,12 @@ describe('lado a lado: o quadro da câmera ao lado da tela (estilo Tella)', () =
         }
       }
     }
+  })
+
+  it('a faixa e o padrão vêm das referências lado a lado: câmera em 23–29% do quadro, padrão 24%', () => {
+    expect(SIDE_WIDTH).toEqual({ min: 0.2, max: 0.45, default: 0.24 })
+    expect(SIDE_WIDTH.default).toBeGreaterThanOrEqual(0.23)
+    expect(SIDE_WIDTH.default).toBeLessThanOrEqual(0.29)
   })
 
   it('valores inválidos viram o padrão', () => {
@@ -152,5 +178,71 @@ describe('lado a lado na cena: cantos e sombra coerentes, enquadramento do rosto
     const src = evaluateScene(p, deriveProject(p, data, F, null, face(0.8)), 5000, F).camera!.src
     expect(src.x + src.w / 2).toBeGreaterThan(0.6)
     expect(buildFaceFramer(face(0.8), 0, 20_000)).not.toBeNull()
+  })
+})
+
+describe('lado a lado: o cartão estreita, o rosto não encolhe (F3)', () => {
+  /** A altura do rosto na imagem final como fração da altura do quadro, com o recorte que o cartão pede. */
+  function faceFraction(faceH: number, faceW: number, card: { w: number; h: number }, target: CropTarget): number {
+    const cam = { w: 1920, h: 1080 }
+    const aim = { cx: 0.5, cy: 0.45, faceW, faceH }
+    const crop = cameraCropRect(cam, card.w / card.h, aim, undefined, target)
+    return (faceH * card.h) / crop.h / 1080
+  }
+  const legacy = geo({ width: 0.27 }).camera!.rect // o cartão de antes do F3 (27%)
+  const now = geo().camera!.rect // o de agora (24%)
+
+  it('o alvo nunca é menor que o de sempre e cresce quando o cartão é mais baixo; o rosto nunca passa de 62% do cartão', () => {
+    expect(sideBySideTarget(1080, legacy.h).targetH).toBeGreaterThanOrEqual(BUBBLE_TARGET.targetH)
+    expect(sideBySideTarget(1080, now.h).targetH).toBeGreaterThan(sideBySideTarget(1080, legacy.h).targetH)
+    expect(sideBySideTarget(1080, 300).targetH).toBeLessThanOrEqual(0.62)
+    expect(sideBySideTarget(1080, 0).targetH).toBe(BUBBLE_TARGET.targetH)
+    expect(sideBySideTarget(1080, now.h).maxZoom).toBe(BUBBLE_TARGET.maxZoom)
+  })
+
+  it('com o cartão de 24% o rosto nunca fica abaixo do piso das referências nem abaixo do que era no de 27% quando já era menor que o piso (rostos de 30% a 55% da altura da câmera; a gravação real tem 48%)', () => {
+    for (const faceH of [0.3, 0.35, 0.4, 0.45, 0.48, 0.55]) {
+      const faceW = faceH * 0.43 // a proporção da caixa do detector nas gravações do usuário (20,6% × 48,1%)
+      const before = faceFraction(faceH, faceW, legacy, BUBBLE_TARGET)
+      const after = faceFraction(faceH, faceW, now, sideBySideTarget(1080, now.h))
+      // quem já tinha o rosto acima do piso (>30,5% do quadro) pode perder um pouco até o piso; quem tinha abaixo não perde nada
+      expect(after, `rosto de ${faceH}`).toBeGreaterThanOrEqual(Math.min(before, SIDE_FACE_MIN_FRAME_H) - 0.004)
+    }
+  })
+
+  it('o rosto fica em pelo menos 30,5% da altura do quadro (o quartil inferior das referências) sempre que a câmera deixa aproximar', () => {
+    for (const faceH of [0.35, 0.4, 0.45, 0.48]) {
+      const after = faceFraction(faceH, faceH * 0.43, now, sideBySideTarget(1080, now.h))
+      expect(after, `rosto de ${faceH}`).toBeGreaterThanOrEqual(SIDE_FACE_MIN_FRAME_H - 0.006)
+    }
+  })
+
+  it('na cena: a câmera do lado a lado usa o alvo novo e a bolha segue com o de sempre', () => {
+    const p = createProject({
+      title: 't',
+      sources: {
+        screen: { path: 'media/screen.mp4', w: 1920, h: 912, fps: 30, durationMs: 20_000 },
+        camera: { path: 'media/camera.mp4', w: 1920, h: 1080, fps: 30, durationMs: 20_000 }
+      }
+    })
+    const track: FaceTrack = {
+      version: 1,
+      engine: 'teste',
+      frame: { w: 1920, h: 1080 },
+      sampleMs: 200,
+      durationMs: 20_000,
+      boxes: Array.from({ length: 101 }, (_, i) => ({ t: i * 200, x: 0.5 - 0.103, y: 0.45 - 0.2403, w: 0.206, h: 0.4806, score: 0.9 })),
+      createdAt: ''
+    }
+    const data = prepareEvents({ cursor: [], clicks: [], keys: [] }, 20_000)
+    const srcOf = (layout: 'side-by-side' | 'bubble'): Rect => {
+      const q = { ...p, style: { ...p.style, defaultLayout: layout, camera: { ...p.style.camera, punchIn: false } } }
+      return evaluateScene(q, deriveProject(q, data, F, null, track), 5000, F).camera!.src
+    }
+    const side = srcOf('side-by-side')
+    // o cartão de 24% pede o rosto em 0,305 do quadro: o recorte fecha ~1,1× (sem isso o rosto cairia para ~27% do quadro)
+    expect(side.h).toBeLessThan(0.93)
+    expect(side.h).toBeGreaterThan(0.8)
+    expect(srcOf('bubble').h).toBeGreaterThanOrEqual(side.h - 1e-9)
   })
 })

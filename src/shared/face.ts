@@ -115,6 +115,23 @@ export type CropTarget = { targetH: number; headroomY: number; maxZoom: number }
 export const BUBBLE_TARGET: CropTarget = { targetH: FACE_TARGET_H, headroomY: FACE_HEADROOM_Y, maxZoom: FACE_MAX_AUTO_ZOOM }
 /** Apresentador recortado (M4c): a pessoa do peito para cima, a cabeça logo abaixo do topo da janela e o corpo até a borda de baixo. */
 export const PRESENTER_TARGET: CropTarget = { targetH: 0.27, headroomY: 0.34, maxZoom: 2.2 }
+/**
+ * O MENOR rosto do lado a lado, como fração da altura do QUADRO (a caixa do detector YuNet, o mesmo do app): o quartil inferior das
+ * referências lado a lado medidas em 12/10 (Tella: George Efremidze 36-41%, Willem Wijnans 28-32%, 18 quadros, mediana 33,6%, p25 30,5%).
+ * As gravações do usuário (cartão de 27%) tinham 31-37%. O cartão pode estreitar para dar mais página, mas o rosto não passa abaixo disto.
+ */
+export const SIDE_FACE_MIN_FRAME_H = 0.305
+/** O rosto nunca passa desta fração da altura do cartão (as referências chegam a 56%: um busto, não um 3×4). */
+export const SIDE_FACE_MAX_CARD_H = 0.62
+/**
+ * O alvo do enquadramento no cartão do lado a lado: o rosto na altura de `max(0,40 do cartão, SIDE_FACE_MIN_FRAME_H do quadro)`. Cartão
+ * estreito ⇒ o recorte fecha mais no rosto (a aproximação vai até `FACE_MAX_AUTO_ZOOM`), em vez de o rosto encolher junto com o cartão.
+ * Nunca é MENOR que o alvo de sempre (0,40): quem já tinha o rosto maior continua com ele.
+ */
+export function sideBySideTarget(frameH: number, cardH: number): CropTarget {
+  const need = cardH > 0 ? (SIDE_FACE_MIN_FRAME_H * frameH) / cardH : BUBBLE_TARGET.targetH
+  return { ...BUBBLE_TARGET, targetH: Math.min(SIDE_FACE_MAX_CARD_H, Math.max(BUBBLE_TARGET.targetH, need)) }
+}
 export const lerpTarget = (a: CropTarget, b: CropTarget, u: number): CropTarget => ({
   targetH: a.targetH + (b.targetH - a.targetH) * u,
   headroomY: a.headroomY + (b.headroomY - a.headroomY) * u,

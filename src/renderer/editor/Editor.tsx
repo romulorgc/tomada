@@ -18,6 +18,7 @@ import type { PeaksData, ProjectDetail, ThumbsData } from '@shared/ipc'
 import { assertMediaUrl, mediaUrl } from '@shared/media-url'
 import { HORIZONTAL_1080, VERTICAL_1080, applyScreenCrop, deriveProject, prepareEvents, usesPresenter, type CursorData } from '@shared/scene'
 import type { Transcript } from '@shared/types'
+import { keptRanges } from '@shared/timeline'
 import { projectForFormat, ensureVertical } from '@shared/vertical'
 import { DEFAULT_ZOOM_PRESET, generateAutoZooms } from '@shared/zoom'
 import { t } from '../i18n/pt-BR'
@@ -395,16 +396,17 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
   }, [format, cursorData, transcript.status, words, durationMs, store, detail.events.cursor, matteUrl])
 
   // Ao abrir um projeto que nunca teve zoom automático, gera os do preset padrão (uma vez; não entra no "desfazer").
+  // Espera a transcrição chegar: o zoom do 16:9 começa e termina em limites da fala (`zoom-speech.ts`) e conta o tempo depois dos cortes.
   const generated = useRef(false)
   useEffect(() => {
-    if (!cursorData || generated.current) return
+    if (!cursorData || generated.current || transcript.status === 'loading') return
     generated.current = true
     const p = store.getState().doc
     if (p.zoomPreset === undefined && p.zooms.length === 0 && detail.events.cursor) {
-      const auto = generateAutoZooms({ clicks: cursorData.clicks, keys: cursorData.keys, cursor: cursorData.grid, duration: durationMs, preset: DEFAULT_ZOOM_PRESET })
+      const auto = generateAutoZooms({ clicks: cursorData.clicks, keys: cursorData.keys, cursor: cursorData.grid, duration: durationMs, preset: DEFAULT_ZOOM_PRESET, words, kept: keptRanges(durationMs, p.cuts) })
       store.getState().change((doc) => regenerateZooms(doc, DEFAULT_ZOOM_PRESET, auto), { history: false })
     }
-  }, [cursorData, store, durationMs, detail.events.cursor])
+  }, [cursorData, store, durationMs, detail.events.cursor, transcript.status, words])
 
   // --- motor da prévia ------------------------------------------------------------------------------------
   const screenUrl = detail.media.screen?.url ?? null
@@ -425,6 +427,7 @@ export function Editor({ detail,itemId }: { detail: ProjectDetail; itemId?: stri
         playback.setState({ audioError: message })
         if (message) window.tomada.log({ level: 'warn', message: 'Áudio da prévia', detail: message })
       },
+      onAudioNote: (message) => window.tomada.log({ level: 'info', message: 'Áudio da prévia', detail: message }),
       onFontsError: (message) => {
         window.tomada.log({ level: 'error', message: 'Falha ao carregar as fontes das legendas', detail: message })
         notify({ kind: 'error', text: t.editor.captions.fontsFailed, detail: message })

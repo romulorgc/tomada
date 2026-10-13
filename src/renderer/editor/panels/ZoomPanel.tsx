@@ -4,6 +4,7 @@
  */
 import { useState } from 'react'
 import { formatSpan, formatTimecode } from '@shared/format'
+import { keptRanges } from '@shared/timeline'
 import { regenerateZooms, setZoomFocus, setZoomScale, zoomCounts, ZOOM_SCALE_MAX, ZOOM_SCALE_MIN } from '@shared/edits'
 import { DEFAULT_VERTICAL_ZOOM_PRESET, DEFAULT_ZOOM_PRESET, generateAutoZooms, zoomPresetFor } from '@shared/zoom'
 import type { Project, ZoomPresetId } from '@shared/types'
@@ -18,7 +19,7 @@ type Choice = ZoomPresetId | 'off'
 const CHOICES: Choice[] = ['off', 'subtle', 'moderate', 'intense']
 
 export function ZoomPanel() {
-  const { store, cursorData, durationMs, eventsError, detail } = useEditor()
+  const { store, cursorData, durationMs, eventsError, detail, transcript } = useEditor()
   const ops = useEditorOps()
   const zooms = useDoc((s) => s.project.zooms)
   const preset = useDoc((s) => s.project.zoomPreset)
@@ -34,8 +35,10 @@ export function ZoomPanel() {
   const generate = (p: Choice): void => {
     if (!cursorData) return
     // no vertical os tempos são os do preset e a escala e o teto por minuto são os de vertical (1,2-1,5×): o recorte já parte de ~1,78×
-    const auto = p === 'off' ? [] : generateAutoZooms({ clicks: cursorData.clicks, keys: cursorData.keys, cursor: cursorData.grid, duration: durationMs, preset: zoomPresetFor(format, p) })
-    store.getState().change((doc) => regenerateZooms(doc, p, auto))
+    // 16:9: o zoom começa e termina em limites da fala e o platô conta o tempo depois dos cortes (o vertical ignora as duas coisas)
+    const doc = store.getState().doc
+    const auto = p === 'off' ? [] : generateAutoZooms({ clicks: cursorData.clicks, keys: cursorData.keys, cursor: cursorData.grid, duration: durationMs, preset: zoomPresetFor(format, p), words: transcript.data?.words ?? null, kept: keptRanges(durationMs, doc.cuts) })
+    store.getState().change((d) => regenerateZooms(d, p, auto))
     setConfirming(false)
   }
 

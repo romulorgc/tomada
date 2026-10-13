@@ -388,8 +388,8 @@ export const ptBR = {
       presets: { off: 'Desligado', subtle: 'Sutil', moderate: 'Moderado', intense: 'Intenso' },
       presetHelp: {
         off: 'Sem zoom nos cliques.',
-        subtle: 'Aproxima pouco (1,3×) e raramente: até 3 por minuto.',
-        moderate: 'Como nos vídeos publicados (1,5×, até 5 por minuto, um movimento de 1 s).',
+        subtle: 'Aproxima pouco (1,5×) e raramente: até 3 por minuto.',
+        moderate: 'Como nos vídeos publicados (1,6×, até 5 por minuto): abre e fecha em 0,9 s junto com a frase, e segura pelo menos 4 s.',
         intense: 'Aproxima mais (1,8×) e com mais frequência, bom para telas pequenas: até 8 por minuto.'
       },
       presetHelpVertical: {

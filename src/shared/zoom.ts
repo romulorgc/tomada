@@ -8,7 +8,8 @@
  */
 import { GRID_HZ, GRID_STEP_MS, sampleGrid, type CursorGrid } from './cursor'
 import { CAMERA_SPRING, step as springStep, type SpringParams } from './spring'
-import type { ClickEvent, KeyEvent, Project, Rect, Zoom, ZoomPresetId } from './types'
+import type { ClickEvent, KeyEvent, Project, Range, Rect, Word, Zoom, ZoomPresetId } from './types'
+import { HORIZONTAL_SHAPING, ZOOM_SCALE_RANGE, shapeZoomWindows, type ZoomShaping } from './zoom-speech'
 
 // ---------------------------------------------------------------------------
 // Presets (projeto; a tabela está em segundos, aqui em ms)
@@ -25,10 +26,13 @@ export type ZoomPreset = {
   minGap: number
   /** Teto de zooms por minuto: em qualquer janela de 60 s não começam mais que isto (ficam os de mais peso). */
   maxPerMin: number
+  /** A forma do zoom (começo e fim na fala, platô, separação). Só o 16:9 tem; sem isto a janela fica como nasceu do clique. */
+  shaping?: ZoomShaping
 }
 
 /**
- * Presets do 16:9, recalibrados pelos vídeos reais medidos (estudo E1, 05/10/2026: escala 1,5× [1,2-1,8], movimento 1,0 s,
+ * Os tempos-base dos presets e a escala do 16:9 ANTES do F3. O 16:9 agora lê `HORIZONTAL_ZOOM_PRESETS` (logo abaixo); esta tabela é a
+ * base dos tempos do VERTICAL (`zoomPresetFor('vertical', …)`), que não mudou. Original: presets do 16:9, recalibrados pelos vídeos reais medidos (estudo E1, 05/10/2026: escala 1,5× [1,2-1,8], movimento 1,0 s,
  * mediana de 2 zooms por minuto e p75 de 5; zoom por clique em demonstração de tela passa disso). O Moderado (padrão) é o
  * centro da faixa medida; o Sutil fica abaixo dele e o Intenso no alto da faixa. O movimento de 1,0 s é o da mola da escala
  * (`ZOOM_SCALE_SPRING`), por isso o `lead` é maior que o de antes: o zoom precisa de ~1 s para chegar.
@@ -37,6 +41,19 @@ export const ZOOM_PRESETS: Record<ZoomPresetId, ZoomPreset> = {
   subtle: { lead: 800, hold: 2000, mergeGap: 6000, scale: 1.3, minGap: 8000, maxPerMin: 3 },
   moderate: { lead: 600, hold: 1500, mergeGap: 6000, scale: 1.5, minGap: 6000, maxPerMin: 5 },
   intense: { lead: 500, hold: 1200, mergeGap: 3500, scale: 1.8, minGap: 3500, maxPerMin: 8 }
+}
+
+/**
+ * Os presets do 16:9 DEPOIS da calibração do F3 (estudo 12/10, seção 2.2: Screen Studio 1,73× [1,41-2,00], rampa 0,89 s, platô 4,0 s;
+ * E1: 1,5× [1,2-1,8]). Escala dentro de 1,5-1,8×, o zoom abre 0,5 s antes do clique (a rampa de 0,9 s em ease-out já está em ~91%
+ * quando ele acontece) e segura 1,5 s depois; o resto da forma (platô de 4 s, começo e fim na fala, 1,5 s de tela larga entre dois
+ * zooms) é do `shaping`. Os tempos de fusão e o teto por minuto são os de sempre. O vertical NÃO lê esta tabela: ele parte de
+ * `ZOOM_PRESETS` (ver `zoomPresetFor`).
+ */
+export const HORIZONTAL_ZOOM_PRESETS: Record<ZoomPresetId, ZoomPreset> = {
+  subtle: { lead: 500, hold: 1500, mergeGap: 6000, scale: ZOOM_SCALE_RANGE.min, minGap: 8000, maxPerMin: 3, shaping: HORIZONTAL_SHAPING },
+  moderate: { lead: 500, hold: 1500, mergeGap: 6000, scale: 1.6, minGap: 6000, maxPerMin: 5, shaping: HORIZONTAL_SHAPING },
+  intense: { lead: 500, hold: 1500, mergeGap: 3500, scale: ZOOM_SCALE_RANGE.max, minGap: 3500, maxPerMin: 8, shaping: HORIZONTAL_SHAPING }
 }
 
 /** Padrão do horizontal 16:9. */
@@ -57,8 +74,7 @@ export const VERTICAL_ZOOM_MAX_PER_MIN: Record<ZoomPresetId, number> = { subtle:
 
 /** O preset de um formato: no vertical, os tempos do preset com a escala e o teto de vertical. */
 export function zoomPresetFor(kind: 'horizontal' | 'vertical', id: ZoomPresetId): ZoomPreset {
-  const base = ZOOM_PRESETS[id]
-  return kind === 'vertical' ? { ...base, scale: VERTICAL_ZOOM_SCALE[id], maxPerMin: VERTICAL_ZOOM_MAX_PER_MIN[id] } : base
+  return kind === 'vertical' ? { ...ZOOM_PRESETS[id], scale: VERTICAL_ZOOM_SCALE[id], maxPerMin: VERTICAL_ZOOM_MAX_PER_MIN[id] } : HORIZONTAL_ZOOM_PRESETS[id]
 }
 
 /** Rajada de digitação: pelo menos 3 teclas com intervalos menores que isto. */
@@ -92,7 +108,12 @@ export type AutoZoomInput = {
   cursor: CursorGrid
   /** Duração da gravação (ms). */
   duration: number
+  /** Um id de preset vale para o 16:9 (`HORIZONTAL_ZOOM_PRESETS`); o vertical passa `zoomPresetFor('vertical', id)`. */
   preset: ZoomPresetId | ZoomPreset
+  /** As palavras da transcrição: com elas o zoom do 16:9 começa e termina em limites da fala (`zoom-speech.ts`). */
+  words?: readonly Word[] | null
+  /** Os trechos mantidos depois dos cortes: o zoom não começa nem termina num corte e o platô conta o tempo de saída. */
+  kept?: readonly Range[] | null
 }
 
 type Win = {
@@ -184,7 +205,7 @@ function mergeWindows(wins: Win[], gap: number): Win[] {
  * Rolagem não abre zoom (a gravação nem registra a roda do mouse).
  */
 export function generateAutoZooms(input: AutoZoomInput): Zoom[] {
-  const preset = typeof input.preset === 'string' ? ZOOM_PRESETS[input.preset] : input.preset
+  const preset = typeof input.preset === 'string' ? HORIZONTAL_ZOOM_PRESETS[input.preset] : input.preset
   const { duration } = input
   if (!(duration > 0)) return []
 
@@ -225,15 +246,18 @@ export function generateAutoZooms(input: AutoZoomInput): Zoom[] {
     const end = Math.min(duration, w.end)
     if (end - start >= MIN_ZOOM_MS) fitted.push({ ...w, start, end })
   }
+  // a forma do zoom do 16:9: começo e fim na fala, platô de 4 s, 1,5 s de tela larga entre dois zooms (só os presets do 16:9 têm)
+  const shaped = preset.shaping ? shapeZoomWindows(fitted, preset.shaping, { words: input.words ?? null, kept: input.kept ?? null, durationMs: duration }) : fitted
   const zooms: Zoom[] = []
-  for (const w of limitPerMinute(fitted, preset.maxPerMin)) {
+  for (const w of limitPerMinute(shaped, preset.maxPerMin)) {
     const start = w.start
     const end = w.end
     zooms.push({
       id: `zoom-auto-${zooms.length + 1}`,
-      start: Math.round(start),
-      end: Math.round(end),
-      scale: preset.scale,
+      // no 16:9 os limites são os da fala: arredondar PARA FORA (o início para baixo, o fim para cima) nunca empurra um deles para dentro de uma palavra
+      start: preset.shaping ? Math.floor(start) : Math.round(start),
+      end: preset.shaping ? Math.ceil(end) : Math.round(end),
+      scale: preset.shaping ? Math.min(ZOOM_SCALE_RANGE.max, Math.max(ZOOM_SCALE_RANGE.min, preset.scale)) : preset.scale,
       focus: w.focus,
       origin: 'auto'
     })
@@ -307,8 +331,14 @@ export type CameraPathOptions = {
   sourceAspect?: number
   /** A mola do CENTRO do foco (e da escala, se `scaleSpring` faltar). */
   spring?: SpringParams
-  /** A mola da ESCALA: dá o tempo do movimento do zoom (1,0 s no 16:9, 0,6 s no vertical). Padrão: a mesma do centro. */
+  /** A mola da ESCALA: dá o tempo do movimento do zoom (0,6 s no vertical). Padrão: a mesma do centro. */
   scaleSpring?: SpringParams
+  /**
+   * A ESCALA como rampa de `ms` em EASE-OUT cúbica (rápida no começo, pousa devagar) no lugar da mola: é a curva medida no Screen Studio
+   * (0,89 s, 25 de 28 zoom-ins; RMSE 0,05 contra 0,26 da linear). A mola da escala é quase linear no começo (8% em 0,1 s contra 30% do
+   * ease-out). Vale no 16:9; o vertical segue com `scaleSpring`. O centro do foco continua na mola.
+   */
+  scaleRamp?: { ms: number }
   lookaheadMs?: number
   /**
    * O foco da ação (`action-focus.ts`): quando existe, o centro do recorte NÃO segue o cursor, vai para onde a ação está (e os zooms
@@ -318,6 +348,12 @@ export type CameraPathOptions = {
 }
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v)
+
+/** Ease-out cúbica: 0 → 1 com a maior velocidade no começo (0 fora de [0, 1] vira 0 ou 1). */
+export function easeOutCubic(u: number): number {
+  const c = u < 0 ? 0 : u > 1 ? 1 : u
+  return 1 - (1 - c) * (1 - c) * (1 - c)
+}
 
 /**
  * O caminho da câmera a 60 Hz para a duração inteira. Determinístico: depende só dos zooms,
@@ -338,6 +374,7 @@ export function computeCameraPath(
 ): CameraPath {
   const spring = opts.spring ?? CAMERA_SPRING
   const scaleSpring = opts.scaleSpring ?? spring
+  const ramp = opts.scaleRamp && opts.scaleRamp.ms > 0 ? opts.scaleRamp : null
   const view = opts.view ?? { w: 1, h: 1 }
   const aspect = opts.sourceAspect && opts.sourceAspect > 0 ? opts.sourceAspect : 16 / 9
   const lookahead = opts.lookaheadMs ?? LOOKAHEAD_MS
@@ -360,6 +397,10 @@ export function computeCameraPath(
   const follows = view.w < 0.999 || view.h < 0.999
 
   let sScale = { x: 1, v: 0 }
+  // a rampa de escala (ease-out): a escala de onde saiu, para onde vai, quando começou e quanto dura. `rampRef` é o quanto o zoom
+  // vigente sobe (escala − 1): uma rampa interrompida no meio, que percorre menos que isso, leva proporcionalmente menos tempo.
+  let rampRef = Math.max(0.1, maxScale - 1)
+  let tween = { from: 1, to: 1, t0: 0, dur: 1 }
   let sCx = { x: 0.5, v: 0 }
   let sCy = { x: 0.5, v: 0 }
   let tcx = 0.5
@@ -382,6 +423,7 @@ export function computeCameraPath(
     // Sem segmento, o recorte base que segue o cursor faz de conta que há um (escala 1, foco no cursor).
     const base = active === null && follows
     const eff = base ? BASE_FOLLOW : active
+    if (eff && eff.scale > 1) rampRef = Math.max(0.1, eff.scale - 1)
 
     let targetScale = 1
     let sweeping = false
@@ -435,7 +477,13 @@ export function computeCameraPath(
       sCx = { x: tcx, v: 0 }
       sCy = { x: tcy, v: 0 }
     } else if (i > 0) {
-      sScale = springStep(sScale.x, sScale.v, targetScale, scaleSpring, dt)
+      if (ramp) {
+        if (Math.abs(targetScale - tween.to) > 1e-9) {
+          // alvo novo: a rampa parte de onde a escala está agora; um trecho curto do caminho (zoom interrompido) leva proporcionalmente menos
+          tween = { from: sScale.x, to: targetScale, t0: tMs, dur: ramp.ms * clamp(Math.abs(targetScale - sScale.x) / rampRef, 0.4, 1) }
+        }
+        sScale = { x: tween.from + (tween.to - tween.from) * easeOutCubic((tMs - tween.t0) / tween.dur), v: 0 }
+      } else sScale = springStep(sScale.x, sScale.v, targetScale, scaleSpring, dt)
       sCx = springStep(sCx.x, sCx.v, tcx, spring, dt)
       sCy = springStep(sCy.x, sCy.v, tcy, spring, dt)
     }

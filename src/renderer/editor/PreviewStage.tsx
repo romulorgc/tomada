@@ -66,7 +66,7 @@ function SafeGuide() {
 }
 
 export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefObject<HTMLCanvasElement | null>; hostRef: RefObject<HTMLDivElement | null>; frameRef: RefObject<HTMLDivElement | null> }) {
-  const { store, engineRef, detail, clips, rawData, durationMs } = useEditor()
+  const { store, engineRef, detail, clips, rawData, durationMs, transcript } = useEditor()
   const screenCrop = useDoc((s) => s.doc.screenCrop)
   const cropEditing = useDoc((s) => s.cropUi.editing)
   const revealProject = useApp((s) => s.revealProject)
@@ -187,7 +187,7 @@ export function PreviewStage({ canvasRef, hostRef, frameRef }: { canvasRef: RefO
               notify({ kind: 'error', text: t.editor.crop.tooSmall(min.w, min.h) })
               return
             }
-            store.getState().changeDoc((doc) => setScreenCrop(doc, { ...(doc.screenCrop ?? { mode: 'manual' }), mode: 'manual', manual }, rawData, durationMs))
+            store.getState().changeDoc((doc) => setScreenCrop(doc, { ...(doc.screenCrop ?? { mode: 'manual' }), mode: 'manual', manual }, rawData, durationMs, transcript.data?.words ?? null))
           }}
         />
       ) : null}
