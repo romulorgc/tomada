@@ -2831,3 +2831,114 @@ select.text-field {
 /* A troca de seleção é imediata: interpolar texto e fundo reduz o contraste no meio da transição. */
 :is(.ibtn, .ratio button, .segc button, .layout-card, .cap-card, .corner-grid button,
   .preset-card, .btn[aria-pressed]) { transition-property: border-color, box-shadow, transform; }
+
+/* ---------------------------------------------------------------------------
+ * Embaixo da prévia: aviso do recorte do fundo e troca rápida de layout (F2)
+ */
+.ed-view {
+  padding-bottom: 4.1rem;
+}
+/* com câmera, o espaço do aviso do recorte fica reservado desde o início: a prévia não muda de tamanho quando o aviso aparece e some */
+.ed-view[data-dock='camera'] {
+  padding-bottom: 6.5rem;
+}
+.preview-dock {
+  position: absolute;
+  right: 0;
+  bottom: 0.45rem;
+  left: 0;
+  z-index: 3;
+  display: grid;
+  justify-items: center;
+  gap: 0.4rem;
+  padding: 0 0.75rem;
+  pointer-events: none;
+}
+.preview-dock > * {
+  pointer-events: auto;
+}
+.layout-quick {
+  display: flex;
+  gap: 0.3rem;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.25rem;
+  border-radius: 0.6rem;
+  background: rgb(14 13 12 / 0.88);
+  box-shadow: 0 0 0 1px var(--color-line);
+}
+.lq-btn {
+  display: grid;
+  flex: none;
+  justify-items: center;
+  gap: 0.15rem;
+  min-width: 4.4rem;
+  padding: 0.3rem 0.4rem 0.25rem;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+.lq-btn > span {
+  font-size: 0.625rem;
+  font-weight: 560;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.lq-btn:hover:not(:disabled):not([aria-pressed='true']) {
+  border-color: var(--color-line-strong);
+  color: var(--color-ink);
+}
+.lq-btn[aria-pressed='true'] {
+  border-color: var(--color-rec);
+  background: var(--color-rec);
+  color: var(--color-rec-ink);
+}
+.lq-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.matte-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem 0.7rem;
+  max-width: min(36rem, 100%);
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  background: rgb(14 13 12 / 0.92);
+  box-shadow: 0 0 0 1px var(--color-layout);
+  color: var(--color-ink);
+  font-size: 0.75rem;
+}
+.matte-notice[data-state='error'] {
+  box-shadow: 0 0 0 1px var(--color-danger);
+}
+.matte-notice[data-state='needs-engine'],
+.matte-notice[data-state='cancelled'] {
+  box-shadow: 0 0 0 1px var(--color-warn);
+}
+.matte-notice .mn-sub {
+  color: var(--color-faint);
+}
+.matte-notice .mn-meter {
+  position: relative;
+  flex: 1 1 6rem;
+  height: 0.3rem;
+  min-width: 6rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-raised);
+}
+.matte-notice .mn-meter > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--color-layout);
+}
+.matte-notice .btn {
+  min-height: 1.5rem;
+  padding: 0 0.6rem;
+  font-size: 0.6875rem;
+}

@@ -2,52 +2,41 @@
  * Aba LAYOUT: o layout padrão do vídeo e o do trecho selecionado na trilha Layout. No vertical (9:16) os layouts são
  * outros (Cursor, Câmera + tela, Tela na largura, Só a câmera), a escolha automática por atividade e o título de gancho.
  */
-import { useState, type ReactNode } from 'react'
+import { useMemo, useState } from 'react'
 import { formatSpan, formatTimecode } from '@shared/format'
 import { setLayoutOfSeg } from '@shared/edits'
+import { legibilitySummary } from '@shared/legible'
+import { projectLegibility } from '@shared/scene'
 import type { LayoutKind } from '@shared/types'
 import { keptRanges } from '@shared/timeline'
 import { autoVerticalLayouts, speechRanges } from '@shared/vertical'
-import {
-  LayoutBubbleIcon,
-  LayoutCameraIcon,
-  LayoutFocusIcon,
-  LayoutPresenterIcon,
-  LayoutPresenterVerticalIcon,
-  LayoutScreenIcon,
-  LayoutSideIcon,
-  LayoutStackIcon,
-  LayoutWideIcon
-} from '../../components/Icons'
 import { t } from '../../i18n/pt-BR'
 import { useApp } from '../../store'
 import { Hint, Section, Toggle } from '../controls'
 import { useDoc, useEditor } from '../context'
+import { layoutHint, layoutIcon, layoutLabel, layoutUnavailable, kindsOf, KINDS } from '../layout-kinds'
 import { useEditorOps } from '../ops'
 
 const T = t.editor.layout
-const KINDS: LayoutKind[] = ['bubble', 'side-by-side', 'presenter', 'screen', 'camera']
-/** No vertical: V-A Cursor, V-B Câmera + tela, V-D Apresentador (recortado), V-C Tela na largura e só a câmera. */
-const VERTICAL_KINDS: LayoutKind[] = ['screen-center', 'screen-focus', 'stack', 'presenter', 'screen-wide', 'camera']
 const HOOK_MAX = 80
-const ICONS: Record<string, ReactNode> = {
-  bubble: <LayoutBubbleIcon size={26} />,
-  'side-by-side': <LayoutSideIcon size={26} />,
-  screen: <LayoutScreenIcon size={26} />,
-  camera: <LayoutCameraIcon size={26} />,
-  'screen-focus': <LayoutFocusIcon size={26} />,
-  'screen-center': <LayoutScreenIcon size={26} />,
-  stack: <LayoutStackIcon size={26} />,
-  'screen-wide': <LayoutWideIcon size={26} />,
-  presenter: <LayoutPresenterIcon size={26} />
-}
-const iconFor = (l: LayoutKind, vertical: boolean): ReactNode => (l === 'presenter' && vertical ? <LayoutPresenterVerticalIcon size={26} /> : ICONS[l])
+const iconFor = (l: LayoutKind, vertical: boolean) => layoutIcon(l, vertical, 26)
+const unavailable = layoutUnavailable
 
-/** Por que um layout não está disponível neste projeto (ou `null` se está). */
-function unavailable(l: LayoutKind, hasScreen: boolean, hasCamera: boolean): string | null {
-  if (l === 'camera') return hasCamera ? null : T.needsCamera
-  if (l === 'screen' || l === 'screen-focus' || l === 'screen-center' || l === 'screen-wide') return hasScreen ? null : T.needsScreen
-  return hasCamera && hasScreen ? null : hasCamera ? T.needsScreen : T.needsCamera
+/**
+ * O aviso de letra pequena (9:16): onde, neste layout e neste zoom, a letra do corpo da página fica abaixo de 22 px no vídeo. Nada fica
+ * calado: o usuário vê quanto e em que layout, e troca (o Green screen e o Câmera + tela chegam a 30 px).
+ */
+function LegibilityNote() {
+  const { derived } = useEditor()
+  const project = useDoc((s) => s.project)
+  const summary = useMemo(() => (derived && derived.format.kind === 'vertical' ? legibilitySummary(projectLegibility(project, derived)) : null), [project, derived])
+  if (!summary) return null
+  const where = summary.layouts.map((l) => layoutLabel(l)).join(', ')
+  return (
+    <Hint tone="warn">
+      <span data-testid="layout-legibility-warn">{T.legibility.warn(summary.minPx, where)}</span>
+    </Hint>
+  )
 }
 
 function LayoutCards({
@@ -71,7 +60,7 @@ function LayoutCards({
     <div className="layout-cards" role="group">
       {kinds.map((l) => {
         const reason = unavailable(l, hasScreen, hasCamera)
-        const hint = (T.optionHints as Record<string, string>)[l]
+        const hint = layoutHint(l)
         return (
           <button
             key={l}
@@ -84,7 +73,7 @@ function LayoutCards({
             onClick={() => onPick(l)}
           >
             {iconFor(l, vertical)}
-            <span>{T.options[l as keyof typeof T.options]}</span>
+            <span>{layoutLabel(l)}</span>
             {reason ? <small>{reason}</small> : null}
           </button>
         )
@@ -105,7 +94,7 @@ export function LayoutPanel() {
   const cameraTop = useDoc((s) => s.project.style.stackCameraTop === true)
   const cuts = useDoc((s) => s.project.cuts)
   const vertical = format === 'vertical'
-  const kinds = vertical ? VERTICAL_KINDS : KINDS
+  const kinds = kindsOf(vertical)
   const selected = selection?.kind === 'layout' ? layouts.find((l) => l.id === selection.id) : undefined
   const [confirming, setConfirming] = useState(false)
   const V = T.vertical
@@ -145,7 +134,8 @@ export function LayoutPanel() {
           vertical={vertical}
         />
         <p className="ctl-note">{vertical ? V.videoHelp : T.videoHelp}</p>
-        {(vertical || base === 'presenter') && (T.optionHints as Record<string, string>)[base] ? <p className="ctl-note">{(T.optionHints as Record<string, string>)[base]}</p> : null}
+        {(vertical || base === 'presenter') && layoutHint(base) ? <p className="ctl-note">{layoutHint(base)}</p> : null}
+        {vertical ? <LegibilityNote /> : null}
         {vertical ? (
           <Toggle
             label={V.cameraTop}

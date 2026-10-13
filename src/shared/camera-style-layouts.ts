@@ -1,11 +1,14 @@
 /**
- * O layout do vídeo INTEIRO que o estilo da câmera, escolhido antes de gravar, pede. O piloto não alterna mais por atividade da
- * tela: com o mouse sempre em movimento a alternância caía na bolinha no 16:9 e na tela cortada com a bolinha por cima do título
- * no 9:16, contra a escolha do usuário.
+ * O layout do vídeo INTEIRO que o estilo da câmera, escolhido antes de gravar, e o recorte do fundo pedem. O piloto não alterna mais
+ * por atividade da tela: com o mouse sempre em movimento a alternância caía na bolinha no 16:9 e na tela cortada com a bolinha por cima
+ * do título no 9:16, contra a escolha do usuário.
  *
- *  - "Quadro ao lado" (também o projeto antigo, sem o campo): 16:9 lado a lado (tela + quadro do rosto) e 9:16 V-B (tela em cima,
- *    rosto embaixo, nada sobre o conteúdo);
- *  - "Apresentador recortado" com o recorte do fundo pronto: 16:9 Apresentador e 9:16 V-D; sem o recorte, cai no quadro ao lado.
+ * Desde o F2 (green screen) o recorte do fundo nasce sozinho para TODA gravação com câmera, e os dois formatos se decidem à parte:
+ *  - 9:16: com o recorte pronto, V-E "Green screen no canto" (a página em tela cheia atrás e você recortado num canto de baixo, no lado oposto ao
+ *    que está sendo mostrado: "eu falando no canto", como no TikTok); o "Green screen" centrado fica à escolha no seletor. Sem o recorte, V-B (tela
+ *    em cima, rosto embaixo, nada sobre o conteúdo). O estilo escolhido ao gravar não pesa aqui: o 9:16 é o formato do green screen;
+ *  - 16:9: "Apresentador recortado" (hoje "Você sem fundo") com o recorte pronto SE foi a escolha ao gravar; senão (e no projeto antigo,
+ *    sem o campo) "Quadro ao lado".
  *
  * A bolinha só existe por escolha manual. Sem tela ou sem câmera (ou com a câmera escondida) não há o que impor: `null`.
  * Código puro: sem DOM, sem Node.
@@ -18,6 +21,6 @@ export function cameraStyleLayouts(project: Pick<Project, 'cameraStyle' | 'sourc
   const hasScreen = !!project.sources.screen
   const hasCamera = !!project.sources.camera && !project.style.camera.hidden
   if (!hasScreen || !hasCamera) return null
-  if (project.cameraStyle === 'presenter' && matteReady) return { style: 'presenter', horizontal: 'presenter', vertical: 'presenter' }
-  return { style: 'side-by-side', horizontal: 'side-by-side', vertical: 'stack' }
+  const presenter = project.cameraStyle === 'presenter' && matteReady
+  return { style: presenter ? 'presenter' : 'side-by-side', horizontal: presenter ? 'presenter' : 'side-by-side', vertical: matteReady ? 'greenscreen-corner' : 'stack' }
 }

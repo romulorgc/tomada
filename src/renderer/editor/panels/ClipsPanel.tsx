@@ -22,7 +22,7 @@ import { AiOffNote, TranscriptGate } from './gates'
 const T = t.editor.clips
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-const LAYOUTS: VerticalLayout[] = ['auto', 'screen-center', 'screen-focus', 'stack', 'presenter', 'screen-wide', 'camera']
+const LAYOUTS: VerticalLayout[] = ['auto', 'greenscreen-corner', 'greenscreen', 'screen-center', 'screen-focus', 'stack', 'presenter', 'screen-wide', 'camera']
 
 /** Troca um corte da lista do documento (os outros ficam como estão). */
 const mapClip = (doc: Project, id: string, fn: (c: Clip) => Clip): Project => ({ ...doc, clips: doc.clips.map((c) => (c.id === id ? fn(c) : c)) })

@@ -9,21 +9,26 @@ const camera = { path: 'media/camera.mp4', w: 3840, h: 2160, fps: 30, durationMs
 const project = (over: Partial<Project> = {}, sources: Project['sources'] = { screen, camera }): Project => ({ ...createProject({ title: 'Teste', sources }), ...over })
 
 describe('layout do estilo da câmera', () => {
-  it('Quadro ao lado: lado a lado no 16:9 e V-B (tela em cima, rosto embaixo) no 9:16', () => {
+  it('Quadro ao lado sem o recorte do fundo ainda: lado a lado no 16:9 e V-B (tela em cima, rosto embaixo) no 9:16', () => {
     expect(cameraStyleLayouts(project({ cameraStyle: 'side-by-side' }), false)).toEqual({ style: 'side-by-side', horizontal: 'side-by-side', vertical: 'stack' })
   })
 
-  it('projeto antigo, sem o campo do estilo, é Quadro ao lado e nunca vira bolinha', () => {
+  it('F2: com o recorte pronto o 9:16 é o V-E Green screen no canto qualquer que seja o estilo; o 16:9 segue a escolha (Quadro ao lado)', () => {
+    expect(cameraStyleLayouts(project({ cameraStyle: 'side-by-side' }), true)).toEqual({ style: 'side-by-side', horizontal: 'side-by-side', vertical: 'greenscreen-corner' })
+  })
+
+  it('projeto antigo, sem o campo do estilo, é Quadro ao lado no 16:9, nunca vira bolinha, e ganha o Green screen no canto no 9:16 quando o recorte existe', () => {
     const p = project()
     expect(p.cameraStyle).toBeUndefined()
-    expect(cameraStyleLayouts(p, true)).toEqual({ style: 'side-by-side', horizontal: 'side-by-side', vertical: 'stack' })
+    expect(cameraStyleLayouts(p, true)).toEqual({ style: 'side-by-side', horizontal: 'side-by-side', vertical: 'greenscreen-corner' })
+    expect(cameraStyleLayouts(p, false)).toEqual({ style: 'side-by-side', horizontal: 'side-by-side', vertical: 'stack' })
   })
 
-  it('Apresentador recortado com o recorte do fundo pronto: Apresentador no 16:9 e V-D no 9:16', () => {
-    expect(cameraStyleLayouts(project({ cameraStyle: 'presenter' }), true)).toEqual({ style: 'presenter', horizontal: 'presenter', vertical: 'presenter' })
+  it('Você sem fundo (green screen) escolhido ao gravar, com o recorte pronto: o mesmo no 16:9 e V-E Green screen no canto no 9:16', () => {
+    expect(cameraStyleLayouts(project({ cameraStyle: 'presenter' }), true)).toEqual({ style: 'presenter', horizontal: 'presenter', vertical: 'greenscreen-corner' })
   })
 
-  it('Apresentador sem o recorte do fundo: cai no quadro ao lado e V-B', () => {
+  it('Você sem fundo sem o recorte do fundo: cai no quadro ao lado e V-B', () => {
     expect(cameraStyleLayouts(project({ cameraStyle: 'presenter' }), false)).toEqual({ style: 'side-by-side', horizontal: 'side-by-side', vertical: 'stack' })
   })
 

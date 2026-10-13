@@ -6,6 +6,7 @@
 import type { CursorData, FormatSpec } from './scene'
 import type { CursorGrid } from './cursor'
 import { PRESENTER_TARGET } from './face'
+import { greenscreenCaptionY, isGreenscreen, type PersonFit } from './greenscreen'
 import { PRESENTER, presenterWindow, resolvePresenter } from './styles'
 import { keptRanges } from './timeline'
 import { generateAutoZooms, zoomPresetFor, DEFAULT_VERTICAL_ZOOM_PRESET } from './zoom'
@@ -126,9 +127,11 @@ export const CAPTION_Y_WIDE = 0.71
  * Onde a legenda do vertical fica (fração da altura) em cada layout, quando a pessoa não escolheu uma posição: em 70% (≈ y 1344);
  * na tela na largura, 71%; no V-B, na EMENDA tela/câmera quando ela cai entre 45% e 70% (3 de 5 canais com essa estrutura).
  */
-export function verticalCaptionY(layout: LayoutKind, presenter?: PresenterStyle): number {
+export function verticalCaptionY(layout: LayoutKind, presenter?: PresenterStyle, punch = 1, fit?: PersonFit): number {
   if (layout === 'screen-wide') return CAPTION_Y_WIDE
   // V-D (apresentador recortado): logo ACIMA da cabeça, sem cobrir o rosto (nos Shorts verdes medidos o centro da legenda fica de 3 a 12 pontos acima do topo da cabeça, mediana 4,5; ver `estudo/green-screen-2026-10-05.md`)
+  // V-E: logo ACIMA do topo da cabeça (com o punch-in a cabeça sobe, e a legenda com ela)
+  if (isGreenscreen(layout)) return greenscreenCaptionY(layout, presenter, punch, fit)
   if (layout === 'presenter') return 1 - resolvePresenter(presenter).heightV - PRESENTER.captionGapV
   if (layout === 'stack') {
     const seam = STACK_SPLIT / VERTICAL_H
@@ -138,7 +141,7 @@ export function verticalCaptionY(layout: LayoutKind, presenter?: PresenterStyle)
 }
 
 /** Layouts verticais (os que o formato 9:16 entende). `presenter` (V-D) só vale com o recorte do fundo pronto. */
-export const VERTICAL_LAYOUTS: readonly LayoutKind[] = ['screen-center', 'screen-focus', 'stack', 'screen-wide', 'presenter', 'camera']
+export const VERTICAL_LAYOUTS: readonly LayoutKind[] = ['greenscreen', 'greenscreen-corner', 'screen-center', 'screen-focus', 'stack', 'screen-wide', 'presenter', 'camera']
 
 // ---------------------------------------------------------------------------
 // O recorte de cada layout
@@ -463,17 +466,28 @@ export function pinVerticalLayout(project: Project, layout: LayoutKind): Project
 export function ensureVertical(
   project: Project,
   data: Pick<CursorData, 'clicks' | 'keys' | 'grid'>,
-  opts: { durationMs: number; words?: readonly Word[] | null | undefined; hasCursorEvents?: boolean; hasMatte?: boolean }
+  opts: { durationMs: number; words?: readonly Word[] | null | undefined; hasCursorEvents?: boolean; hasMatte?: boolean; matteExpected?: boolean }
 ): Project {
   const v = project.vertical
   if (v && (v.zoomPreset !== undefined || v.zooms.length > 0 || v.layouts.length > 0)) return project
   const hasEvents = opts.hasCursorEvents ?? true
+  const hasCamera = Boolean(project.sources.camera) && !project.style.camera.hidden
+  // Com câmera e tela, o 9:16 nasce no V-E "Green screen no canto" no vídeo inteiro (a página em tela cheia atrás, você recortado num canto de baixo,
+  // no lado oposto ao foco: o pedido do usuário, "eu falando no canto"; o centrado fica à escolha no seletor). O recorte
+  // já existe (`hasMatte`) ou vai existir (`matteExpected`: o motor está pronto e o editor o pede sozinho; até lá a prévia mostra o layout
+  // anterior com o aviso). Sem recorte e sem motor, o comportamento de antes: Câmera + tela nos trechos sem atividade.
+  if (hasCamera && project.sources.screen && (opts.hasMatte || opts.matteExpected)) {
+    const zooms = hasEvents
+      ? generateAutoZooms({ clicks: data.clicks, keys: data.keys, cursor: data.grid, duration: opts.durationMs, preset: zoomPresetFor('vertical', DEFAULT_VERTICAL_ZOOM_PRESET) })
+      : []
+    return { ...project, vertical: { ...v, layout: 'greenscreen-corner', layouts: [], zooms, ...(hasEvents ? { zoomPreset: DEFAULT_VERTICAL_ZOOM_PRESET } : {}) } }
+  }
   const zooms = hasEvents
     ? generateAutoZooms({ clicks: data.clicks, keys: data.keys, cursor: data.grid, duration: opts.durationMs, preset: zoomPresetFor('vertical', DEFAULT_VERTICAL_ZOOM_PRESET) })
     : []
   const layouts = autoVerticalLayouts({
     durationMs: opts.durationMs,
-    hasCamera: Boolean(project.sources.camera) && !project.style.camera.hidden,
+    hasCamera,
     clicks: data.clicks,
     keys: data.keys,
     cursor: data.grid,

@@ -72,7 +72,7 @@ const C = defaultCaptions()
 const rectSchema = z.looseObject({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
 const rangeSchema = z.looseObject({ start: z.number(), end: z.number() })
 
-const layoutKind = z.enum(['bubble', 'side-by-side', 'screen', 'camera', 'stack', 'screen-focus', 'screen-center', 'screen-wide', 'presenter'])
+const layoutKind = z.enum(['bubble', 'side-by-side', 'screen', 'camera', 'stack', 'screen-focus', 'screen-center', 'screen-wide', 'presenter', 'greenscreen', 'greenscreen-corner'])
 
 const srcSchema = z.looseObject({
   path: z.string().min(1),
@@ -246,7 +246,7 @@ const clipSchema = z.looseObject({
   notes: z.looseObject({ hook: z.number(), flow: z.number(), value: z.number() }).optional(),
   reason: z.string().default(''),
   format: z.enum(['vertical', 'horizontal']).default('vertical'),
-  layoutV: z.enum(['auto', 'stack', 'screen-focus', 'screen-center', 'screen-wide', 'camera', 'presenter']).default('auto'),
+  layoutV: z.enum(['auto', 'stack', 'screen-focus', 'screen-center', 'screen-wide', 'camera', 'presenter', 'greenscreen', 'greenscreen-corner']).default('auto'),
   captionStyle: captionStyleId.optional(),
   captionsEnabled: z.boolean().optional(),
   source: z.enum(['ai', 'heuristic', 'manual']).optional()
@@ -331,6 +331,7 @@ export const projectSchema = z.looseObject({
   script: videoScriptSchema.optional(),
   retakeMarks: z.array(retakeMarkSchema).optional(),
   cameraStyle: z.enum(['side-by-side', 'presenter']).optional(),
+  screenTextPx: z.number().finite().min(3).max(200).optional(),
   cameraCapture: cameraCaptureReportSchema.optional()
 })
 

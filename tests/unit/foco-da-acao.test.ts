@@ -1,6 +1,7 @@
 /**
- * Acabamento C: a janela quadrada do 9:16 enquadra a AÇÃO (clique, digitação, cursor parado), com permanência mínima e transição
- * suave, sem ampliar além de 1:1 e sem cortar a coluna de conteúdo onde a ação está. O V-A continua seguindo o cursor.
+ * Acabamento C: o foco da ação (`action-focus.ts`) escolhe os pontos de ação e o planejador antigo da janela quadrada. Desde o F2 a
+ * janela quadrada do 9:16 é a janela legível (`legible.ts`, testada em `janela-legivel.test.ts`): o zoom vem da letra (28-32 px), não
+ * mais de 1:1. O V-A continua seguindo o cursor.
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -13,6 +14,7 @@ import {
   focusPoints
 } from '@shared/action-focus'
 import { processCursor } from '@shared/cursor'
+import { TEXT_RANGE_PX, bodyTextPx } from '@shared/legible'
 import { createProject } from '@shared/project'
 import { VERTICAL_1080, deriveProject, evaluateScene, prepareEvents } from '@shared/scene'
 import type { ClickEvent, CursorSample, LayoutKind, Project } from '@shared/types'
@@ -114,7 +116,7 @@ describe('caminho da câmera com o foco da ação', () => {
   })
 })
 
-describe('Tela ao centro e V-B: ampliação máxima 1:1 e foco da ação; V-A segue o cursor', () => {
+describe('Tela ao centro e V-B: letra legível (F2) e foco da ação; V-A segue o cursor', () => {
   const screen = { path: 'media/screen.mp4', w: W, h: H, fps: 30, durationMs: 12_000 }
   const camera = { path: 'media/camera.mp4', w: 3840, h: 2160, fps: 30, durationMs: 12_000 }
   const mk = (layout: LayoutKind): Project => {
@@ -127,15 +129,23 @@ describe('Tela ao centro e V-B: ampliação máxima 1:1 e foco da ação; V-A se
   const wander: CursorSample[] = Array.from({ length: 241 }, (_, i) => ({ t: i * 50, x: 0.2 + 0.6 * Math.abs(Math.sin(i / 17)), y: 0.5 }))
   const data = prepareEvents({ cursor: wander, clicks: [click(1000, 700, 330), click(5000, 1500, 500)], keys: [] }, 12_000)
 
-  it.each(['screen-center', 'stack'] as const)('%s: o texto nunca é ampliado além de 1:1', (layout) => {
+  it.each(['screen-center', 'stack'] as const)('%s: a letra do corpo fica em 28–32 px no quadro (F2: o zoom vem da letra, não mais travado em 1:1)', (layout) => {
     const p = projectForFormat(mk(layout), 'vertical')
     const derived = deriveProject(p, data, VERTICAL_1080)
-    let peak = 0
+    const body = bodyTextPx({ w: W, h: H })
+    let min = Infinity
+    let max = 0
+    // fora da visão geral de uma troca de página (que dura menos de 1 s), a letra é a do alvo
     for (let t = 0; t < 12_000; t += 50) {
       const s = evaluateScene(p, derived, t, VERTICAL_1080).screen!
-      peak = Math.max(peak, s.dest.w / (s.src.w * W))
+      const px = (body * s.dest.w) / (s.src.w * W)
+      if (px > 25) {
+        min = Math.min(min, px)
+        max = Math.max(max, px)
+      }
     }
-    expect(peak).toBeLessThanOrEqual(1.001)
+    expect(min).toBeGreaterThanOrEqual(TEXT_RANGE_PX.min - 0.5)
+    expect(max).toBeLessThanOrEqual(TEXT_RANGE_PX.max + 0.5)
   })
 
   it('Tela ao centro: a janela não segue o cursor errante, fica na ação', () => {

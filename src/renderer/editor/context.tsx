@@ -53,9 +53,10 @@ export type EditorCtx = {
   face: AssetState<FaceTrack>
   /**
    * O recorte do fundo da câmera (M4c): a URL do vídeo da máscara (`null` = ainda não existe), se algum trecho do formato aberto o usa e,
-   * desde a R1, o ESTADO ÚNICO dele (`status`: `ready` | `running` com `percent` | `queued` | `failed` com `error` | `none`).
+   * desde a R1, o ESTADO ÚNICO dele (`status`: `ready` | `running` com `percent` | `queued` | `failed` com `error` | `none`). `fallback` (F2): o usuário
+   * escolheu um layout com recorte e ele ainda não existe (a prévia mostra o layout sem recorte).
    */
-  matte: { url: string | null; needed: boolean; status: MatteStatus }
+  matte: { url: string | null; needed: boolean; status: MatteStatus; fallback: boolean }
   /** Nível do áudio por quadro (para achar silêncio); só é pedido depois que há transcrição. */
   levels: AssetState<Levels>
   /** Estado da aba Texto (seleção, busca, escolhas da limpeza). */

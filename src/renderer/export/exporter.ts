@@ -174,7 +174,7 @@ async function createContext(
   // recortada. Falha AQUI, com o que fazer, em vez de exportar um vídeo diferente do que a pessoa viu.
   if (derived.needsMatte && !job.matteUrl) {
     throw new Error(
-      'O layout Apresentador precisa do recorte do fundo da câmera, e ele ainda não existe (ou é de outra gravação). Abra o projeto, espere o recorte terminar na aba Câmera e exporte de novo.'
+      'Este layout usa você sem fundo, e o recorte do fundo da câmera ainda não existe (ou é de outra gravação). Abra o projeto, espere o recorte terminar ("Recortando você do fundo", na aba Câmera) ou escolha "Câmera + tela" na aba Layout, e exporte de novo.'
     )
   }
   const screen = await openTrack(job.screenUrl, project.sync.screenOffsetMs)

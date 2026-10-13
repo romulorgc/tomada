@@ -68,6 +68,8 @@ export type LayoutKind =
   | 'screen-center' // vertical: quadrado da tela entre gancho e legenda, seguindo o cursor sem ampliar na base
   | 'screen-wide' // vertical V-C: a tela inteira na largura, fundo = o mesmo vídeo desfocado e escurecido
   | 'presenter' // M4c: o apresentador RECORTADO (sem o fundo da webcam) na frente da tela. 16:9: no canto de baixo; 9:16 (V-D): tela em cima, você embaixo
+  | 'greenscreen' // F2, vertical V-E "Green screen": a página em tela cheia atrás (janela legível que segue o foco) e você recortado, ~47% da altura, ancorado embaixo
+  | 'greenscreen-corner' // F2, vertical V-E "no canto": você recortado pequeno (35–45% da altura, ≤ 45% da largura) no canto de baixo oposto ao foco da página
 
 export type LayoutSeg = {
   id: string
@@ -235,7 +237,7 @@ export type CameraStyleChoice = 'side-by-side' | 'presenter'
 
 export type ClipFormat = 'vertical' | 'horizontal'
 /** O layout de um corte vertical: `auto` segue a escolha por atividade do projeto; os outros fixam o layout no corte todo. */
-export type VerticalLayout = 'auto' | 'stack' | 'screen-focus' | 'screen-center' | 'screen-wide' | 'camera' | 'presenter'
+export type VerticalLayout = 'auto' | 'stack' | 'screen-focus' | 'screen-center' | 'screen-wide' | 'camera' | 'presenter' | 'greenscreen' | 'greenscreen-corner'
 
 /**
  * Edição PRÓPRIA do vertical 9:16 (M4a). Zooms, trechos de layout, câmera e legenda do vertical são independentes
@@ -397,6 +399,8 @@ export type Project = {
   retakeMarks?: RetakeMark[]
   /** O estilo da câmera escolhido ao gravar (ausente = quadro ao lado). */
   cameraStyle?: CameraStyleChoice
+  /** Altura medida do texto de corpo da página na tela gravada (px). Ausente = a estimativa (`BODY_TEXT_PX_1080` × altura ÷ 1080). */
+  screenTextPx?: number
   /** O que a câmera entregou ao gravar (medido no arquivo bruto); `warning` aparece na Revisão quando foram poucos qps. */
   cameraCapture?: CameraCaptureReport
 }

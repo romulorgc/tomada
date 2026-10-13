@@ -121,6 +121,9 @@ test('webmail com abas: a coluna do e-mail fica inteira na janela quadrada (V-B 
 
   const base = createProject({ title: 'Webmail com abas', sources: { screen: { path: 'media/screen.mp4', w: SW, h: SH, fps: 30, durationMs: DURATION }, camera: { path: 'media/camera.mp4', w: 640, h: 360, fps: 30, durationMs: DURATION } } })
   base.zoomPreset = 'off'; base.style.cursor.ripple = false; base.style.camera.borderWidth = 0
+  // F2 (R3): o zoom vem da letra (30 px no quadro). O corpo desta página sintética tem 25 px de verdade (a estimativa do app, 13 px por 1080, é
+  // para páginas reais de navegador): a janela de 30 px de letra tem ~800 px de largura e a coluna (630 px) cabe inteira dentro dela.
+  base.screenTextPx = 25
   base.screenCrop = { mode: 'manual', manual: PAGE }
   writeFileSync(join(dir, 'project.json'), serializeProject(base))
   const project = (layout: LayoutKind, camera: boolean): Project => {
@@ -150,9 +153,8 @@ test('webmail com abas: a coluna do e-mail fica inteira na janela quadrada (V-B 
       const edges = darkAtEdges(readPng(readFileSync(file)), region[layout], 14)
       expect(edges, `${layout} COM o mapa, t=${TIMES[i]}: texto na borda da janela (cortado)`).toEqual({ left: 0, right: 0 })
     }
-    // sem o mapa: o texto da coluna é cortado na borda direita em pelo menos um instante (o defeito que o mapa conserta)
-    const cut = paths[layout]!.sem.map((file) => darkAtEdges(readPng(readFileSync(file)), region[layout], 14).right)
-    expect(Math.max(...cut), `${layout} SEM o mapa: o texto devia sair cortado na borda direita`).toBeGreaterThan(0)
+    // sem o mapa a janela só tem as ações para se guiar (os quadros ficam na folha para comparar a olho); com a janela de F2, larga o bastante para a
+    // coluna, o corte que o mapa conserta só aparece quando a letra pede uma janela mais estreita que a coluna
   }
 
   // A cena (não os pixels): a janela cobre a coluna inteira, com folga, em todos os instantes, nas duas telas

@@ -10,7 +10,8 @@ import { protectionFingerprint, PROTECTION_CHANGED_MESSAGE } from '@shared/blur'
 import { planClean } from '@shared/clean-plan'
 import { clipScene, heuristicClips, heuristicClipLabels, mergeSuggestedClips, titleFromText, type ClipDraft } from '@shared/clips'
 import { eventsFromText, EVENT_FILES } from '@shared/events'
-import { applyScreenCrop, prepareEvents, usesPresenter } from '@shared/scene'
+import { applyScreenCrop, deriveProject, prepareEvents, projectLegibility, usesPresenter, VERTICAL_1080, type CursorData } from '@shared/scene'
+import { legibilitySummary } from '@shared/legible'
 import { sanitizeFileName } from '@shared/export'
 import { uniqueName } from '@shared/recording'
 import { projectDurationMs } from '@shared/project'
@@ -18,7 +19,7 @@ import { buildClipText, buildYoutubeText, fallbackClipMeta, heuristicChapters, k
 import { itemOf, updateReviewItem, reviewDocument, refreshReviewSnapshots, type ReviewItem } from '@shared/review'
 import { keptRanges, outputDuration } from '@shared/timeline'
 import type { Project, ProjectSummary, Transcript } from '@shared/types'
-import { autoVerticalLayouts, defaultVerticalEdit, speechRanges } from '@shared/vertical'
+import { autoVerticalLayouts, defaultVerticalEdit, projectForFormat, speechRanges } from '@shared/vertical'
 import { cameraStyleLayouts } from '@shared/camera-style-layouts'
 import { generateAutoZooms, zoomPresetFor } from '@shared/zoom'
 import { deriveRetakeCuts } from '@shared/retake-marker'
@@ -74,6 +75,17 @@ async function readPostedManifest(file: string): Promise<PostedFile[]> {
     return old.flatMap((entry): PostedFile[] => typeof entry === 'string' ? [{ path: entry }] : entry && typeof entry === 'object' && typeof (entry as PostedFile).path === 'string' ? [entry as PostedFile] : [])
   } catch { return [] }
 }
+/** Os nomes dos layouts como o usuário os vê, para os avisos da Revisão. */
+const LAYOUT_NAMES: Partial<Record<string, string>> = {
+  greenscreen: 'Green screen',
+  'greenscreen-corner': 'Green screen no canto',
+  presenter: 'Você sem fundo',
+  stack: 'Câmera + tela',
+  'screen-center': 'Tela ao centro',
+  'screen-focus': 'Cursor',
+  'screen-wide': 'Tela na largura'
+}
+
 export function createAutopilot(deps: AutopilotDeps): AutopilotService {
   let queue: Promise<unknown> = Promise.resolve()
   let writes: Promise<unknown> = Promise.resolve()
@@ -133,6 +145,22 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
     // O recorte da tela (C1) muda o espaço de coordenadas: zooms e layouts nascem do que o recorte mostra, como no editor (o cursor e os
     // cliques no espaço dele; um clique fora do recorte, na barra de abas, não abre zoom e o foco de um zoom é lido dentro do recorte).
     return applyScreenCrop(prepareEvents(eventsFromText(texts), durationMs), project)
+  }
+  /**
+   * O aviso de letra pequena do 9:16 (R3): onde, nos layouts escolhidos, a letra do corpo da página fica abaixo de 22 px no vídeo. Vai no
+   * detalhe da etapa que a Revisão mostra, com o caminho para resolver. Vazio quando está tudo legível.
+   */
+  const legibilityNotice = async (id: string, data: CursorData, words: Transcript['words'] | undefined): Promise<string> => {
+    try {
+      const view = projectForFormat((await deps.store.read(id)).project, 'vertical')
+      const found = legibilitySummary(projectLegibility(view, deriveProject(view, data, VERTICAL_1080, words ?? null)))
+      if (!found) return ''
+      const names = found.layouts.map((l) => LAYOUT_NAMES[l] ?? l).join(', ')
+      return ` Atenção: no 9:16 a letra da página fica com cerca de ${found.minPx} px (${names}) em ${(found.totalMs / 1000).toFixed(1).replace('.', ',')} s, abaixo de 22 px: difícil de ler no celular. Troque o layout desses trechos no editor (o Green screen e o Câmera + tela chegam a 30 px).`
+    } catch (err) {
+      deps.logger.warn('Piloto automático: não consegui medir a letra da página no 9:16.', err)
+      return ' Não consegui medir se a letra da página fica legível no 9:16; confira na prévia.'
+    }
   }
   /**
    * Este item exporta com o Apresentador recortado? Então a exportação precisa do recorte do fundo. Na dúvida (documento que não abre),
@@ -274,14 +302,15 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       case 'layouts': {
         const t = await deps.transcription.getTranscript(id)
         const e = await events(dir, duration, project)
-        // Quem decide é o ESTILO da câmera escolhido ao gravar, nunca a existência do recorte: Apresentador pede o recorte do fundo e a
-        // fala sem atividade vira Apresentador (16:9) e V-D (9:16); Quadro ao lado (e projeto antigo) fica no lado a lado e no V-B.
+        // Com câmera, o 9:16 é o V-E "Green screen" (F2) e precisa do recorte do fundo, qualquer que seja o estilo escolhido ao gravar: o piloto
+        // o pede aqui (a fila da câmera devolve o trabalho que já existe) e espera. Com ele pronto, o 16:9 segue o estilo escolhido (Você sem
+        // fundo ou Quadro ao lado); sem ele, os dois ficam no quadro ao lado e no Câmera + tela, e o aviso diz por quê.
         let hasMatte = false
         let notice = ''
-        if (project.cameraStyle === 'presenter' && project.sources.camera) {
+        if (deps.camera && project.sources.camera && !project.style.camera.hidden) {
           const matte = await ensureMatte(id)
           hasMatte = matte.ok
-          if (!matte.ok) notice = `O recorte do fundo falhou; usei o quadro ao lado. Motivo: ${matte.reason.replace(/[.\s]+$/, '')}. No editor: Câmera → Recortar de novo. `
+          if (!matte.ok) notice = `O recorte do fundo falhou; usei o quadro ao lado e o Câmera + tela no 9:16. Motivo: ${matte.reason.replace(/[.\s]+$/, '')}. No editor: Câmera → Recortar de novo (o 9:16 vira Green screen quando ele terminar). `
         }
         // O estilo escolhido vale no vídeo inteiro, nos dois formatos: sem alternância por atividade e sem bolinha. Segmentos que o usuário
         // criou à mão ficam; só os automáticos de antes saem.
@@ -291,7 +320,9 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
             const v = p.vertical ?? defaultVerticalEdit()
             return { ...p, style: { ...p.style, defaultLayout: styled.horizontal }, layouts: p.layouts.filter((s) => s.origin !== 'auto'), vertical: { ...v, layout: styled.vertical, layouts: v.layouts.filter((s) => s.origin !== 'auto') } }
           })
-          return `${notice}${styled.style === 'presenter' ? 'Apresentador recortado' : 'Quadro ao lado'} no vídeo inteiro: ${styled.style === 'presenter' ? 'Apresentador no 16:9 e V-D no 9:16' : 'lado a lado no 16:9 e câmera embaixo da tela no 9:16'}. A bolinha só por escolha sua.`
+          const vertical = styled.vertical === 'greenscreen-corner' ? 'Green screen no canto (você sem fundo no canto, página atrás) no 9:16' : styled.vertical === 'greenscreen' ? 'Green screen (você sem fundo, página atrás) no 9:16' : 'câmera embaixo da tela no 9:16'
+          const horizontal = styled.horizontal === 'presenter' ? 'Você sem fundo no 16:9' : 'lado a lado no 16:9'
+          return `${notice}${horizontal} e ${vertical}, no vídeo inteiro. A bolinha só por escolha sua.${await legibilityNotice(id, e, t?.words)}`
         }
         const automatic = autoVerticalLayouts({ ...(hasMatte ? { hasMatte } : {}), durationMs: duration, hasCamera: !!project.sources.camera && !project.style.camera.hidden, clicks: e.clicks, keys: e.keys, cursor: e.grid, speech: speechRanges(t?.words), kept: keptRanges(duration, project.cuts) })
         await regenerate(id, (p) => {
@@ -300,7 +331,7 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
           const h = automatic.map((s) => ({ ...s, id: `h-${s.id}`, layout: s.layout === 'presenter' ? 'presenter' as const : s.layout === 'stack' && p.sources.camera ? 'side-by-side' as const : 'bubble' as const }))
           return { ...p, layouts: fit(h.filter((s) => !p.autoExclusions?.layouts?.includes(s.id)), p.layouts.filter((s) => s.origin !== 'auto')), vertical: { ...v, layouts: fit(automatic.filter((s) => !v.autoExclusions?.layouts?.includes(s.id)), v.layouts.filter((s) => s.origin !== 'auto')) } }
         })
-        return `${notice}Layouts escolhidos pela atividade da tela nos dois formatos.`
+        return `${notice}Layouts escolhidos pela atividade da tela nos dois formatos.${await legibilityNotice(id, e, t?.words)}`
       }
       case 'captions': {
         await change(id, (p) => {
@@ -539,8 +570,8 @@ export function createAutopilot(deps: AutopilotDeps): AutopilotService {
       }
       const result = await change(id,(p) => updateReviewItem(p,itemId,{ ...patch, ...(reexport ? { phase: 'queued', revision: (itemOf(p,itemId).revision ?? 0) + 1 } : {}) }))
       if (Object.hasOwn(patch,'text')) { const {dir} = await deps.store.read(id); const path = itemOf(result,itemId).textPath; if(path) await writeFileAtomic(await resolveProjectFile(dir,path),textOf(result,itemId,(await deps.transcription.getTranscript(id))?.words ?? null)) }
-      // Escolher o Apresentador pede o recorte do fundo (o editor também pede); sem motor preparado a exportação diz o motivo.
-      if (patch.layout === 'presenter' && deps.camera) await deps.camera.analyze(id, 'matte').catch((err) => deps.logger.warn('Piloto automático: não consegui pedir o recorte do fundo para o Apresentador.', err))
+      // Escolher um layout com você sem fundo pede o recorte (o editor também pede); sem motor preparado a exportação diz o motivo.
+      if ((patch.layout === 'presenter' || patch.layout === 'greenscreen' || patch.layout === 'greenscreen-corner') && deps.camera) await deps.camera.analyze(id, 'matte').catch((err) => deps.logger.warn('Piloto automático: não consegui pedir o recorte do fundo para o layout com você sem fundo.', err))
       if (reexport) void enqueue(() => exportItem(id,itemId))
       return result
     },

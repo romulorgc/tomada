@@ -475,7 +475,7 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
   const layoutsOf = (p: Project) => ({ horizontal: p.style.defaultLayout, vertical: p.vertical!.layout, autoSegments: [...p.layouts, ...p.vertical!.layouts].filter((l) => l.origin === 'auto') })
   const detailOf = (p: Project) => p.autopilot!.steps.find((step) => step.id === 'layouts')!.detail ?? ''
 
-  it('Apresentador: pede o recorte do fundo ao começar, espera, e o vídeo inteiro é Apresentador (16:9) e V-D (9:16)', async () => {
+  it('Você sem fundo escolhido ao gravar: pede o recorte ao começar, espera, e o vídeo inteiro é Você sem fundo (16:9) e Green screen no canto (9:16)', async () => {
     const doc = withCamera(baseProject(), 'presenter')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await w.service.start(id)
@@ -484,31 +484,38 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
     expect(autoSegments).toEqual([])
     expect(horizontal).toBe('presenter')
-    expect(vertical).toBe('presenter')
+    expect(vertical).toBe('greenscreen-corner')
     expect(detailOf(w.project())).not.toMatch(/recorte do fundo falhou/)
   })
-  it('Quadro ao lado: lado a lado no 16:9 e V-B no 9:16, e nunca pede o recorte nem escolhe Apresentador, mesmo com um recorte antigo pronto', async () => {
+  it('Quadro ao lado: o recorte nasce do mesmo jeito (toda gravação com câmera), o 16:9 é lado a lado e o 9:16 é o Green screen no canto', async () => {
     const doc = withCamera(baseProject(), 'side-by-side')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await w.service.start(id)
-    expect(w.camera!.analyze).not.toHaveBeenCalledWith(id, 'matte')
+    expect(w.camera!.analyze).toHaveBeenCalledWith(id, 'matte')
     const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
     expect(autoSegments).toEqual([])
     expect(horizontal).toBe('side-by-side')
-    expect(vertical).toBe('stack')
+    expect(vertical).toBe('greenscreen-corner')
   })
-  it('projeto antigo, sem o campo do estilo, é Quadro ao lado', async () => {
+  it('projeto antigo, sem o campo do estilo: 16:9 lado a lado e 9:16 Green screen no canto com o recorte pronto', async () => {
     const doc = withCamera(baseProject())
     expect(doc.cameraStyle).toBeUndefined()
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await w.service.start(id)
-    expect(w.camera!.analyze).not.toHaveBeenCalledWith(id, 'matte')
+    expect(w.camera!.analyze).toHaveBeenCalledWith(id, 'matte')
     const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
     expect(autoSegments).toEqual([])
     expect(horizontal).toBe('side-by-side')
-    expect(vertical).toBe('stack')
+    expect(vertical).toBe('greenscreen-corner')
   })
-  it('Apresentador com o motor do recorte sem preparo: cai no quadro ao lado e V-B e a Revisão mostra o motivo e o caminho', async () => {
+  it('sem o recorte (motor sem preparo), qualquer estilo cai no quadro ao lado e no Câmera + tela, com o aviso na Revisão', async () => {
+    const doc = withCamera(baseProject(), 'side-by-side')
+    const w = await world(doc, { transcript: talk, camera: makeCamera({ analyzeError: 'O recorte do fundo ainda não foi preparado neste computador.' }) })
+    await w.service.start(id)
+    expect(layoutsOf(w.project()).vertical).toBe('stack')
+    expect(detailOf(w.project())).toContain('O recorte do fundo falhou; usei o quadro ao lado')
+  })
+  it('Você sem fundo com o motor do recorte sem preparo: cai no quadro ao lado e no Câmera + tela e a Revisão mostra o motivo e o caminho', async () => {
     const doc = withCamera(baseProject(), 'presenter')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ analyzeError: 'O recorte do fundo ainda não foi preparado neste computador.' }) })
     await w.service.start(id)
@@ -517,7 +524,7 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     expect(horizontal).toBe('side-by-side')
     expect(vertical).toBe('stack')
     const detail = detailOf(w.project())
-    expect(detail).toContain('O recorte do fundo falhou; usei o quadro ao lado.')
+    expect(detail).toContain('O recorte do fundo falhou; usei o quadro ao lado e o Câmera + tela no 9:16.')
     expect(detail).toContain('ainda não foi preparado')
     expect(detail).toContain('Câmera → Recortar de novo')
     expect(w.project().autopilot!.steps.find((step) => step.id === 'layouts')!.status).toBe('done')
@@ -527,7 +534,7 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     const w = await world(doc, { transcript: talk, camera: makeCamera({ jobError: 'A placa de vídeo ficou sem memória.' }) })
     await w.service.start(id)
     const detail = detailOf(w.project())
-    expect(detail).toContain('O recorte do fundo falhou; usei o quadro ao lado.')
+    expect(detail).toContain('O recorte do fundo falhou; usei o quadro ao lado e o Câmera + tela no 9:16.')
     expect(detail).toContain('A placa de vídeo ficou sem memória.')
     expect(layoutsOf(w.project()).vertical).toBe('stack')
   })
@@ -541,29 +548,41 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
     await writeFile(join(dir, 'events', 'clicks.jsonl'), lines(clicks))
     await writeFile(join(dir, 'events', 'keys.jsonl'), lines(keys))
   }
-  it('Quadro ao lado com o mouse sempre em movimento: continua lado a lado (16:9) e V-B (9:16) do começo ao fim, sem bolinha nem V-A', async () => {
+  it('Quadro ao lado com o mouse sempre em movimento: lado a lado (16:9) e Green screen no canto (9:16) do começo ao fim, sem bolinha nem V-A', async () => {
     const doc = withCamera(baseProject(), 'side-by-side')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await busyScreen(w.dir)
     await w.service.start(id)
     const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
     expect(horizontal).toBe('side-by-side')
-    expect(vertical).toBe('stack')
+    expect(vertical).toBe('greenscreen-corner')
     expect(autoSegments).toEqual([])
     const kinds = new Set([...w.project().layouts, ...w.project().vertical!.layouts].map((l) => l.layout))
     expect(kinds.has('bubble')).toBe(false)
     expect(kinds.has('screen-focus')).toBe(false)
-    expect(detailOf(w.project())).toMatch(/Quadro ao lado no vídeo inteiro/)
+    expect(detailOf(w.project())).toMatch(/lado a lado no 16:9 e Green screen no canto .* no 9:16, no vídeo inteiro/)
   })
-  it('Apresentador recortado com o mouse sempre em movimento: Apresentador (16:9) e V-D (9:16) do começo ao fim', async () => {
+  it('Você sem fundo com o mouse sempre em movimento: Você sem fundo (16:9) e Green screen no canto (9:16) do começo ao fim', async () => {
     const doc = withCamera(baseProject(), 'presenter')
     const w = await world(doc, { transcript: talk, camera: makeCamera({ matte: true }) })
     await busyScreen(w.dir)
     await w.service.start(id)
     const { horizontal, vertical, autoSegments } = layoutsOf(w.project())
     expect(horizontal).toBe('presenter')
-    expect(vertical).toBe('presenter')
+    expect(vertical).toBe('greenscreen-corner')
     expect(autoSegments).toEqual([])
+  })
+  it('a Revisão avisa quando a letra da página fica abaixo de 22 px no 9:16 (e não avisa quando fica legível)', async () => {
+    const small = withCamera(baseProject(), 'side-by-side')
+    small.screenTextPx = 3 // letra minúscula na fonte: nem o zoom máximo deixa a letra legível no quadro vertical
+    const w = await world(small, { transcript: talk, camera: makeCamera({ matte: true }) })
+    await w.service.start(id)
+    expect(detailOf(w.project())).toMatch(/Atenção: no 9:16 a letra da página fica com cerca de \d+ px \(Green screen no canto\)/)
+    expect(detailOf(w.project())).toContain('abaixo de 22 px')
+    const normal = withCamera(baseProject(), 'side-by-side')
+    const w2 = await world(normal, { transcript: talk, camera: makeCamera({ matte: true }) })
+    await w2.service.start(id)
+    expect(detailOf(w2.project())).not.toMatch(/Atenção: no 9:16/)
   })
   it('sem câmera, nada é imposto: tela no 16:9 e o padrão do vertical', async () => {
     const doc = baseProject()
@@ -583,14 +602,17 @@ describe('piloto automático × estilo da câmera escolhido antes de gravar (M4c
       expect(w.project().layouts.find((l) => l.id === 'meu-layout')).toMatchObject({ layout: 'screen', origin: 'manual' })
     }
   })
-  it('a Revisão aceita escolher o Apresentador por item e pede o recorte do fundo ao serviço da câmera', async () => {
+  it('a Revisão aceita escolher Você sem fundo e os dois Green screen por item e pede o recorte do fundo ao serviço da câmera', async () => {
     const doc = withCamera(baseProject())
     addClip(doc)
     const w = await world(doc, { camera: makeCamera() })
     const handlers = createHandlers({ autopilot: w.service } as HandlerDeps)
-    await handlers['review:update'](id, 'clip-1', { layout: 'presenter' }, false)
-    expect(itemOf(w.project(), 'clip-1').layout).toBe('presenter')
-    expect(w.camera!.analyze).toHaveBeenCalledWith(id, 'matte')
+    for (const layout of ['presenter', 'greenscreen', 'greenscreen-corner'] as const) {
+      w.camera!.analyze.mockClear()
+      await handlers['review:update'](id, 'clip-1', { layout }, false)
+      expect(itemOf(w.project(), 'clip-1').layout).toBe(layout)
+      expect(w.camera!.analyze).toHaveBeenCalledWith(id, 'matte')
+    }
     w.camera!.analyze.mockClear()
     await handlers['review:update'](id, 'clip-1', { layout: 'stack' }, false)
     expect(w.camera!.analyze).not.toHaveBeenCalled()
