@@ -338,7 +338,7 @@ export function createCameraService(deps: CameraServiceDeps): CameraService {
     try {
       let result: MatteResult | undefined
       for (;;) {
-        // a placa tem dono mais importante agora (exportação, transcrição, prévia)? espera a vez, sem perder nada do que está pronto
+        // a placa tem um trabalho mais importante agora (exportação, transcrição, prévia)? espera a vez, sem perder nada do que está pronto
         let announced = false
         while (deps.gpu?.busy()) {
           if (!announced) {

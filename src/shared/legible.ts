@@ -3,7 +3,7 @@
  * (Tela ao centro, V-B, V-D e o V-E "Green screen"). Código puro: sem DOM, sem Node. Prévia e exportação leem o mesmo caminho
  * (`deriveProject`).
  *
- * O problema medido (gravações de 09/10, `C:\tmp\tomada-diag-1012\DIAGNOSTICO.md`): a página gravada tem 1920 × 912 px e o texto de
+ * O problema medido (gravações de 09/10, medidas em diagnóstico): a página gravada tem 1920 × 912 px e o texto de
  * corpo 12-14 px; os layouts quadrados mostravam a página 1:1 (14-16 px no quadro de 1080) e só o V-A chegava a ~30 px. Nas
  * referências profissionais (125 vídeos) a letra do corpo tem 22-35 px (mediana 30) no quadro de 1080 e a página fica PARADA ~90% do
  * tempo. Aqui:
@@ -16,7 +16,7 @@
  *  - numa troca de página (o mapa de conteúdo varia muito) ela pode abrir para a visão geral por menos de 1 s e volta a aproximar;
  *  - `legibilityIssues` diz onde a letra estimada fica abaixo de 22 px (a Revisão avisa; nada de silêncio).
  *
- * A altura da letra na fonte é uma ESTIMATIVA documentada (`BODY_TEXT_PX_1080`): a medida do usuário é 12-14 px numa tela de 1080 de
+ * A altura da letra na fonte é uma ESTIMATIVA documentada (`BODY_TEXT_PX_1080`): a medida de referência é 12-14 px numa tela de 1080 de
  * altura e o app não tem como medir o texto de cada página. Quando o projeto trouxer uma medida (`Project.screenTextPx`), ela vale.
  */
 import type { ContentMap, ContentTrack } from './content-map'

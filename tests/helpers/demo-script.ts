@@ -47,7 +47,7 @@ export const DEMO_SCRIPT: readonly DemoSentence[] = [
   { topic: 'lembrete', text: 'Pronto, os lembretes agora saem sozinhos, sem você precisar mandar mensagem nenhuma.', clicks: 1 },
 
   // --- relatório de faturamento
-  { topic: 'relatorio', text: 'Agora a parte que o dono da barbearia mais quer ver, o faturamento.' },
+  { topic: 'relatorio', text: 'Agora a parte que o usuário da barbearia mais quer ver, o faturamento.' },
   { topic: 'relatorio', text: 'Eu abro o relatório do mês e escolho o período.', clicks: 2 },
   { topic: 'relatorio', text: 'Aqui aparece o total faturado, o ticket médio e quanto cada barbeiro produziu.' },
   { topic: 'relatorio', text: 'Clicando em um barbeiro eu vejo os serviços que ele fez, dia a dia.', clicks: 2 },

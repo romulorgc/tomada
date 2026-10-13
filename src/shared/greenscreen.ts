@@ -2,7 +2,7 @@
  * O layout V-E "Green screen" do 9:16 (F2): a página em tela cheia atrás (a janela legível de `legible.ts`, que segue o foco) e
  * você recortado do fundo na frente, ancorado embaixo. Código puro: sem DOM, sem Node.
  *
- * Medidas das referências (`estudo/engenharia-reversa-2026-10-12.md` §2.4):
+ * Medidas de vídeos de referência (estudo de 12/10):
  *  - centrado: a pessoa tem 47-49% da altura do quadro, até ~85% da largura, ancorada na borda de baixo; a legenda fica ~6% da altura
  *    acima do topo da cabeça;
  *  - "no canto" (o que o usuário descreveu): 35-45% da altura, no máximo 45% da largura, num canto de baixo, com sombra suave.

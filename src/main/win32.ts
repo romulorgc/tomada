@@ -45,7 +45,7 @@ export interface Win32 {
   foregroundWindow(): number
   /** As janelas-filhas (todas, em qualquer profundidade) com classe, visibilidade e retângulo de tela (C1: a página do navegador). */
   childWindows(hwnd: number): ChildWindow[]
-  /** Caminho do executável dono da janela (null se o Windows não deixa ler). Para saber se é um navegador. */
+  /** Caminho do executável que pertence à janela (null se o Windows não deixa ler). Para saber se é um navegador. */
   imagePath(hwnd: number): string | null
   /** Lista de monitores (retângulo físico + se é o principal). */
   monitors(): MonitorRect[]

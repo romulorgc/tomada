@@ -85,7 +85,7 @@ function run(): void {
   }
   const hasData = (b: TrackerBatch): boolean => b.cursor.length > 0 || b.clicks.length > 0 || b.keys.length > 0 || b.windowRects.length > 0 || b.pages.length > 0
 
-  // Qual programa é dono de cada janela (só importa para saber se é navegador); lido uma vez por janela.
+  // Qual programa pertence a cada janela (só importa para saber se é navegador); lido uma vez por janela.
   const kinds = new Map<number, BrowserKind | null>()
   const browserOf = (h: number): BrowserKind | null => {
     if (kinds.has(h)) return kinds.get(h) ?? null
