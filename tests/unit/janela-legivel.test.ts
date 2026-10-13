@@ -265,8 +265,8 @@ describe('o aviso da Revisão', () => {
     })
     expect(issues).toHaveLength(1)
     expect(issues[0]).toMatchObject({ startMs: 4000, endMs: 8000, textPx: 14, layout: 'screen-center' })
-    const especificação = legibilityIssues({ kept, textPxAt: (t) => ({ textPx: t >= 4000 && t < 4750 ? 12 : 30, layout: 'stack' as LayoutKind }) })
-    expect(especificação).toEqual([])
+    const semAviso = legibilityIssues({ kept, textPxAt: (t) => ({ textPx: t >= 4000 && t < 4750 ? 12 : 30, layout: 'stack' as LayoutKind }) })
+    expect(semAviso).toEqual([])
     expect(ISSUE_MIN_MS).toBe(1500)
   })
 

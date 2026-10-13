@@ -95,7 +95,7 @@ export async function loadResume(o: ResumeInput): Promise<ResumeState> {
   const progress = await readProgress(o.progressFile)
   if (o.force) return discard((progress?.chunks.length ?? 0) > 0 ? 'o recorte foi pedido de novo do zero' : null)
   if (!progress) {
-    // sem andamento legível: pedaços soltos não têm dono, não servem
+    // sem andamento legível: pedaços soltos não pertencem a nenhum projeto, não servem
     const hadParts = (await readdir(o.partsDir).catch(() => [] as string[])).length > 0
     return discard(hadParts ? 'o andamento do recorte sumiu ou não abriu' : null)
   }

@@ -65,7 +65,7 @@ let avisou = false
 for (;;) {
   try {
     fs.mkdirSync(LOCK)
-    fs.writeFileSync(path.join(LOCK, 'dono'), `${process.pid}\n${process.cwd()}\n${cmd.join(' ')}\n${new Date().toISOString()}\n`)
+    fs.writeFileSync(path.join(LOCK, 'responsavel'), `${process.pid}\n${process.cwd()}\n${cmd.join(' ')}\n${new Date().toISOString()}\n`)
     if (outraBateria()) {
       fs.rmSync(LOCK, { recursive: true, force: true })
       throw new Error('ocupado')
@@ -74,7 +74,7 @@ for (;;) {
   } catch {
     // trava de um processo que morreu sem soltar: libera
     try {
-      const [pid] = fs.readFileSync(path.join(LOCK, 'dono'), 'utf8').split('\n')
+      const [pid] = fs.readFileSync(path.join(LOCK, 'responsavel'), 'utf8').split('\n')
       if (pid && !vivo(Number(pid))) fs.rmSync(LOCK, { recursive: true, force: true })
     } catch {}
     if (!avisou) {

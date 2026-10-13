@@ -7,7 +7,7 @@ import { ensureVertical, projectForFormat } from '@shared/vertical'
 import { parseFaceTrack } from '@shared/face'
 import { contentDifference } from '@shared/punch-in'
 
-const ROOT = process.env.F2_PROJECTS ?? 'C:/tmp/tomada-diag-1012/projetos'
+const ROOT = process.env.F2_PROJECTS ?? 'C:/tmp/medicao/projetos'
 const V = { kind: 'vertical' as const, w: 1080, h: 1920 }
 
 for (const g of ['g1004', 'g1437']) {
