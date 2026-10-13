@@ -41,31 +41,52 @@ test('um play() interrompido pelo pause() do próprio motor NÃO vira aviso de �
   const { page } = s
   await openWithTreatedAudio(s)
 
-  // observa o que acontece com cada play() do <audio> (sem consumir a rejeição): o resultado de cada um fica em window.__playOutcomes
+  // Na janela oculta o Chromium resolve o play() na hora; numa janela de verdade ele fica PENDENTE enquanto o áudio busca e abre o
+  // dispositivo, e um pause() nesse intervalo o rejeita com AbortError ("The play() request was interrupted by a call to pause()",
+  // as 3 linhas do log de 09/10). Aqui o estado pendente é reproduzido como a especificação HTML manda: o play() espera 120 ms e o
+  // pause() que chega antes rejeita a promessa. O resultado de cada play() fica em window.__playOutcomes.
   await page.evaluate(() => {
     const w = window as unknown as { __playOutcomes: string[] }
     w.__playOutcomes = []
-    const original = HTMLMediaElement.prototype.play
+    const originalPlay = HTMLMediaElement.prototype.play
+    const originalPause = HTMLMediaElement.prototype.pause
+    const pending = new WeakMap<HTMLMediaElement, Array<(e: DOMException) => void>>()
     HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
-      const promise = original.call(this)
-      if (this instanceof HTMLAudioElement) promise.then(() => w.__playOutcomes.push('ok'), (err: { name?: string }) => w.__playOutcomes.push(err?.name ?? 'erro'))
+      if (!(this instanceof HTMLAudioElement)) return originalPlay.call(this)
+      const real = originalPlay.call(this)
+      const promise = new Promise<void>((resolve, reject) => {
+        const list = pending.get(this) ?? []
+        pending.set(this, list)
+        list.push(reject)
+        setTimeout(() => {
+          const i = list.indexOf(reject)
+          if (i < 0) return
+          list.splice(i, 1)
+          real.then(resolve, reject)
+        }, 120)
+      })
+      promise.then(() => w.__playOutcomes.push('ok'), (err: { name?: string }) => w.__playOutcomes.push(err?.name ?? 'erro'))
+      real.catch(() => undefined)
       return promise
     }
-  })
-  // anda 1 s (Shift+→, o áudio fica buscando) e, no MESMO instante, toca e pausa (Espaço, Espaço): o play() do áudio fica pendente enquanto
-  // ele busca e o pause() o interrompe (AbortError). É a sequência de quem revisa os cortes, como no log de 09/10.
-  await page.evaluate(async () => {
-    const press = (code: string, shiftKey = false): void => void document.body.dispatchEvent(new KeyboardEvent('keydown', { code, key: code === 'Space' ? ' ' : code, shiftKey, bubbles: true }))
-    for (let i = 0; i < 8; i++) {
-      press('ArrowRight', true)
-      press('Space')
-      press('Space')
-      await new Promise((r) => setTimeout(r, 60))
+    HTMLMediaElement.prototype.pause = function (this: HTMLMediaElement) {
+      const list = pending.get(this)
+      if (list && list.length > 0) for (const reject of list.splice(0)) reject(new DOMException('The play() request was interrupted by a call to pause().', 'AbortError'))
+      return originalPause.call(this)
     }
   })
-  await page.waitForTimeout(800)
+  // quem revisa os cortes toca e pausa em seguida (Espaço, Espaço): o play() do áudio ainda está pendente quando o motor o pausa
+  await page.evaluate(async () => {
+    const press = (): void => void document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true }))
+    for (let i = 0; i < 4; i++) {
+      press()
+      await new Promise((r) => setTimeout(r, 30))
+      press()
+      await new Promise((r) => setTimeout(r, 200))
+    }
+  })
+  await page.waitForTimeout(500)
   const outcomes = await page.evaluate(() => (window as unknown as { __playOutcomes: string[] }).__playOutcomes)
-  // a repetição reproduz o log de 09/10: houve play() interrompido (AbortError)
   expect(outcomes, `resultados dos play(): ${outcomes.join(',')}`).toContain('AbortError')
 
   const chip = page.getByTestId('audio-status')
